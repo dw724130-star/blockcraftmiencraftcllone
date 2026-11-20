@@ -25,15 +25,16 @@ class BlockCraftGame {
 
     // Three.js Renderer
     this.container = document.getElementById('game-container');
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = this.settings.shaders === 'ultra';
+    this.renderer.shadowMap.enabled = (this.settings.shaders || 'ultra') === 'ultra';
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(this.settings.fov, window.innerWidth / window.innerHeight, 0.1, 380);
+    this.camera = new THREE.PerspectiveCamera(this.settings.fov, window.innerWidth / window.innerHeight, 0.1, 700);
 
     this.controls = new ControlManager(this.renderer.domElement, this.sound);
     this.applySettings();
@@ -85,17 +86,17 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV & far plane scaled for large render distances (up to 16 chunks)
+    // Camera FOV & far plane — always strictly larger than SkyDome (420) so sky NEVER clips!
     this.camera.fov = this.settings.fov;
-    this.camera.far = Math.max(240, this.settings.renderDistance * 20 + 60);
+    this.camera.far = Math.max(700, this.settings.renderDistance * 24 + 260);
     this.camera.updateProjectionMatrix();
     if (this.player) this.player.baseFov = this.settings.fov;
 
-    // Shaders & Tone Mapping
-    const sh = this.settings.shaders || 'enhanced';
+    // Shaders & Cinematic ACES Filmic Tone Mapping
+    const sh = this.settings.shaders || 'ultra';
     this.renderer.shadowMap.enabled = sh === 'ultra';
     this.renderer.toneMapping = sh === 'off' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.12 : (sh === 'enhanced' ? 1.05 : 1.0);
+    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.08 : (sh === 'enhanced' ? 1.05 : 1.0);
 
     if (this.world) {
       this.world.renderDistance = this.settings.renderDistance;
@@ -123,6 +124,10 @@ class BlockCraftGame {
   }
 
   cleanupScene() {
+    if (this.player && this.player.detachFromScene) this.player.detachFromScene(this.scene);
+    while (this.camera.children.length > 0) {
+      this.camera.remove(this.camera.children[0]);
+    }
     if (this.world) this.world.dispose();
     if (this.entities) this.entities.clearAll();
     if (this.effects) this.effects.clear();
@@ -174,7 +179,7 @@ class BlockCraftGame {
       seed: meta.seed,
       worldType: meta.worldType,
       renderDistance: this.settings.renderDistance,
-      shaders: this.settings.shaders || 'enhanced'
+      shaders: this.settings.shaders || 'ultra'
     });
 
     // Restore modified blocks & tile entities before preloading spawn chunks
@@ -192,7 +197,7 @@ class BlockCraftGame {
 
     this.sky = new SkySystem(this.scene);
     this.sky.setRenderDistance(this.settings.renderDistance);
-    this.sky.setShaderMode(this.settings.shaders || 'enhanced');
+    this.sky.setShaderMode(this.settings.shaders || 'ultra');
     this.sky.biomeEffects = this.settings.biomeEffects !== false;
     if (saved && typeof saved.time === 'number') {
       this.sky.time = saved.time;
@@ -258,6 +263,7 @@ class BlockCraftGame {
     };
 
     this.entities = new EntityManager(this.scene, this.world, this.sound);
+    this.entities.populateInitialWildlife(this.player.pos);
 
     this.running = true;
     this.controls.enabled = true;
@@ -491,10 +497,11 @@ class BlockCraftGame {
     const cmd = parts[0].toLowerCase();
 
     if (cmd === 'time' && parts[1] === 'set') {
-      const v = parts[2];
-      if (v === 'day') this.sky.time = 0.32;
+      const v = parts[2]?.toLowerCase();
+      if (v === 'day' || v === 'morning') this.sky.time = 0.31;
+      else if (v === 'sunrise' || v === 'dawn') this.sky.time = 0.262;
       else if (v === 'noon') this.sky.time = 0.5;
-      else if (v === 'sunset') this.sky.time = 0.74;
+      else if (v === 'sunset' || v === 'golden' || v === 'dusk') this.sky.time = 0.738;
       else if (v === 'night' || v === 'midnight') this.sky.time = 0.02;
       this.ui.addChatMessage(`Set time to ${v}`);
     } else if (cmd === 'gamemode' || cmd === 'gm') {
@@ -674,14 +681,17 @@ class BlockCraftGame {
       this.player.update(dt, input, this.mods);
       this.ui.setUnderwater(this.player.headInWater);
 
-      // Raycast targeted block & Villager tooltip
+      // Raycast targeted block & Villager / Wildlife tooltip
       const eye = this.player.getEyePosition();
       const dir = this.player.getLookDirection();
-      const lookMob = this.entities.raycastMob(eye, dir, 4.5);
+      const lookMob = this.entities.raycastMob(eye, dir, 5.2);
       this.currentTarget = this.world.raycast(eye, dir, 5.5);
       if (lookMob && lookMob.type === 'villager') {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip(`${lookMob.profession || 'Villager'} — Tap USE to Trade`);
+      } else if (lookMob && (!this.currentTarget || lookMob.pos.distanceTo(eye) < this.currentTarget.dist)) {
+        this.player.highlightMesh.visible = false;
+        this.ui.updateTargetTooltip(lookMob.label || lookMob.def.label || lookMob.type);
       } else if (this.currentTarget) {
         this.player.highlightMesh.visible = true;
         this.player.highlightMesh.position.set(
@@ -699,10 +709,10 @@ class BlockCraftGame {
       this.updateMining(dt, input.breaking);
       const maxBuilds = this.settings.renderDistance > 8 ? 4 : 2;
       this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds);
-      this.world.updateShaders(dt);
       this.world.updateFurnaces(dt);
       const curBiome = this.world.getBiomeAt(Math.floor(this.player.pos.x), Math.floor(this.player.pos.z));
       this.sky.update(dt, this.player.pos, curBiome);
+      this.world.updateShaders(dt, this.sky);
       if (this.effects) {
         this.effects.update(dt, this.player.pos, curBiome, this.sky.isNight());
       }

@@ -141,4 +141,46 @@ export class SoundManager {
   playEat() {
     this.playBlock('grass', false);
   }
+
+  playSplash() {
+    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(950, now);
+    filter.frequency.exponentialRampToValueAtTime(320, now + 0.22);
+    filter.Q.value = 1.4;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.14, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+    src.start(now);
+    src.stop(now + 0.25);
+  }
+
+  playBirdChirp() {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const base = 1750 + Math.random() * 900;
+    for (let i = 0; i < 2; i++) {
+      const t0 = now + i * 0.11;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(base, t0);
+      osc.frequency.exponentialRampToValueAtTime(base * (1.28 + Math.random() * 0.18), t0 + 0.055);
+      osc.frequency.exponentialRampToValueAtTime(base * 0.92, t0 + 0.095);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.linearRampToValueAtTime(0.032, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.105);
+    }
+  }
 }

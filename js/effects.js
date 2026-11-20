@@ -3,20 +3,37 @@ import * as THREE from 'three';
 // Biome Ambient Effects (Snow, Desert Dust, Forest Leaves/Fireflies, Plains Pollen, Mountain Wind)
 // + 3D Block-Break Voxel Burst Particles
 
+function createParticleSprite() {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.75)');
+  g.addColorStop(0.75, 'rgba(255,255,255,0.18)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 32, 32);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export class EffectsManager {
   constructor(scene) {
     this.scene = scene;
     this.enabled = true;
     this.currentBiome = 'Plains';
 
-    // 1. Biome Ambient Particle Cloud (follows player)
+    // 1. Biome Ambient Particle Cloud (soft glowing sprites — no harsh squares!)
     this.ambientCount = 160;
     const pos = new Float32Array(this.ambientCount * 3);
     this.ambientVel = new Float32Array(this.ambientCount * 3);
     for (let i = 0; i < this.ambientCount; i++) {
-      pos[i * 3] = (Math.random() - 0.5) * 30;
+      pos[i * 3] = (Math.random() - 0.5) * 32;
       pos[i * 3 + 1] = Math.random() * 16 - 4;
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 30;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 32;
       this.ambientVel[i * 3] = (Math.random() - 0.5) * 1.2;
       this.ambientVel[i * 3 + 1] = -0.5 - Math.random() * 1.2;
       this.ambientVel[i * 3 + 2] = (Math.random() - 0.5) * 1.2;
@@ -26,9 +43,10 @@ export class EffectsManager {
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.ambientMat = new THREE.PointsMaterial({
       color: 0xffffff,
-      size: 0.22,
+      map: createParticleSprite(),
+      size: 0.34,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.78,
       depthWrite: false
     });
     this.ambientPoints = new THREE.Points(geo, this.ambientMat);

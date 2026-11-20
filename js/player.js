@@ -51,25 +51,66 @@ export class Player {
     this.miningProgress = 0;
     this.swingAnim = 0;
 
-    // 3D Target Block Outline
-    const boxGeo = new THREE.BoxGeometry(1.01, 1.01, 1.01);
+    // 3D Target Block Outline (crisp white-tinted Minecraft highlight)
+    const boxGeo = new THREE.BoxGeometry(1.008, 1.008, 1.008);
     const edges = new THREE.EdgesGeometry(boxGeo);
     this.highlightMesh = new THREE.LineSegments(
       edges,
-      new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.75 })
+      new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.72 })
     );
     this.highlightMesh.visible = false;
 
-    // First-person held hand/item
+    // First-person sculpted Minecraft arm + sleeve + held block/tool/torch
     this.handGroup = new THREE.Group();
-    this.handMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.22, 0.55),
+    this.handPivot = new THREE.Group();
+    this.handGroup.add(this.handPivot);
+
+    this.armMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.17, 0.17, 0.48),
       new THREE.MeshLambertMaterial({ color: 0xdba882 })
     );
-    this.handMesh.position.set(0.42, -0.34, -0.58);
-    this.handMesh.rotation.set(0.25, -0.2, 0);
-    this.handGroup.add(this.handMesh);
+    this.armMesh.position.set(0, 0, 0);
+    this.sleeveMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.19, 0.19, 0.22),
+      new THREE.MeshLambertMaterial({ color: 0x26a6b8 })
+    );
+    this.sleeveMesh.position.set(0, 0, 0.2);
+    this.handPivot.add(this.armMesh, this.sleeveMesh);
+
+    this.heldBlockMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.24, 0.24),
+      new THREE.MeshLambertMaterial({ color: 0xc9b393 })
+    );
+    this.heldBlockMesh.position.set(-0.04, 0.08, -0.14);
+    this.heldBlockMesh.rotation.set(0.2, 0.65, 0.05);
+    this.heldBlockMesh.visible = false;
+    this.handPivot.add(this.heldBlockMesh);
+
+    this.heldToolGroup = new THREE.Group();
+    this.toolStick = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, 0.045, 0.42),
+      new THREE.MeshLambertMaterial({ color: 0x7c5329 })
+    );
+    this.toolHead = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.055, 0.12),
+      new THREE.MeshLambertMaterial({ color: 0x4de3e8 })
+    );
+    this.toolHead.position.set(0, 0.02, -0.18);
+    this.heldToolGroup.add(this.toolStick, this.toolHead);
+    this.heldToolGroup.position.set(-0.02, 0.09, -0.14);
+    this.heldToolGroup.rotation.set(-0.45, 0.15, -0.18);
+    this.heldToolGroup.visible = false;
+    this.handPivot.add(this.heldToolGroup);
+
+    // Dynamic Torch / Glowstone PointLight (BSL Dynamic Lights!)
+    this.heldLight = new THREE.PointLight(0xffb454, 0, 14, 1.6);
+    this.heldLight.position.set(0.3, -0.1, -0.4);
+    this.handGroup.add(this.heldLight);
+
+    this.handPivot.position.set(0.52, -0.46, -0.62);
+    this.handPivot.rotation.set(0.22, -0.26, 0.08);
     this.camera.add(this.handGroup);
+    this.wasInWater = false;
 
     // 3D Articulated Player Model (visible in 3rd-person back & front views)
     this.playerModel = this.buildPlayerModel();
@@ -185,6 +226,12 @@ export class Player {
     scene.add(this.camera);
   }
 
+  detachFromScene(scene) {
+    scene.remove(this.highlightMesh);
+    scene.remove(this.playerModel.root);
+    this.camera.remove(this.handGroup);
+  }
+
   getLookDirection(out = new THREE.Vector3()) {
     const cosP = Math.cos(this.pitch);
     out.set(-Math.sin(this.yaw) * cosP, Math.sin(this.pitch), -Math.cos(this.yaw) * cosP);
@@ -268,7 +315,12 @@ export class Player {
     // Environment checks
     const feetBlock = this.world.getBlock(this.pos.x, this.pos.y + 0.2, this.pos.z);
     const headBlock = this.world.getBlock(this.pos.x, this.pos.y + EYE_HEIGHT, this.pos.z);
-    this.inWater = isBlockLiquid(feetBlock);
+    const nowInWater = isBlockLiquid(feetBlock);
+    if (nowInWater && !this.wasInWater && this.sound.playSplash) {
+      this.sound.playSplash();
+    }
+    this.wasInWater = nowInWater;
+    this.inWater = nowInWater;
     this.headInWater = isBlockLiquid(headBlock);
     const onLadder = feetBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
 
@@ -444,6 +496,7 @@ export class Player {
       this.camera.rotation.order = 'YXZ';
       this.camera.rotation.y = this.yaw;
       this.camera.rotation.x = this.pitch;
+      this.camera.rotation.z = 0;
       this.handGroup.visible = false;
       this.playerModel.root.visible = true;
     } else if (this.cameraMode === 2) {
@@ -459,23 +512,49 @@ export class Player {
       this.camera.rotation.order = 'YXZ';
       this.camera.rotation.y = this.yaw;
       this.camera.rotation.x = this.pitch;
+      this.camera.rotation.z = 0;
       this.handGroup.visible = true;
       this.playerModel.root.visible = false;
     }
 
-    // Held item color
+    // Held item shape, color & dynamic torch/glowstone light!
     const held = this.inventory.getHeldDef();
     const heldCol = held
       ? (held.id.includes('diamond') ? 0x4de3e8 :
          held.id.includes('gold') ? 0xf5d033 :
          held.id.includes('iron') ? 0xdde2e8 :
-         held.id.includes('stone') ? 0x8e939c :
-         held.id.includes('wood') || held.id.includes('oak') ? 0xa87c46 :
+         held.id.includes('stone') || held.id.includes('cobble') ? 0x8e939c :
+         held.id.includes('grass') || held.id.includes('leaves') ? 0x5da135 :
+         held.id.includes('wood') || held.id.includes('oak') || held.id.includes('spruce') ? 0xa87c46 :
+         held.id.includes('birch') ? 0xd9cfa8 :
          held.id.includes('tnt') ? 0xc9382b :
-         held.id.includes('torch') ? 0xffb74d :
+         held.id.includes('torch') || held.id.includes('glowstone') ? 0xffc65c :
+         held.id.includes('sand') ? 0xdfd09c :
+         held.id.includes('snow') ? 0xf0f6fc :
          held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') ? 0xe05555 : 0xc9b393)
       : 0xdba882;
-    this.handMesh.material.color.setHex(heldCol);
+
+    const isTool = !!(held && (held.toolType || held.id === 'torch' || held.id === 'stick'));
+    const isBlockHeld = !!(held && held.isBlock && held.id !== 'torch');
+    this.heldBlockMesh.visible = isBlockHeld;
+    this.heldToolGroup.visible = isTool;
+    this.armMesh.visible = !isBlockHeld;
+    this.sleeveMesh.visible = !isBlockHeld;
+    if (isBlockHeld) {
+      this.heldBlockMesh.material.color.setHex(heldCol);
+    } else if (isTool) {
+      this.toolHead.material.color.setHex(heldCol);
+      this.toolHead.scale.set(held.id === 'torch' ? 0.35 : (held.toolType === 'sword' ? 0.45 : 1.0), 1.0, held.toolType === 'sword' ? 2.4 : 1.0);
+    }
+
+    // Dynamic Torch / Glowstone Light flicker
+    const emitsLight = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
+    if (emitsLight) {
+      const flicker = 1.65 + Math.sin(performance.now() * 0.015) * 0.16 + Math.cos(performance.now() * 0.037) * 0.08;
+      this.heldLight.intensity = flicker;
+    } else {
+      this.heldLight.intensity = 0;
+    }
 
     // Animate 1st-Person Held Arm/Item
     if (this.swingAnim > 0) this.swingAnim = Math.max(0, this.swingAnim - dt * 5.8);
@@ -486,20 +565,20 @@ export class Player {
       this.walkPhase += dt * (this.sprinting ? 13.5 : 9.2) * Math.max(0.5, speedRatio);
     }
 
-    const bobY = this.onGround && horizSpeed > 0.25 ? Math.sin(this.walkPhase * 2) * (this.sprinting ? 0.042 : 0.026) : 0;
-    const bobX = this.onGround && horizSpeed > 0.25 ? Math.cos(this.walkPhase) * 0.022 : 0;
-    const eatBounce = this.eatAnim > 0 ? Math.sin(this.eatAnim * Math.PI * 6) * 0.06 : 0;
+    const bobY = this.onGround && horizSpeed > 0.25 ? Math.sin(this.walkPhase * 2) * (this.sprinting ? 0.038 : 0.022) : 0;
+    const bobX = this.onGround && horizSpeed > 0.25 ? Math.cos(this.walkPhase) * 0.018 : 0;
+    const eatBounce = this.eatAnim > 0 ? Math.sin(this.eatAnim * Math.PI * 6) * 0.055 : 0;
     const swingArc = Math.sin(this.swingAnim * Math.PI);
 
-    this.handMesh.position.set(
-      0.42 + bobX - (this.eatAnim > 0 ? 0.14 : 0),
-      -0.34 + bobY + eatBounce + (this.eatAnim > 0 ? 0.1 : 0),
-      -0.58 + swingArc * 0.16
+    this.handPivot.position.set(
+      0.52 + bobX - (this.eatAnim > 0 ? 0.16 : 0),
+      -0.46 + bobY + eatBounce + (this.eatAnim > 0 ? 0.12 : 0),
+      -0.62 + swingArc * 0.14
     );
-    this.handMesh.rotation.set(
-      0.25 - swingArc * 1.1,
-      -0.2 + swingArc * 0.3,
-      swingArc * 0.25
+    this.handPivot.rotation.set(
+      0.22 - swingArc * 1.05,
+      -0.26 + swingArc * 0.28,
+      0.08 + swingArc * 0.22
     );
 
     // Animate 3D Player Model (for 3rd-person views)

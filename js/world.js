@@ -103,18 +103,98 @@ export class World {
     this.furnaces = new Map(); // "x,y,z" -> { input, fuel, output, burnTime, burnMax, cookTime }
     this.villageChunks = new Map(); // "cx,cz" -> { x, y, z, biome, spawned: bool }
     this.renderDistance = options.renderDistance || 6;
-    this.shaderMode = options.shaders || 'enhanced';
+    this.shaderMode = options.shaders || 'ultra';
     this.shaderUniforms = {
       uTime: { value: 0 },
-      uWaveStrength: { value: this.shaderMode === 'off' ? 0.0 : 1.0 }
+      uCloudTime: { value: 0 },
+      uWaveStrength: { value: this.shaderMode === 'off' ? 0.0 : (this.shaderMode === 'ultra' ? 1.15 : 0.9) },
+      uShaderOn: { value: this.shaderMode === 'off' ? 0.0 : 1.0 },
+      uSunDir: { value: new THREE.Vector3(0.6, 0.5, -0.25).normalize() },
+      uTopColor: { value: new THREE.Color(0x245ec2) },
+      uMidColor: { value: new THREE.Color(0x63a8ed) },
+      uHorizonColor: { value: new THREE.Color(0xd4e8fa) },
+      uSunsetColor: { value: new THREE.Color(0xff9b54) },
+      uSunColor: { value: new THREE.Color(0xfff6dc) },
+      uCloudLitColor: { value: new THREE.Color(0xfffcf5) },
+      uCloudShadowColor: { value: new THREE.Color(0x88a4c7) },
+      uDayFactor: { value: 1.0 },
+      uSunsetFactor: { value: 0.0 },
+      uRainFactor: { value: 0.0 },
+      uFogNear: { value: 45.0 },
+      uFogFar: { value: 110.0 }
     };
 
-    // Shared Materials with optional GLSL Shader Hooks
+    // 1. Opaque Terrain Material — Atmospheric Aerial Perspective + Golden-Hour Sun Warmth + Emissive Glow
     this.opaqueMat = new THREE.MeshLambertMaterial({
       map: this.textures.atlasTexture,
       vertexColors: true
     });
+    this.opaqueMat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, {
+        uShaderOn: this.shaderUniforms.uShaderOn,
+        uSunDir: this.shaderUniforms.uSunDir,
+        uSunColor: this.shaderUniforms.uSunColor,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uSunsetColor: this.shaderUniforms.uSunsetColor,
+        uDayFactor: this.shaderUniforms.uDayFactor,
+        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar
+      });
+      shader.vertexShader = `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+        varying float vEmissive;
+      ` + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vWorldPos = position;
+         vWorldNorm = normal;
+         vEmissive = max(0.0, color.r - 1.04);`
+      );
+      shader.fragmentShader = `
+        uniform float uShaderOn;
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uSunsetColor;
+        uniform float uDayFactor;
+        uniform float uSunsetFactor;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+        varying float vEmissive;
+      ` + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <fog_fragment>',
+        `if (uShaderOn > 0.5) {
+           // Warm golden-hour rim & gentle contrast lift (BSL look)
+           vec3 viewVec = vWorldPos - cameraPosition;
+           float dist = length(viewVec);
+           vec3 viewDir = viewVec / max(dist, 0.001);
+           float sunWrap = max(0.0, dot(normalize(vWorldNorm), normalize(uSunDir)) * 0.65 + 0.35);
+           gl_FragColor.rgb *= mix(vec3(1.0), vec3(1.06, 1.01, 0.94), sunWrap * (0.35 + 0.65 * uSunsetFactor) * uDayFactor);
 
+           // Warm torch & glowstone emissive radiance
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.72, 0.32) * vEmissive * 2.4;
+           }
+
+           // Sun-directional Atmospheric Aerial Perspective Haze (golden toward sun, misty sky away!)
+           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
+           float sunAlign = pow(max(0.0, dot(viewDir, normalize(uSunDir))), 3.0);
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
+         } else {
+           #include <fog_fragment>
+         }`
+      );
+    };
+
+    // 2. Cutout Foliage Material — Root-anchored Wind Sway + Sunlit Backlighting + Atmospheric Haze
     this.cutoutMat = new THREE.MeshLambertMaterial({
       map: this.textures.atlasTexture,
       vertexColors: true,
@@ -122,52 +202,324 @@ export class World {
       side: THREE.DoubleSide
     });
     this.cutoutMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.shaderUniforms.uTime;
-      shader.uniforms.uWaveStrength = this.shaderUniforms.uWaveStrength;
-      shader.vertexShader = 'uniform float uTime;\nuniform float uWaveStrength;\n' + shader.vertexShader;
+      Object.assign(shader.uniforms, {
+        uTime: this.shaderUniforms.uTime,
+        uWaveStrength: this.shaderUniforms.uWaveStrength,
+        uShaderOn: this.shaderUniforms.uShaderOn,
+        uSunDir: this.shaderUniforms.uSunDir,
+        uSunColor: this.shaderUniforms.uSunColor,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uSunsetColor: this.shaderUniforms.uSunsetColor,
+        uDayFactor: this.shaderUniforms.uDayFactor,
+        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar
+      });
+      shader.vertexShader = `
+        uniform float uTime;
+        uniform float uWaveStrength;
+        varying vec3 vWorldPos;
+        varying float vEmissive;
+      ` + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
          if (uWaveStrength > 0.01) {
-           float sway = sin(uTime * 2.1 + position.x * 0.9 + position.z * 0.7) * 0.045 * uWaveStrength;
-           transformed.x += sway;
-           transformed.z += cos(uTime * 1.7 + position.z * 0.8) * 0.03 * uWaveStrength;
+           float fy = fract(position.y + 0.001);
+           // Grass/flower roots (fy ~ 0.02) stay planted; tips (fy ~ 0.9) sway richly; leaf blocks (fy ~ 0.0) rustle softly!
+           float swayWeight = (fy > 0.01 && fy < 0.12) ? 0.0 : (fy >= 0.12 ? 1.0 : 0.28);
+           float gust = 0.72 + 0.28 * sin(uTime * 0.85 + position.x * 0.12 - position.z * 0.1);
+           float swayX = sin(uTime * 2.2 + position.x * 0.75 + position.z * 0.55) * 0.055 * uWaveStrength * gust * swayWeight;
+           float swayZ = cos(uTime * 1.85 + position.z * 0.7 - position.x * 0.45) * 0.04 * uWaveStrength * gust * swayWeight;
+           transformed.x += swayX;
+           transformed.z += swayZ;
+         }
+         vWorldPos = transformed;
+         vEmissive = max(0.0, color.r - 1.04);`
+      );
+      shader.fragmentShader = `
+        uniform float uShaderOn;
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uSunsetColor;
+        uniform float uDayFactor;
+        uniform float uSunsetFactor;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        varying vec3 vWorldPos;
+        varying float vEmissive;
+      ` + shader.fragmentShader;
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <fog_fragment>',
+        `if (uShaderOn > 0.5) {
+           vec3 viewVec = vWorldPos - cameraPosition;
+           float dist = length(viewVec);
+           vec3 viewDir = viewVec / max(dist, 0.001);
+           float sunAlign = max(0.0, dot(viewDir, normalize(uSunDir)));
+           // Translucent backlit leaves & sunlit grass glow!
+           float sss = pow(sunAlign, 3.0) * 0.28 * uDayFactor;
+           gl_FragColor.rgb += gl_FragColor.rgb * uSunColor * sss;
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.75, 0.3) * vEmissive * 2.6;
+           }
+           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, pow(sunAlign, 3.0) * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor, pow(sunAlign, 3.0) * uSunsetFactor * 0.35);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
+         } else {
+           #include <fog_fragment>
          }`
       );
     };
 
-    this.waterMat = new THREE.MeshLambertMaterial({
+    // 2b. Static Cutout Material (Glass, Ice, Torches, Ladders — crisp, no wind sway, with emissive glow + haze)
+    this.staticCutoutMat = new THREE.MeshLambertMaterial({
       map: this.textures.atlasTexture,
       vertexColors: true,
-      transparent: true,
-      opacity: 0.76,
-      side: THREE.DoubleSide,
-      depthWrite: false
+      alphaTest: 0.35,
+      side: THREE.DoubleSide
     });
-    this.waterMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTime = this.shaderUniforms.uTime;
-      shader.uniforms.uWaveStrength = this.shaderUniforms.uWaveStrength;
-      shader.vertexShader = 'uniform float uTime;\nuniform float uWaveStrength;\nvarying vec3 vWorldPos;\n' + shader.vertexShader;
+    this.staticCutoutMat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, {
+        uShaderOn: this.shaderUniforms.uShaderOn,
+        uSunDir: this.shaderUniforms.uSunDir,
+        uSunColor: this.shaderUniforms.uSunColor,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uSunsetColor: this.shaderUniforms.uSunsetColor,
+        uDayFactor: this.shaderUniforms.uDayFactor,
+        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar
+      });
+      shader.vertexShader = `
+        varying vec3 vWorldPos;
+        varying float vEmissive;
+      ` + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-         if (uWaveStrength > 0.01) {
-           float wave = sin(uTime * 2.6 + position.x * 1.1 + position.z * 0.9) * 0.065
-                      + cos(uTime * 1.9 + position.z * 1.3 - position.x * 0.6) * 0.04;
-           transformed.y += wave * uWaveStrength;
-         }
-         vWorldPos = position;`
+         vWorldPos = position;
+         vEmissive = max(0.0, color.r - 1.04);`
       );
-      shader.fragmentShader = 'uniform float uTime;\nuniform float uWaveStrength;\nvarying vec3 vWorldPos;\n' + shader.fragmentShader;
+      shader.fragmentShader = `
+        uniform float uShaderOn;
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uSunsetColor;
+        uniform float uDayFactor;
+        uniform float uSunsetFactor;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        varying vec3 vWorldPos;
+        varying float vEmissive;
+      ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <dithering_fragment>',
-        `if (uWaveStrength > 0.01) {
-           float shimmer = pow(max(0.0, sin(vWorldPos.x * 2.2 + uTime * 2.4) * cos(vWorldPos.z * 2.2 - uTime * 1.8)), 4.0);
-           gl_FragColor.rgb += vec3(0.18, 0.24, 0.3) * shimmer * uWaveStrength;
-         }
-         #include <dithering_fragment>`
+        '#include <fog_fragment>',
+        `if (uShaderOn > 0.5) {
+           vec3 viewVec = vWorldPos - cameraPosition;
+           float dist = length(viewVec);
+           vec3 viewDir = viewVec / max(dist, 0.001);
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.76, 0.32) * vEmissive * 2.8;
+           }
+           float sunAlign = pow(max(0.0, dot(viewDir, normalize(uSunDir))), 3.0);
+           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
+         } else {
+           #include <fog_fragment>
+         }`
       );
     };
+
+    // 3. BSL / Complementary Reflective Rippling Water Shader (replicates Screenshot 2!)
+    this.waterMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: this.shaderUniforms.uTime,
+        uCloudTime: this.shaderUniforms.uCloudTime,
+        uWaveStrength: this.shaderUniforms.uWaveStrength,
+        uSunDir: this.shaderUniforms.uSunDir,
+        uTopColor: this.shaderUniforms.uTopColor,
+        uMidColor: this.shaderUniforms.uMidColor,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uSunsetColor: this.shaderUniforms.uSunsetColor,
+        uSunColor: this.shaderUniforms.uSunColor,
+        uCloudLitColor: this.shaderUniforms.uCloudLitColor,
+        uCloudShadowColor: this.shaderUniforms.uCloudShadowColor,
+        uDayFactor: this.shaderUniforms.uDayFactor,
+        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+        uRainFactor: this.shaderUniforms.uRainFactor,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar
+      },
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      vertexShader: `
+        uniform float uTime;
+        uniform float uWaveStrength;
+        varying vec3 vWorldPos;
+        varying vec3 vBaseNormal;
+        void main() {
+          vec3 pos = position;
+          if (uWaveStrength > 0.01 && normal.y > 0.5) {
+            float w1 = sin(pos.x * 0.95 + uTime * 2.1 + pos.z * 0.55) * 0.045;
+            float w2 = cos(pos.z * 1.25 - uTime * 1.75 + pos.x * 0.4) * 0.032;
+            pos.y += (w1 + w2) * uWaveStrength;
+          }
+          vWorldPos = pos;
+          vBaseNormal = normal;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uCloudTime;
+        uniform float uWaveStrength;
+        uniform vec3 uSunDir;
+        uniform vec3 uTopColor;
+        uniform vec3 uMidColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uSunsetColor;
+        uniform vec3 uSunColor;
+        uniform vec3 uCloudLitColor;
+        uniform vec3 uCloudShadowColor;
+        uniform float uDayFactor;
+        uniform float uSunsetFactor;
+        uniform float uRainFactor;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        varying vec3 vWorldPos;
+        varying vec3 vBaseNormal;
+
+        float hash21(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        float noise2D(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          float a = hash21(i);
+          float b = hash21(i + vec2(1.0, 0.0));
+          float c = hash21(i + vec2(0.0, 1.0));
+          float d = hash21(i + vec2(1.0, 1.0));
+          return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        }
+
+        float fbmWater(vec2 p) {
+          float v = 0.0;
+          float amp = 0.52;
+          mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
+          for (int i = 0; i < 4; i++) {
+            v += amp * noise2D(p);
+            p = rot * p * 2.02 + vec2(17.1, 31.7);
+            amp *= 0.5;
+          }
+          return v;
+        }
+
+        // Exact mirror of SkyDome's atmospheric gradient + puffy volumetric clouds!
+        vec3 sampleSkyReflection(vec3 dir, vec3 sunDir) {
+          float h = clamp(dir.y, 0.0, 1.0);
+          float sunDot = max(0.0, dot(dir, sunDir));
+          vec3 skyCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.34, h));
+          skyCol = mix(skyCol, uTopColor, smoothstep(0.22, 0.92, h));
+
+          float horizonBand = pow(1.0 - h, 3.0);
+          float sunSide = pow(sunDot, 2.0);
+          skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.3 + 0.62 * sunSide) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+
+          float twilightArc = smoothstep(0.02, 0.26, h) * (1.0 - smoothstep(0.26, 0.68, h));
+          skyCol += vec3(0.28, 0.12, 0.24) * twilightArc * uSunsetFactor * (1.0 - uRainFactor * 0.8);
+
+          // Sun reflection bloom
+          float clearAmt = 1.0 - uRainFactor * 0.85;
+          float sunVisible = smoothstep(-0.12, 0.05, sunDir.y) * clearAmt;
+          skyCol += uSunColor * (pow(sunDot, 8.0) * (0.35 + 0.65 * uSunsetFactor) + pow(sunDot, 54.0) * 1.1) * sunVisible;
+
+          // Reflected puffy clouds!
+          if (dir.y > 0.012) {
+            vec2 cloudUV = (dir.xz / (dir.y + 0.11)) * 0.42;
+            vec2 drift = vec2(uCloudTime * 0.0085, uCloudTime * 0.0032);
+            float rawD = fbmWater(cloudUV * 1.15 + drift);
+            float thresh = mix(0.49, 0.36, uRainFactor);
+            float cAlpha = smoothstep(thresh, thresh + 0.22, rawD) * smoothstep(0.012, 0.18, dir.y) * 0.88;
+            vec3 cCol = mix(uCloudShadowColor, uCloudLitColor, clamp(rawD * 1.35 - 0.15, 0.0, 1.0));
+            skyCol = mix(skyCol, cCol, cAlpha);
+          }
+          return skyCol;
+        }
+
+        void main() {
+          vec3 viewVec = cameraPosition - vWorldPos;
+          float dist = length(viewVec);
+          vec3 V = viewVec / max(dist, 0.001);
+          vec3 sunDir = normalize(uSunDir);
+
+          // Multi-octave silky animated ripple normal (BSL water ripples)
+          vec2 p = vWorldPos.xz;
+          float t = uTime;
+          float r1 = sin(p.x * 1.9 + t * 1.7 + p.y * 0.9) * cos(p.y * 1.6 - t * 1.3);
+          float r2 = sin(p.x * 3.7 - t * 2.3 + p.y * 2.5) * 0.55;
+          float r3 = (noise2D(p * 1.6 + vec2(t * 0.55, -t * 0.42)) - 0.5) * 1.2;
+          float r4 = (noise2D(p * 3.4 - vec2(t * 0.72, t * 0.58)) - 0.5) * 0.7;
+
+          float amp = mix(0.02, 0.13, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(45.0, 130.0, dist) * 0.45);
+          vec3 N = normalize(vec3(
+            (r1 + r3 + r4) * amp,
+            1.0,
+            (r2 + r3 - r4) * amp
+          ));
+          if (vBaseNormal.y < 0.5) N = normalize(vBaseNormal);
+
+          // Fresnel Mirror Reflection of Live Sky & Clouds!
+          float NoV = max(0.0, dot(N, V));
+          float fresnel = clamp(0.10 + 0.90 * pow(1.0 - NoV, 3.2), 0.10, 0.96);
+
+          vec3 R = reflect(-V, N);
+          R.y = max(0.02, abs(R.y));
+          vec3 reflCol = sampleSkyReflection(normalize(R), sunDir);
+
+          // Crystal clear deep-teal water absorption tint
+          vec3 deepWater = mix(vec3(0.02, 0.05, 0.10), vec3(0.04, 0.24, 0.34), uDayFactor);
+          deepWater = mix(deepWater, vec3(0.14, 0.11, 0.20), uSunsetFactor * 0.55);
+
+          // Subtle caustic shimmer in shallow/steep view angles
+          float caustic = pow(max(0.0, noise2D(p * 2.4 + vec2(t * 0.8, t * 0.6))), 3.0) * 0.18 * uDayFactor;
+          deepWater += vec3(0.06, 0.22, 0.26) * caustic;
+
+          vec3 col = mix(deepWater, reflCol, fresnel);
+
+          // Sparkling Sun Specular Glitter across the Ripples!
+          vec3 H = normalize(V + sunDir);
+          float specTight = pow(max(0.0, dot(N, H)), 180.0) * 2.6;
+          float specBroad = pow(max(0.0, dot(N, H)), 26.0) * 0.45;
+          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.85);
+          col += uSunColor * (specTight + specBroad) * sunUp;
+
+          // Atmospheric Distance Haze matching Terrain & Sky seamlessly!
+          vec3 viewOut = -V;
+          float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
+          float sunAlign = pow(max(0.0, dot(viewOut, sunDir)), 3.0);
+          vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
+          atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
+          col = mix(col, atmFog, hazeFactor);
+
+          float alpha = mix(0.74, 0.96, fresnel);
+          alpha = mix(alpha, 1.0, hazeFactor);
+
+          gl_FragColor = vec4(col, alpha);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `
+    });
 
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -453,10 +805,63 @@ export class World {
       }
     }
 
-    // 2. Villages OR Trees, Cacti, Flowers, Tall Grass
+    // 2. Villages, Scenic Hilltop Watchtowers, OR Trees, Cacti, Lush Meadows & Wildflowers
+    const isWatchtowerChunk =
+      this.worldType !== 'flat' &&
+      !this.isVillageChunk(cx, cz) &&
+      ((cx % 9) + 9) % 9 === 5 &&
+      ((cz % 9) + 9) % 9 === 4 &&
+      coordHash(cx * 31, cz * 29, this.seed + 777) > 0.45;
+
     if (this.worldType !== 'flat' && this.isVillageChunk(cx, cz)) {
       this.buildVillageInChunk(cx, cz, ox, oz, heights, biomes, setLocal, getLocal);
-    } else if (this.worldType !== 'flat') {
+    } else if (isWatchtowerChunk) {
+      const th = heights[8 + 8 * CHUNK_SIZE];
+      const tb = biomes[8 + 8 * CHUNK_SIZE];
+      if (th > SEA_LEVEL + 3 && th < CHUNK_HEIGHT - 18 && tb !== 'Desert') {
+        // Scenic Stone-Brick Watchtower Keep with Battlements & Treasure Chest!
+        const x0 = 5, z0 = 5, w = 6, hT = 10;
+        for (let dz = 0; dz < w; dz++) {
+          for (let dx = 0; dx < w; dx++) {
+            for (let y = th - 3; y <= th; y++) setLocal(x0 + dx, y, z0 + dz, BLOCK.COBBLESTONE);
+            for (let dy = 1; dy <= hT; dy++) {
+              const edgeX = dx === 0 || dx === w - 1;
+              const edgeZ = dz === 0 || dz === w - 1;
+              if (edgeX && edgeZ) {
+                setLocal(x0 + dx, th + dy, z0 + dz, BLOCK.STONE_BRICKS);
+              } else if (edgeX || edgeZ) {
+                const isWin = (dy === 4 || dy === 8) && (dx === 2 || dx === 3 || dz === 2 || dz === 3);
+                setLocal(x0 + dx, th + dy, z0 + dz, isWin ? BLOCK.GLASS : (dy % 2 === 0 ? BLOCK.STONE_BRICKS : BLOCK.COBBLESTONE));
+              } else {
+                setLocal(x0 + dx, th + dy, z0 + dz, dy === 5 || dy === hT ? BLOCK.OAK_PLANKS : BLOCK.AIR);
+              }
+            }
+            // Battlements
+            if (dx === 0 || dx === w - 1 || dz === 0 || dz === w - 1) {
+              if ((dx + dz) % 2 === 0) setLocal(x0 + dx, th + hT + 1, z0 + dz, BLOCK.STONE_BRICKS);
+            }
+          }
+        }
+        // Doorway + Glowing Corner Lanterns + Treasure Chest
+        setLocal(x0 + 2, th + 1, z0, BLOCK.AIR);
+        setLocal(x0 + 2, th + 2, z0, BLOCK.AIR);
+        setLocal(x0, th + hT + 2, z0, BLOCK.GLOWSTONE);
+        setLocal(x0 + w - 1, th + hT + 2, z0 + w - 1, BLOCK.GLOWSTONE);
+        setLocal(x0 + 3, th + 1, z0 + 3, BLOCK.CHEST);
+        const wKey = `${ox + x0 + 3},${th + 1},${oz + z0 + 3}`;
+        if (!this.chests.has(wKey)) {
+          const loot = new Array(27).fill(null);
+          loot[0] = { id: 'emerald', count: 5 };
+          loot[1] = { id: 'iron_sword', count: 1, durability: 251 };
+          loot[2] = { id: 'diamond', count: 2 };
+          loot[3] = { id: 'bread', count: 6 };
+          loot[4] = { id: 'torch', count: 16 };
+          this.chests.set(wKey, loot);
+        }
+      }
+    }
+
+    if (this.worldType !== 'flat' && !this.isVillageChunk(cx, cz)) {
       for (let lz = 2; lz < CHUNK_SIZE - 2; lz++) {
         for (let lx = 2; lx < CHUNK_SIZE - 2; lx++) {
           const wx = ox + lx;
@@ -464,14 +869,15 @@ export class World {
           const h = heights[lx + lz * CHUNK_SIZE];
           const biome = biomes[lx + lz * CHUNK_SIZE];
           const topBlock = getLocal(lx, h, lz);
-          if (h <= SEA_LEVEL || h >= CHUNK_HEIGHT - 10) continue;
+          if (h <= SEA_LEVEL || h >= CHUNK_HEIGHT - 12) continue;
+          if (getLocal(lx, h + 1, lz) !== BLOCK.AIR) continue;
 
           const r = coordHash(wx, wz, this.seed + 77);
           const treeChance =
-            biome === 'Forest' ? 0.055 :
-            biome === 'Birch Forest' ? 0.05 :
-            biome === 'Snowy Taiga' ? 0.04 :
-            biome === 'Plains' ? 0.008 : 0;
+            biome === 'Forest' ? 0.052 :
+            biome === 'Birch Forest' ? 0.048 :
+            biome === 'Snowy Taiga' ? 0.042 :
+            biome === 'Plains' ? 0.0085 : 0;
 
           if (r < treeChance && (topBlock === BLOCK.GRASS || topBlock === BLOCK.SNOW)) {
             const logType =
@@ -481,17 +887,52 @@ export class World {
               biome === 'Birch Forest' ? BLOCK.BIRCH_LEAVES :
               biome === 'Snowy Taiga' ? BLOCK.SPRUCE_LEAVES : BLOCK.OAK_LEAVES;
 
-            const trunkH = 4 + Math.floor(coordHash(wx, wz, this.seed + 88) * 3);
-            for (let ty = 1; ty <= trunkH; ty++) setLocal(lx, h + ty, lz, logType);
-
-            for (let dy = trunkH - 1; dy <= trunkH + 2; dy++) {
-              const rad = dy >= trunkH + 1 ? 1 : 2;
-              for (let dz = -rad; dz <= rad; dz++) {
-                for (let dx = -rad; dx <= rad; dx++) {
-                  if (dx === 0 && dz === 0 && dy <= trunkH) continue;
-                  if (Math.abs(dx) === rad && Math.abs(dz) === rad && dy === trunkH + 2) continue;
-                  if (getLocal(lx + dx, h + dy, lz + dz) === BLOCK.AIR) {
-                    setLocal(lx + dx, h + dy, lz + dz, leafType);
+            const styleR = coordHash(wx, wz, this.seed + 88);
+            if (biome === 'Snowy Taiga') {
+              // Tall conical Alpine Spruce
+              const trunkH = 6 + Math.floor(styleR * 3);
+              for (let ty = 1; ty <= trunkH; ty++) setLocal(lx, h + ty, lz, logType);
+              for (let dy = 2; dy <= trunkH + 2; dy++) {
+                const rad = dy >= trunkH + 1 ? 0 : (dy >= trunkH - 1 ? 1 : (dy % 2 === 0 ? 2 : 1));
+                for (let dz = -rad; dz <= rad; dz++) {
+                  for (let dx = -rad; dx <= rad; dx++) {
+                    if (dx === 0 && dz === 0 && dy <= trunkH) continue;
+                    if (rad === 2 && Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+                    if (getLocal(lx + dx, h + dy, lz + dz) === BLOCK.AIR) {
+                      setLocal(lx + dx, h + dy, lz + dz, leafType);
+                    }
+                  }
+                }
+              }
+            } else if (logType === BLOCK.OAK_LOG && styleR > 0.72 && lx >= 3 && lx <= CHUNK_SIZE - 4 && lz >= 3 && lz <= CHUNK_SIZE - 4) {
+              // Grand Lush Oak Tree (wide natural canopy!)
+              const trunkH = 6 + Math.floor((styleR - 0.72) * 8);
+              for (let ty = 1; ty <= trunkH; ty++) setLocal(lx, h + ty, lz, logType);
+              for (let dy = trunkH - 2; dy <= trunkH + 3; dy++) {
+                const rad = (dy === trunkH + 3) ? 1 : (dy === trunkH - 2 || dy === trunkH + 2 ? 2 : 3);
+                for (let dz = -rad; dz <= rad; dz++) {
+                  for (let dx = -rad; dx <= rad; dx++) {
+                    if (dx === 0 && dz === 0 && dy <= trunkH) continue;
+                    if (dx * dx + dz * dz > rad * rad + 1) continue;
+                    if (getLocal(lx + dx, h + dy, lz + dz) === BLOCK.AIR) {
+                      setLocal(lx + dx, h + dy, lz + dz, leafType);
+                    }
+                  }
+                }
+              }
+            } else {
+              // Classic Oak / Birch Tree
+              const trunkH = 4 + Math.floor(styleR * 3);
+              for (let ty = 1; ty <= trunkH; ty++) setLocal(lx, h + ty, lz, logType);
+              for (let dy = trunkH - 1; dy <= trunkH + 2; dy++) {
+                const rad = dy >= trunkH + 1 ? 1 : 2;
+                for (let dz = -rad; dz <= rad; dz++) {
+                  for (let dx = -rad; dx <= rad; dx++) {
+                    if (dx === 0 && dz === 0 && dy <= trunkH) continue;
+                    if (Math.abs(dx) === rad && Math.abs(dz) === rad && dy === trunkH + 2) continue;
+                    if (getLocal(lx + dx, h + dy, lz + dz) === BLOCK.AIR) {
+                      setLocal(lx + dx, h + dy, lz + dz, leafType);
+                    }
                   }
                 }
               }
@@ -499,10 +940,15 @@ export class World {
           } else if (biome === 'Desert' && topBlock === BLOCK.SAND && r < 0.012) {
             const ch = 2 + Math.floor(coordHash(wx, wz, this.seed + 99) * 3);
             for (let cy = 1; cy <= ch; cy++) setLocal(lx, h + cy, lz, BLOCK.CACTUS);
-          } else if (topBlock === BLOCK.GRASS && r > 0.88 && getLocal(lx, h + 1, lz) === BLOCK.AIR) {
-            if (r > 0.985) setLocal(lx, h + 1, lz, BLOCK.FLOWER_RED);
-            else if (r > 0.97) setLocal(lx, h + 1, lz, BLOCK.FLOWER_YELLOW);
-            else setLocal(lx, h + 1, lz, BLOCK.TALL_GRASS);
+          } else if (topBlock === BLOCK.GRASS) {
+            // Lush swaying meadow patches & clustered wildflowers (like Screenshot 1!)
+            const meadowPatch = this.moistureNoise.noise2D(wx * 0.09, wz * 0.09);
+            const grassThresh = biome === 'Plains' ? (meadowPatch > 0.0 ? 0.66 : 0.84) : 0.78;
+            if (r > grassThresh) {
+              if (r > 0.978) setLocal(lx, h + 1, lz, BLOCK.FLOWER_RED);
+              else if (r > 0.955) setLocal(lx, h + 1, lz, BLOCK.FLOWER_YELLOW);
+              else setLocal(lx, h + 1, lz, BLOCK.TALL_GRASS);
+            }
           }
         }
       }
@@ -599,6 +1045,7 @@ export class World {
     const buckets = {
       opaque: { pos: [], norm: [], uv: [], col: [], idx: [] },
       cutout: { pos: [], norm: [], uv: [], col: [], idx: [] },
+      staticCutout: { pos: [], norm: [], uv: [], col: [], idx: [] },
       water: { pos: [], norm: [], uv: [], col: [], idx: [] }
     };
 
@@ -619,14 +1066,16 @@ export class World {
           const wx = ox + lx;
           const wz = oz + lz;
 
-          // Cross-quad blocks (flowers, tall grass, torches, ladders)
+          // Cross-quad blocks (flowers, tall grass sway; torches & ladders stay static!)
           if (def.cross) {
-            const b = buckets.cutout;
+            const isStaticCross = id === BLOCK.TORCH || id === BLOCK.LADDER;
+            const b = isStaticCross ? buckets.staticCutout : buckets.cutout;
             const uv = this.textures.getUV(def.faces.all);
-            const shade = def.light > 0 ? 1.15 : 0.92;
+            const shade = def.light > 0 ? 1.18 : 0.94;
+            const yBase = isStaticCross ? 0.0 : 0.02;
             const quads = [
-              [[0.15, 0, 0.15, 0, 0], [0.85, 0, 0.85, 1, 0], [0.85, 0.9, 0.85, 1, 1], [0.15, 0.9, 0.15, 0, 1]],
-              [[0.15, 0, 0.85, 0, 0], [0.85, 0, 0.15, 1, 0], [0.85, 0.9, 0.15, 1, 1], [0.15, 0.9, 0.85, 0, 1]]
+              [[0.15, yBase, 0.15, 0, 0], [0.85, yBase, 0.85, 1, 0], [0.85, 0.9, 0.85, 1, 1], [0.15, 0.9, 0.15, 0, 1]],
+              [[0.15, yBase, 0.85, 0, 0], [0.85, yBase, 0.15, 1, 0], [0.85, 0.9, 0.15, 1, 1], [0.15, 0.9, 0.85, 0, 1]]
             ];
             for (const q of quads) {
               const baseIdx = b.pos.length / 3;
@@ -642,8 +1091,11 @@ export class World {
           }
 
           const isWater = id === BLOCK.WATER;
-          const isCutout = !isWater && def.transparent;
-          const b = isWater ? buckets.water : (isCutout ? buckets.cutout : buckets.opaque);
+          const isStaticCutout = id === BLOCK.GLASS || id === BLOCK.ICE;
+          const isCutout = !isWater && !isStaticCutout && def.transparent;
+          const b = isWater
+            ? buckets.water
+            : (isStaticCutout ? buckets.staticCutout : (isCutout ? buckets.cutout : buckets.opaque));
 
           for (const face of FACES) {
             const nx = wx + face.dir[0];
@@ -654,8 +1106,8 @@ export class World {
             // Culling logic
             if (isWater) {
               if (neighbor === BLOCK.WATER || (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor))) continue;
-            } else if (isCutout) {
-              if (neighbor === id && id === BLOCK.GLASS) continue;
+            } else if (isCutout || isStaticCutout) {
+              if (neighbor === id && (id === BLOCK.GLASS || id === BLOCK.ICE)) continue;
               if (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor)) continue;
             } else {
               if (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor)) continue;
@@ -713,32 +1165,53 @@ export class World {
       mesh.renderOrder = renderOrder;
       mesh.frustumCulled = true;
       mesh.castShadow = shadows && this.shaderMode === 'ultra';
-      mesh.receiveShadow = shadows && this.shaderMode === 'ultra';
+      mesh.receiveShadow = (shadows || mat === this.cutoutMat) && this.shaderMode === 'ultra';
       this.group.add(mesh);
       chunk.meshes.push(mesh);
     };
 
     addBucket(buckets.opaque, this.opaqueMat, 0, true);
     addBucket(buckets.cutout, this.cutoutMat, 1, false);
+    addBucket(buckets.staticCutout, this.staticCutoutMat, 1, false);
     addBucket(buckets.water, this.waterMat, 2, false);
   }
 
   setShaderMode(mode) {
     this.shaderMode = mode;
-    this.shaderUniforms.uWaveStrength.value = mode === 'off' ? 0.0 : (mode === 'ultra' ? 1.2 : 0.85);
+    this.shaderUniforms.uWaveStrength.value = mode === 'off' ? 0.0 : (mode === 'ultra' ? 1.15 : 0.9);
+    this.shaderUniforms.uShaderOn.value = mode === 'off' ? 0.0 : 1.0;
     const useShadows = mode === 'ultra';
     for (const chunk of this.chunks.values()) {
       for (const m of chunk.meshes) {
         if (m.material === this.opaqueMat) {
           m.castShadow = useShadows;
           m.receiveShadow = useShadows;
+        } else if (m.material === this.cutoutMat || m.material === this.staticCutoutMat) {
+          m.receiveShadow = useShadows;
         }
       }
     }
   }
 
-  updateShaders(dt) {
+  updateShaders(dt, sky = null) {
     this.shaderUniforms.uTime.value += dt;
+    if (sky) {
+      const p = sky.getShaderParams();
+      this.shaderUniforms.uSunDir.value.copy(p.sunDir);
+      this.shaderUniforms.uTopColor.value.copy(p.topColor);
+      this.shaderUniforms.uMidColor.value.copy(p.midColor);
+      this.shaderUniforms.uHorizonColor.value.copy(p.horizonColor);
+      this.shaderUniforms.uSunsetColor.value.copy(p.sunsetColor);
+      this.shaderUniforms.uSunColor.value.copy(p.sunColor);
+      this.shaderUniforms.uCloudLitColor.value.copy(p.cloudLitColor);
+      this.shaderUniforms.uCloudShadowColor.value.copy(p.cloudShadowColor);
+      this.shaderUniforms.uDayFactor.value = p.dayFactor;
+      this.shaderUniforms.uSunsetFactor.value = p.sunsetFactor;
+      this.shaderUniforms.uRainFactor.value = p.rainFactor;
+      this.shaderUniforms.uCloudTime.value = p.cloudTime;
+      this.shaderUniforms.uFogNear.value = sky.fog.near;
+      this.shaderUniforms.uFogFar.value = sky.fog.far;
+    }
   }
 
   updateChunksAround(px, pz, maxBuildsPerFrame = 3) {

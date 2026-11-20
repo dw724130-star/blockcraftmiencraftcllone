@@ -22,7 +22,18 @@
     }
   </script>
 </head>
-<body>
+<body class="mc-theme large-ui">
+  <script>
+    // Apply saved UI theme synchronously before first paint so the old menu NEVER flashes!
+    try {
+      const raw = localStorage.getItem('blockcraft_settings_v2');
+      if (raw) {
+        const s = JSON.parse(raw);
+        document.body.classList.toggle('mc-theme', s.minecraftUI !== false);
+        document.body.classList.toggle('large-ui', s.largeUI !== false);
+      }
+    } catch {}
+  </script>
   <!-- WebGL Canvas Container -->
   <div id="game-container"></div>
 
@@ -39,8 +50,8 @@
     <div class="title-panel">
       <div class="logo-wrap">
         <h1 class="game-logo">BLOCKCRAFT</h1>
-        <div class="splash-text" id="title-splash">Villages, Shaders &amp; Mods!</div>
-        <div class="logo-sub">iPad &amp; Touch Edition • Pure Survival &amp; Creative</div>
+        <div class="splash-text" id="title-splash">BSL Shaders, Mirror Water &amp; Wildlife!</div>
+        <div class="logo-sub">iPad &amp; Desktop Voxel Edition • Shaders • Wildlife • Villages</div>
       </div>
 
       <div class="title-nav-tabs">
@@ -104,16 +115,17 @@
                • <strong>⚡ SPRINT / ⬇ SNEAK / ⬆ JUMP:</strong> Double-tap Jump to fly in Creative</p>
           </div>
           <div class="guide-card">
-            <h4>🏘️ Villages &amp; Survival</h4>
-            <p>• Survival starts with <strong>empty hands</strong> — punch trees to craft planks, sticks, and a Crafting Table!<br>
-               • Explore east/southeast of spawn (or follow gold ★ on Mini-Map) to discover <strong>Villages</strong> with loot chests, Iron Golems, and tradable <strong>Villagers</strong>!<br>
-               • Tap 👁 to switch 1st-Person &amp; 3rd-Person Player Model views.</p>
+            <h4>🦌 Wildlife, Shaders &amp; Villages</h4>
+            <p>• Spot <strong>Deer, Foxes, Bunnies, Wolves, Songbirds, Ducks, Turtles, Butterflies &amp; Swimming Fish</strong> across biomes!<br>
+               • Try <strong>🌅 Sunrise</strong> or <strong>🌇 Sunset</strong> in Pause/Chat to see glowing clouds reflect across the rippling water!<br>
+               • Explore east/southeast (gold ★ on Radar) for <strong>Villages</strong>, Hilltop Watchtowers, loot chests &amp; Villager trading.<br>
+               • Hold a <strong>Torch</strong> for dynamic cave lighting, and tap 👁 for 1st/3rd-person views.</p>
           </div>
         </div>
       </div>
 
       <div class="title-footer">
-        <span>Touch + Keyboard/Mouse • Offline Auto-Save • Shaders &amp; Villages</span>
+        <span>Touch + Keyboard/Mouse • Volumetric Clouds &amp; Reflective Water • Wildlife &amp; Villages</span>
       </div>
     </div>
   </div>
@@ -386,10 +398,20 @@
           <div class="setting-row inline">
             <label>Shaders &amp; Graphics</label>
             <select id="set-shaders">
-              <option value="off">Off (Fastest)</option>
-              <option value="enhanced">Enhanced (Waves + Glow)</option>
-              <option value="ultra">Ultra (Shadows + Waves)</option>
+              <option value="ultra">Ultra BSL (Shadows + Mirror Water + Clouds)</option>
+              <option value="enhanced">Enhanced (Mirror Water + Clouds + Glow)</option>
+              <option value="off">Classic (Fastest)</option>
             </select>
+          </div>
+          <div class="setting-row">
+            <label>Quick Time of Day</label>
+            <div class="quick-cmds">
+              <button type="button" class="cmd-chip pause-time-btn" data-time="sunrise">🌅 Sunrise</button>
+              <button type="button" class="cmd-chip pause-time-btn" data-time="day">☀ Morning</button>
+              <button type="button" class="cmd-chip pause-time-btn" data-time="noon">🌞 Noon</button>
+              <button type="button" class="cmd-chip pause-time-btn" data-time="sunset">🌇 Sunset</button>
+              <button type="button" class="cmd-chip pause-time-btn" data-time="night">🌙 Night</button>
+            </div>
           </div>
           <div class="setting-row inline">
             <label>Minecraft Classic UI Vibe</label>
@@ -434,13 +456,16 @@
       </div>
       <div class="chat-body">
         <div class="quick-cmds">
+          <button class="cmd-chip" data-cmd="/time set sunrise">🌅 Sunrise</button>
           <button class="cmd-chip" data-cmd="/time set day">☀ Day</button>
+          <button class="cmd-chip" data-cmd="/time set sunset">🌇 Golden Sunset</button>
           <button class="cmd-chip" data-cmd="/time set night">🌙 Night</button>
           <button class="cmd-chip" data-cmd="/gamemode creative">✨ Creative</button>
           <button class="cmd-chip" data-cmd="/gamemode survival">⚔ Survival</button>
           <button class="cmd-chip" data-cmd="/weather rain">🌧 Rain</button>
           <button class="cmd-chip" data-cmd="/weather clear">☀ Clear</button>
           <button class="cmd-chip" data-cmd="/heal">❤ Heal</button>
+          <button class="cmd-chip" data-cmd="/give torch 32">🔥 Torches</button>
           <button class="cmd-chip" data-cmd="/give diamond_pickaxe 1">⛏ Diamond Pick</button>
           <button class="cmd-chip" data-cmd="/give tnt 16">🧨 TNT x16</button>
         </div>

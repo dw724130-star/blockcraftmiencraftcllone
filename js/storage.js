@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS = {
   sound: true,
   minecraftUI: true,   // Classic Minecraft pixel bevel UI theme (revertable)
   largeUI: true,       // Larger iPad-friendly UI scale (revertable)
-  shaders: 'enhanced', // 'off' | 'enhanced' | 'ultra'
+  shaders: 'ultra',    // 'off' | 'enhanced' | 'ultra'
   biomeEffects: true   // Biome ambient particles & atmosphere
 };
 

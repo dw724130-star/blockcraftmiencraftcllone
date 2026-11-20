@@ -4,12 +4,12 @@ import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
 
 const SPLASH_TEXTS = [
-  'Villages, Shaders & Mods!',
-  'Built for iPad Touch!',
-  'Punch Trees First!',
-  'Trade with Villagers!',
-  '100% WebGL Voxel Engine!',
-  'Now with Ridged Mountains!'
+  'BSL Shaders & Mirror Water!',
+  'Wild Deer, Foxes & Songbirds!',
+  'Watch the Golden Sunset!',
+  'Villages, Watchtowers & Mods!',
+  'Volumetric Sunlit Clouds!',
+  '100% WebGL Voxel Engine!'
 ];
 
 export class UIManager {
@@ -159,10 +159,21 @@ export class UIManager {
     document.getElementById('chat-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') sendChat();
     });
-    document.querySelectorAll('.cmd-chip').forEach((chip) => {
+    document.querySelectorAll('.cmd-chip[data-cmd]').forEach((chip) => {
       chip.addEventListener('click', () => {
         if (this.game) this.game.handleChatCommand(chip.dataset.cmd);
         this.closeModals();
+      });
+    });
+
+    // Quick Time-of-Day buttons inside Pause Menu
+    document.querySelectorAll('.pause-time-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.game) {
+          this.game.handleChatCommand(`/time set ${btn.dataset.time}`);
+          this.closeModals();
+          this.toast(`Time set to ${btn.dataset.time.toUpperCase()}`);
+        }
       });
     });
 
@@ -196,7 +207,7 @@ export class UIManager {
     document.getElementById('val-sensitivity').textContent = settings.sensitivity.toFixed(1);
     document.getElementById('set-fov').value = settings.fov;
     document.getElementById('val-fov').textContent = settings.fov;
-    document.getElementById('set-shaders').value = settings.shaders || 'enhanced';
+    document.getElementById('set-shaders').value = settings.shaders || 'ultra';
     document.getElementById('set-mc-ui').checked = settings.minecraftUI !== false;
     document.getElementById('set-large-ui').checked = settings.largeUI !== false;
     document.getElementById('set-biome-fx').checked = settings.biomeEffects !== false;
@@ -993,12 +1004,14 @@ export class UIManager {
       hintEl.textContent = nearestVDist < 200 ? `Village ${Math.round(nearestVDist)}m` : world.getBiomeAt(px, pz);
     }
 
-    // Draw nearby mobs
+    // Draw nearby mobs & wildlife
     for (const m of entities.mobs) {
       const mx = half + (m.pos.x - px) / scale;
       const my = half + (m.pos.z - pz) / scale;
       if (mx < 2 || mx > w - 2 || my < 2 || my > h - 2) continue;
-      ctx.fillStyle = m.def.hostile ? '#ff4444' : (m.def.villager ? '#ffe066' : '#a8ff8a');
+      ctx.fillStyle = m.def.hostile
+        ? '#ff4444'
+        : (m.def.villager ? '#ffe066' : ((m.def.flying || m.def.aquatic) ? '#6ee7ff' : '#a8ff8a'));
       ctx.fillRect(mx - 2, my - 2, 4, 4);
     }
 
