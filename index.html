@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BlockCraft" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <title>BlockCraft — iPad Voxel Edition</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- WebGL Canvas Container -->
+  <div id="game-container"></div>
+
+  <!-- Screen Effects -->
+  <div id="underwater-overlay" class="screen-fx hidden"></div>
+  <div id="damage-overlay" class="screen-fx hidden"></div>
+
+  <!-- TITLE / WORLD SELECT SCREEN -->
+  <div id="title-screen" class="overlay-screen">
+    <div class="title-bg">
+      <div class="title-clouds"></div>
+      <div class="title-mountains"></div>
+    </div>
+    <div class="title-panel">
+      <div class="logo-wrap">
+        <h1 class="game-logo">BLOCKCRAFT</h1>
+        <div class="splash-text" id="title-splash">Villages, Shaders &amp; Mods!</div>
+        <div class="logo-sub">iPad &amp; Touch Edition • Pure Survival &amp; Creative</div>
+      </div>
+
+      <div class="title-nav-tabs">
+        <button class="mc-btn primary title-tab active" data-title-tab="play">▶ Play &amp; Worlds</button>
+        <button class="mc-btn title-tab" data-title-tab="mods">🧩 Mods &amp; Add-Ons (<span id="title-mod-count">2</span>)</button>
+        <button class="mc-btn title-tab" data-title-tab="guide">📖 Controls &amp; Tips</button>
+      </div>
+
+      <div id="title-tab-play" class="title-tab-view">
+        <div id="title-main-view">
+          <div class="create-world-box">
+            <h3>Create New World</h3>
+            <div class="form-row">
+              <label>World Name</label>
+              <input type="text" id="new-world-name" value="My World" maxlength="24" />
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>Game Mode</label>
+                <select id="new-world-mode">
+                  <option value="survival">Survival (Empty Start)</option>
+                  <option value="creative">Creative (Fly &amp; Build)</option>
+                </select>
+              </div>
+              <div>
+                <label>World Type</label>
+                <select id="new-world-type">
+                  <option value="infinite">Infinite Biomes &amp; Villages</option>
+                  <option value="flat">Superflat</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <label>Seed (optional)</label>
+              <input type="text" id="new-world-seed" placeholder="Random seed..." maxlength="20" />
+            </div>
+            <button id="btn-create-world" class="mc-btn primary large">Create &amp; Play</button>
+          </div>
+
+          <div class="saved-worlds-box">
+            <h3>Saved Worlds</h3>
+            <div id="saved-worlds-list" class="worlds-list">
+              <div class="empty-worlds">No saved worlds yet.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="title-tab-mods" class="title-tab-view hidden">
+        <div class="mods-intro">Toggle built-in Mods &amp; Add-Ons anytime (works in both Survival &amp; Creative):</div>
+        <div id="title-mods-list" class="mods-grid"></div>
+      </div>
+
+      <div id="title-tab-guide" class="title-tab-view hidden">
+        <div class="guide-grid">
+          <div class="guide-card">
+            <h4>📱 iPad Touch Controls</h4>
+            <p>• <strong>Left Thumb:</strong> Walk / Sprint Ring (or D-Pad in Settings)<br>
+               • <strong>Drag Screen:</strong> Smooth 360° Look<br>
+               • <strong>MINE / USE:</strong> Hold to mine or tap to place, eat, open Crafting Table, Furnace, Chest, or trade with Villagers<br>
+               • <strong>⚡ SPRINT / ⬇ SNEAK / ⬆ JUMP:</strong> Double-tap Jump to fly in Creative</p>
+          </div>
+          <div class="guide-card">
+            <h4>🏘️ Villages &amp; Survival</h4>
+            <p>• Survival starts with <strong>empty hands</strong> — punch trees to craft planks, sticks, and a Crafting Table!<br>
+               • Explore east/southeast of spawn (or follow gold ★ on Mini-Map) to discover <strong>Villages</strong> with loot chests, Iron Golems, and tradable <strong>Villagers</strong>!<br>
+               • Tap 👁 to switch 1st-Person &amp; 3rd-Person Player Model views.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="title-footer">
+        <span>Touch + Keyboard/Mouse • Offline Auto-Save • Shaders &amp; Villages</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- IN-GAME HUD -->
+  <div id="hud" class="hidden">
+    <!-- Top Bar -->
+    <div class="hud-top">
+      <div class="hud-top-left">
+        <button id="btn-pause" class="hud-icon-btn" title="Menu">☰</button>
+        <button id="btn-chat" class="hud-icon-btn" title="Chat / Commands">💬</button>
+        <button id="btn-camera" class="hud-icon-btn" title="Toggle Perspective">👁</button>
+      </div>
+      <div class="hud-info-pill" id="hud-info">
+        <span id="hud-coords">0, 40, 0</span>
+        <span class="sep">|</span>
+        <span id="hud-biome">Plains</span>
+        <span class="sep">|</span>
+        <span id="hud-time">Day 1 08:00</span>
+        <span class="sep">|</span>
+        <span id="hud-fps">60 FPS</span>
+      </div>
+      <div class="hud-top-right">
+        <div class="right-quick-bar">
+          <button id="btn-mods-hud" class="hud-icon-btn" title="Mods &amp; Add-Ons">🧩</button>
+          <button id="btn-bag-hud" class="hud-icon-btn" title="Inventory &amp; Craft">🎒</button>
+          <span id="hud-mode-badge" class="mode-badge">SURVIVAL</span>
+        </div>
+        <div id="minimap-wrap" class="minimap-wrap">
+          <canvas id="minimap-canvas" width="108" height="108"></canvas>
+          <span class="mm-n">N</span>
+          <span class="mm-label" id="minimap-village-hint">Radar</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center Crosshair + Break Progress -->
+    <div id="crosshair">
+      <div class="ch-h"></div>
+      <div class="ch-v"></div>
+      <svg id="break-ring" viewBox="0 0 44 44" class="hidden">
+        <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="4" />
+        <circle id="break-ring-fill" cx="22" cy="22" r="18" fill="none" stroke="#ffd54f" stroke-width="4"
+                stroke-dasharray="113.1" stroke-dashoffset="113.1" transform="rotate(-90 22 22)" />
+      </svg>
+    </div>
+
+    <!-- Target Block Tooltip -->
+    <div id="target-tooltip" class="hidden"></div>
+
+    <!-- Toast Notifications & Chat Log -->
+    <div id="chat-log"></div>
+    <div id="toast-area"></div>
+
+    <!-- iPad / Mobile Touch Controls -->
+    <div id="touch-controls">
+      <!-- Left Movement Area (Joystick or D-Pad) -->
+      <div id="move-zone">
+        <!-- Virtual Joystick -->
+        <div id="joystick-base">
+          <div id="joystick-sprint-ring"></div>
+          <div id="joystick-knob"></div>
+        </div>
+        <!-- Optional D-Pad -->
+        <div id="dpad-container" class="hidden">
+          <button class="dpad-btn up" data-dir="up">▲</button>
+          <button class="dpad-btn left" data-dir="left">◀</button>
+          <button class="dpad-btn center" data-dir="sprint">⚡</button>
+          <button class="dpad-btn right" data-dir="right">▶</button>
+          <button class="dpad-btn down" data-dir="down">▼</button>
+        </div>
+      </div>
+
+      <!-- Right Action Buttons -->
+      <div id="action-zone">
+        <div class="action-row-top">
+          <button id="btn-break" class="touch-action-btn break-btn" aria-label="Break or Attack">
+            <span class="btn-glyph">⛏</span>
+            <span class="btn-lbl">MINE</span>
+          </button>
+          <button id="btn-place" class="touch-action-btn place-btn" aria-label="Place or Use">
+            <span class="btn-glyph">🧱</span>
+            <span class="btn-lbl">USE</span>
+          </button>
+        </div>
+        <div class="action-row-bottom">
+          <button id="btn-sprint" class="touch-action-btn small-btn sprint-btn" aria-label="Toggle Sprint">
+            <span class="btn-glyph">⚡</span>
+            <span class="btn-lbl">SPRINT</span>
+          </button>
+          <button id="btn-sneak" class="touch-action-btn small-btn" aria-label="Sneak or Fly Down">
+            <span class="btn-glyph">⬇</span>
+            <span class="btn-lbl">SNEAK</span>
+          </button>
+          <button id="btn-jump" class="touch-action-btn jump-btn" aria-label="Jump or Fly Up">
+            <span class="btn-glyph">⬆</span>
+            <span class="btn-lbl">JUMP</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Status Bars + Hotbar -->
+    <div id="hud-bottom">
+      <div id="held-item-name" class="held-item-name"></div>
+
+      <div id="survival-bars">
+        <div class="bar-row">
+          <div id="armor-bar" class="stat-bar"></div>
+          <div id="air-bar" class="stat-bar hidden"></div>
+        </div>
+        <div class="bar-row">
+          <div id="health-bar" class="stat-bar"></div>
+          <div id="hunger-bar" class="stat-bar"></div>
+        </div>
+        <div id="xp-bar-wrap">
+          <div id="xp-bar-fill"></div>
+          <span id="xp-level">0</span>
+        </div>
+      </div>
+
+      <div id="hotbar-row">
+        <div id="hotbar-slots"></div>
+        <button id="btn-inventory" class="hotbar-slot inv-btn" title="Inventory (E)">•••</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- INVENTORY / CRAFTING MODAL -->
+  <div id="inventory-modal" class="modal-backdrop hidden">
+    <div class="mc-window inv-window">
+      <div class="mc-window-header">
+        <span id="inv-modal-title">Inventory &amp; Crafting</span>
+        <div class="inv-tabs">
+          <button class="tab-btn active" data-tab="craft">Craft</button>
+          <button class="tab-btn" data-tab="recipes">Recipes</button>
+          <button class="tab-btn" data-tab="creative" id="tab-btn-creative">Creative</button>
+        </div>
+        <button class="close-modal-btn" data-close="inventory-modal">✕</button>
+      </div>
+
+      <div class="inv-body">
+        <!-- Top section changes by tab -->
+        <div id="inv-tab-craft" class="inv-tab-panel">
+          <div class="craft-top-layout">
+            <div class="armor-section">
+              <div class="section-label">Armor</div>
+              <div id="armor-slots" class="armor-grid"></div>
+            </div>
+            <div class="crafting-section">
+              <div class="section-label" id="craft-grid-label">Crafting (2×2)</div>
+              <div class="craft-area">
+                <div id="craft-grid" class="craft-grid grid-2x2"></div>
+                <div class="craft-arrow">➔</div>
+                <div id="craft-output" class="inv-slot output-slot"></div>
+              </div>
+              <div class="craft-hint">Tap slot to pick/place • Double-tap to split • Or use Recipes tab</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="inv-tab-recipes" class="inv-tab-panel hidden">
+          <div class="recipe-header">
+            <span>Tap any available recipe to craft instantly!</span>
+            <span id="recipe-station-badge" class="station-badge">2×2 Hand Crafting</span>
+          </div>
+          <div id="recipe-list" class="recipe-list"></div>
+        </div>
+
+        <div id="inv-tab-creative" class="inv-tab-panel hidden">
+          <div class="creative-header">
+            <input type="text" id="creative-search" placeholder="Search blocks &amp; items..." />
+          </div>
+          <div id="creative-catalog" class="creative-catalog"></div>
+        </div>
+
+        <!-- Main Inventory + Hotbar (always visible below) -->
+        <div class="player-inv-section">
+          <div class="section-label">Inventory <span id="selected-cursor-info" class="cursor-info"></span></div>
+          <div id="main-inv-grid" class="inv-grid"></div>
+          <div class="section-label small">Hotbar</div>
+          <div id="modal-hotbar-grid" class="inv-grid hotbar-9"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FURNACE MODAL -->
+  <div id="furnace-modal" class="modal-backdrop hidden">
+    <div class="mc-window small-window">
+      <div class="mc-window-header">
+        <span>Furnace</span>
+        <button class="close-modal-btn" data-close="furnace-modal">✕</button>
+      </div>
+      <div class="furnace-body">
+        <div class="furnace-station">
+          <div class="furnace-left">
+            <div class="slot-labeled">
+              <span>Input</span>
+              <div id="furnace-input" class="inv-slot"></div>
+            </div>
+            <div class="furnace-flame-wrap">
+              <div id="furnace-flame" class="furnace-flame">🔥</div>
+              <div class="bar-mini"><div id="furnace-fuel-bar"></div></div>
+            </div>
+            <div class="slot-labeled">
+              <span>Fuel</span>
+              <div id="furnace-fuel" class="inv-slot"></div>
+            </div>
+          </div>
+          <div class="furnace-mid">
+            <div class="craft-arrow">➔</div>
+            <div class="bar-mini wide"><div id="furnace-cook-bar"></div></div>
+          </div>
+          <div class="slot-labeled">
+            <span>Output</span>
+            <div id="furnace-output" class="inv-slot output-slot"></div>
+          </div>
+        </div>
+        <div class="section-label">Your Inventory (Tap item to move)</div>
+        <div id="furnace-player-inv" class="inv-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHEST MODAL -->
+  <div id="chest-modal" class="modal-backdrop hidden">
+    <div class="mc-window">
+      <div class="mc-window-header">
+        <span>Chest</span>
+        <button class="close-modal-btn" data-close="chest-modal">✕</button>
+      </div>
+      <div class="chest-body">
+        <div class="section-label">Chest Storage (Tap to transfer)</div>
+        <div id="chest-grid" class="inv-grid"></div>
+        <div class="section-label">Your Inventory</div>
+        <div id="chest-player-inv" class="inv-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAUSE / SETTINGS MODAL -->
+  <div id="pause-modal" class="modal-backdrop hidden">
+    <div class="mc-window small-window">
+      <div class="mc-window-header">
+        <span>Game Menu &amp; Settings</span>
+        <button class="close-modal-btn" data-close="pause-modal">✕</button>
+      </div>
+      <div class="pause-body">
+        <div class="pause-actions">
+          <button id="btn-resume" class="mc-btn primary">Resume Game</button>
+          <button id="btn-save-now" class="mc-btn">Save World</button>
+          <button id="btn-toggle-mode" class="mc-btn">Switch Mode (Survival / Creative)</button>
+          <button id="btn-respawn-spawn" class="mc-btn">Teleport to Spawn</button>
+        </div>
+
+        <div class="settings-list">
+          <div class="setting-row">
+            <label>Render Distance: <strong id="val-render-dist">6</strong> chunks</label>
+            <input type="range" id="set-render-dist" min="2" max="16" step="1" value="6" />
+          </div>
+          <div class="setting-row">
+            <label>Touch Sensitivity: <strong id="val-sensitivity">1.0</strong></label>
+            <input type="range" id="set-sensitivity" min="0.3" max="2.5" step="0.1" value="1.0" />
+          </div>
+          <div class="setting-row">
+            <label>FOV: <strong id="val-fov">72</strong>°</label>
+            <input type="range" id="set-fov" min="55" max="100" step="1" value="72" />
+          </div>
+          <div class="setting-row inline">
+            <label>Shaders &amp; Graphics</label>
+            <select id="set-shaders">
+              <option value="off">Off (Fastest)</option>
+              <option value="enhanced">Enhanced (Waves + Glow)</option>
+              <option value="ultra">Ultra (Shadows + Waves)</option>
+            </select>
+          </div>
+          <div class="setting-row inline">
+            <label>Minecraft Classic UI Vibe</label>
+            <input type="checkbox" id="set-mc-ui" checked />
+          </div>
+          <div class="setting-row inline">
+            <label>Large iPad UI Scale</label>
+            <input type="checkbox" id="set-large-ui" checked />
+          </div>
+          <div class="setting-row inline">
+            <label>Biome Particles &amp; Effects</label>
+            <input type="checkbox" id="set-biome-fx" checked />
+          </div>
+          <div class="setting-row inline">
+            <label>Movement Controls</label>
+            <select id="set-control-style">
+              <option value="joystick">Virtual Joystick</option>
+              <option value="dpad">Classic D-Pad</option>
+            </select>
+          </div>
+          <div class="setting-row inline">
+            <label>Show Touch Controls</label>
+            <input type="checkbox" id="set-show-touch" checked />
+          </div>
+          <div class="setting-row inline">
+            <label>Sound Effects</label>
+            <input type="checkbox" id="set-sound" checked />
+          </div>
+        </div>
+
+        <button id="btn-save-quit" class="mc-btn danger">Save &amp; Quit to Title</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHAT / COMMANDS MODAL -->
+  <div id="chat-modal" class="modal-backdrop hidden">
+    <div class="mc-window chat-window">
+      <div class="mc-window-header">
+        <span>Chat &amp; Commands</span>
+        <button class="close-modal-btn" data-close="chat-modal">✕</button>
+      </div>
+      <div class="chat-body">
+        <div class="quick-cmds">
+          <button class="cmd-chip" data-cmd="/time set day">☀ Day</button>
+          <button class="cmd-chip" data-cmd="/time set night">🌙 Night</button>
+          <button class="cmd-chip" data-cmd="/gamemode creative">✨ Creative</button>
+          <button class="cmd-chip" data-cmd="/gamemode survival">⚔ Survival</button>
+          <button class="cmd-chip" data-cmd="/weather rain">🌧 Rain</button>
+          <button class="cmd-chip" data-cmd="/weather clear">☀ Clear</button>
+          <button class="cmd-chip" data-cmd="/heal">❤ Heal</button>
+          <button class="cmd-chip" data-cmd="/give diamond_pickaxe 1">⛏ Diamond Pick</button>
+          <button class="cmd-chip" data-cmd="/give tnt 16">🧨 TNT x16</button>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Type message or /command (e.g. /give torch 32)..." />
+          <button id="btn-send-chat" class="mc-btn primary">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODS & ADD-ONS MODAL -->
+  <div id="mods-modal" class="modal-backdrop hidden">
+    <div class="mc-window">
+      <div class="mc-window-header">
+        <span>🧩 Mods &amp; Add-Ons</span>
+        <button class="close-modal-btn" data-close="mods-modal">✕</button>
+      </div>
+      <div class="inv-body">
+        <div class="mods-intro">Enable or disable mods live while playing:</div>
+        <div id="ingame-mods-list" class="mods-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VILLAGER TRADING MODAL -->
+  <div id="trade-modal" class="modal-backdrop hidden">
+    <div class="mc-window small-window">
+      <div class="mc-window-header">
+        <span id="trade-modal-title">Villager Trade</span>
+        <button class="close-modal-btn" data-close="trade-modal">✕</button>
+      </div>
+      <div class="inv-body">
+        <div class="mods-intro">Tap any available trade to exchange items with this Villager:</div>
+        <div id="trade-list" class="trade-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DEATH SCREEN -->
+  <div id="death-screen" class="overlay-screen death-overlay hidden">
+    <div class="death-box">
+      <h1>You Died!</h1>
+      <p id="death-reason">You were defeated.</p>
+      <div class="death-btns">
+        <button id="btn-death-respawn" class="mc-btn primary large">Respawn</button>
+        <button id="btn-death-title" class="mc-btn">Title Screen</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
