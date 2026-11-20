@@ -8,6 +8,11 @@ export const SMELTING_RECIPES = {
   cobblestone: 'stone',
   raw_porkchop: 'cooked_porkchop',
   raw_beef: 'steak',
+  raw_chicken: 'cooked_chicken',
+  raw_mutton: 'cooked_mutton',
+  raw_venison: 'cooked_venison',
+  raw_rabbit: 'cooked_rabbit',
+  raw_salmon: 'cooked_salmon',
   oak_log: 'coal',
   birch_log: 'coal',
   spruce_log: 'coal'

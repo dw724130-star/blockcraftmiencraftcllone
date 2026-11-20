@@ -326,39 +326,66 @@ export class UIManager {
     document.getElementById('hud-mode-badge').textContent = p.mode.toUpperCase() + (p.flying ? ' ✈' : '');
     if (!isSurvival) return;
 
-    // Hearts (10 icons for 20 HP)
-    const hpEl = document.getElementById('health-bar');
-    let hpHtml = '';
+    const icons = this.textures.hudIcons || {};
+    const makePxRow = (el, keys, lowAlert = false) => {
+      el.innerHTML = '';
+      el.classList.toggle('low-alert', lowAlert);
+      for (const k of keys) {
+        const img = document.createElement('img');
+        img.className = 'hud-px-icon';
+        img.src = icons[k] || '';
+        img.alt = '';
+        el.appendChild(img);
+      }
+    };
+
+    // Pixel-Art Hearts (10 hearts for 20 HP)
+    const hpKeys = [];
     for (let i = 0; i < 10; i++) {
       const v = p.hp - i * 2;
-      hpHtml += v >= 2 ? '❤️' : v >= 1 ? '💔' : '🖤';
+      hpKeys.push(v >= 2 ? 'heart_full' : v >= 1 ? 'heart_half' : 'heart_empty');
     }
-    hpEl.textContent = hpHtml;
+    makePxRow(document.getElementById('health-bar'), hpKeys, p.hp <= 4);
 
-    // Hunger (10 icons for 20 hunger)
-    const hungEl = document.getElementById('hunger-bar');
-    let hungHtml = '';
-    for (let i = 0; i < 10; i++) {
+    // Pixel-Art Food / Hunger Drumsticks (right-to-left like Minecraft!)
+    const foodKeys = [];
+    for (let i = 9; i >= 0; i--) {
       const v = p.hunger - i * 2;
-      hungHtml += v >= 1 ? '🍗' : '🦴';
+      foodKeys.push(v >= 2 ? 'food_full' : v >= 1 ? 'food_half' : 'food_empty');
     }
-    hungEl.textContent = hungHtml;
+    makePxRow(document.getElementById('hunger-bar'), foodKeys, p.hunger <= 4);
 
-    // Armor
+    // Pixel-Art Armor Shields
     const def = this.game.inventory.getArmorDefense();
     const armEl = document.getElementById('armor-bar');
-    armEl.textContent = def > 0 ? '🛡️'.repeat(Math.min(10, Math.ceil(def / 2))) : '';
+    if (def > 0) {
+      const armKeys = [];
+      for (let i = 0; i < 10; i++) {
+        const v = def - i * 2;
+        if (v >= 2) armKeys.push('armor_full');
+        else if (v >= 1) armKeys.push('armor_half');
+      }
+      makePxRow(armEl, armKeys, false);
+    } else {
+      armEl.innerHTML = '';
+    }
 
-    // Air bubbles when underwater
+    // Pixel-Art Water / Air Bubbles when underwater
     const airEl = document.getElementById('air-bar');
     if (p.headInWater || p.air < p.maxAir) {
       airEl.classList.remove('hidden');
-      airEl.textContent = '🫧'.repeat(Math.ceil(p.air));
+      const fullBubbles = Math.floor(p.air);
+      const hasPop = (p.air - fullBubbles) > 0.05;
+      const bubKeys = [];
+      for (let i = 0; i < fullBubbles; i++) bubKeys.push('bubble_full');
+      if (hasPop && bubKeys.length < 10) bubKeys.push('bubble_pop');
+      makePxRow(airEl, bubKeys, p.air <= 2);
     } else {
       airEl.classList.add('hidden');
+      airEl.innerHTML = '';
     }
 
-    // XP
+    // Pixel-Art Segmented XP Level Bar
     const needed = 10 + p.level * 5;
     document.getElementById('xp-bar-fill').style.width = `${Math.min(100, (p.xp / needed) * 100)}%`;
     document.getElementById('xp-level').textContent = p.level;

@@ -6,11 +6,12 @@ const PLAYER_HEIGHT = 1.75;
 const EYE_HEIGHT = 1.56;
 
 export class Player {
-  constructor(camera, world, inventory, sound) {
+  constructor(camera, world, inventory, sound, textures = null) {
     this.camera = camera;
     this.world = world;
     this.inventory = inventory;
     this.sound = sound;
+    this.textures = textures;
 
     this.pos = new THREE.Vector3(0.5, 48, 0.5);
     this.spawnPos = new THREE.Vector3(0.5, 48, 0.5);
@@ -51,7 +52,7 @@ export class Player {
     this.miningProgress = 0;
     this.swingAnim = 0;
 
-    // 3D Target Block Outline (crisp white-tinted Minecraft highlight)
+    // 3D Target Block Outline (crisp Minecraft highlight)
     const boxGeo = new THREE.BoxGeometry(1.008, 1.008, 1.008);
     const edges = new THREE.EdgesGeometry(boxGeo);
     this.highlightMesh = new THREE.LineSegments(
@@ -60,7 +61,21 @@ export class Player {
     );
     this.highlightMesh.visible = false;
 
-    // First-person sculpted Minecraft arm + sleeve + held block/tool/torch
+    // 3D Block-Breaking Pixel-Art Crack Overlay (stages 0..9!)
+    this.crackMat = new THREE.MeshBasicMaterial({
+      map: textures && textures.crackTextures ? textures.crackTextures[0] : null,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+    this.crackMesh = new THREE.Mesh(new THREE.BoxGeometry(1.005, 1.005, 1.005), this.crackMat);
+    this.crackMesh.visible = false;
+    this.crackMesh.renderOrder = 6;
+    this._lastCrackStage = -1;
+
+    // First-person sculpted Minecraft arm + sleeve + pixel-art held block/item/tool
     this.handGroup = new THREE.Group();
     this.handPivot = new THREE.Group();
     this.handGroup.add(this.handPivot);
@@ -77,30 +92,28 @@ export class Player {
     this.sleeveMesh.position.set(0, 0, 0.2);
     this.handPivot.add(this.armMesh, this.sleeveMesh);
 
-    this.heldBlockMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.24, 0.24, 0.24),
-      new THREE.MeshLambertMaterial({ color: 0xc9b393 })
-    );
+    this.heldBlockMat = textures
+      ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
+      : new THREE.MeshLambertMaterial({ color: 0xc9b393 });
+    this.heldBlockMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.24), this.heldBlockMat);
     this.heldBlockMesh.position.set(-0.04, 0.08, -0.14);
     this.heldBlockMesh.rotation.set(0.2, 0.65, 0.05);
     this.heldBlockMesh.visible = false;
+    this._lastHeldBlockId = null;
     this.handPivot.add(this.heldBlockMesh);
 
-    this.heldToolGroup = new THREE.Group();
-    this.toolStick = new THREE.Mesh(
-      new THREE.BoxGeometry(0.045, 0.045, 0.42),
-      new THREE.MeshLambertMaterial({ color: 0x7c5329 })
-    );
-    this.toolHead = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.055, 0.12),
-      new THREE.MeshLambertMaterial({ color: 0x4de3e8 })
-    );
-    this.toolHead.position.set(0, 0.02, -0.18);
-    this.heldToolGroup.add(this.toolStick, this.toolHead);
-    this.heldToolGroup.position.set(-0.02, 0.09, -0.14);
-    this.heldToolGroup.rotation.set(-0.45, 0.15, -0.18);
-    this.heldToolGroup.visible = false;
-    this.handPivot.add(this.heldToolGroup);
+    // Crisp pixel-art held item/food/tool sprite!
+    this.heldSpriteMat = new THREE.MeshBasicMaterial({
+      transparent: true,
+      alphaTest: 0.45,
+      side: THREE.DoubleSide
+    });
+    this.heldSpriteMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), this.heldSpriteMat);
+    this.heldSpriteMesh.position.set(-0.04, 0.12, -0.14);
+    this.heldSpriteMesh.rotation.set(0.08, -0.35, 0.12);
+    this.heldSpriteMesh.visible = false;
+    this._lastHeldSpriteId = null;
+    this.handPivot.add(this.heldSpriteMesh);
 
     // Dynamic Torch / Glowstone PointLight (BSL Dynamic Lights!)
     this.heldLight = new THREE.PointLight(0xffb454, 0, 14, 1.6);
@@ -222,14 +235,32 @@ export class Player {
 
   attachToScene(scene) {
     scene.add(this.highlightMesh);
+    scene.add(this.crackMesh);
     scene.add(this.playerModel.root);
     scene.add(this.camera);
   }
 
   detachFromScene(scene) {
     scene.remove(this.highlightMesh);
+    scene.remove(this.crackMesh);
     scene.remove(this.playerModel.root);
     this.camera.remove(this.handGroup);
+  }
+
+  updateCrackOverlay(target, progress) {
+    if (!target || progress <= 0.005 || !this.textures || !this.textures.crackTextures.length) {
+      this.crackMesh.visible = false;
+      this._lastCrackStage = -1;
+      return;
+    }
+    const stage = Math.max(0, Math.min(9, Math.floor(progress * 10)));
+    this.crackMesh.visible = true;
+    this.crackMesh.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+    if (stage !== this._lastCrackStage) {
+      this._lastCrackStage = stage;
+      this.crackMat.map = this.textures.crackTextures[stage];
+      this.crackMat.needsUpdate = true;
+    }
   }
 
   getLookDirection(out = new THREE.Vector3()) {
@@ -517,7 +548,7 @@ export class Player {
       this.playerModel.root.visible = false;
     }
 
-    // Held item shape, color & dynamic torch/glowstone light!
+    // Held item shape, pixel-art texture & dynamic torch/glowstone light!
     const held = this.inventory.getHeldDef();
     const heldCol = held
       ? (held.id.includes('diamond') ? 0x4de3e8 :
@@ -531,20 +562,23 @@ export class Player {
          held.id.includes('torch') || held.id.includes('glowstone') ? 0xffc65c :
          held.id.includes('sand') ? 0xdfd09c :
          held.id.includes('snow') ? 0xf0f6fc :
-         held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') ? 0xe05555 : 0xc9b393)
+         held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') || held.id.includes('venison') || held.id.includes('salmon') ? 0xe05555 : 0xc9b393)
       : 0xdba882;
 
-    const isTool = !!(held && (held.toolType || held.id === 'torch' || held.id === 'stick'));
-    const isBlockHeld = !!(held && held.isBlock && held.id !== 'torch');
+    const isBlockHeld = !!(held && held.isBlock && !held.cross);
+    const isSpriteHeld = !!(held && !isBlockHeld);
     this.heldBlockMesh.visible = isBlockHeld;
-    this.heldToolGroup.visible = isTool;
-    this.armMesh.visible = !isBlockHeld;
-    this.sleeveMesh.visible = !isBlockHeld;
-    if (isBlockHeld) {
-      this.heldBlockMesh.material.color.setHex(heldCol);
-    } else if (isTool) {
-      this.toolHead.material.color.setHex(heldCol);
-      this.toolHead.scale.set(held.id === 'torch' ? 0.35 : (held.toolType === 'sword' ? 0.45 : 1.0), 1.0, held.toolType === 'sword' ? 2.4 : 1.0);
+    this.heldSpriteMesh.visible = isSpriteHeld;
+    this.armMesh.visible = !isBlockHeld && !isSpriteHeld;
+    this.sleeveMesh.visible = !isBlockHeld && !isSpriteHeld;
+
+    if (isBlockHeld && this.textures && this._lastHeldBlockId !== held.id) {
+      this._lastHeldBlockId = held.id;
+      this.heldBlockMesh.geometry = this.textures.createBlockDropGeometry(held, 0.26);
+    } else if (isSpriteHeld && this.textures && this._lastHeldSpriteId !== held.id) {
+      this._lastHeldSpriteId = held.id;
+      this.heldSpriteMat.map = this.textures.getItemTexture(held.id);
+      this.heldSpriteMat.needsUpdate = true;
     }
 
     // Dynamic Torch / Glowstone Light flicker

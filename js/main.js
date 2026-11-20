@@ -204,7 +204,7 @@ class BlockCraftGame {
       this.sky.dayCount = saved.dayCount || 1;
     }
 
-    this.effects = new EffectsManager(this.scene);
+    this.effects = new EffectsManager(this.scene, this.textures);
     this.effects.setEnabled(this.settings.biomeEffects !== false);
 
     this.inventory = new Inventory();
@@ -214,7 +214,7 @@ class BlockCraftGame {
       this.inventory.giveStarterKit(meta.mode);
     }
 
-    this.player = new Player(this.camera, this.world, this.inventory, this.sound);
+    this.player = new Player(this.camera, this.world, this.inventory, this.sound, this.textures);
     this.player.mode = meta.mode;
     this.player.attachToScene(this.scene);
 
@@ -262,7 +262,7 @@ class BlockCraftGame {
       this.ui.updateHotbar();
     };
 
-    this.entities = new EntityManager(this.scene, this.world, this.sound);
+    this.entities = new EntityManager(this.scene, this.world, this.sound, this.textures);
     this.entities.populateInitialWildlife(this.player.pos);
 
     this.running = true;
@@ -599,7 +599,7 @@ class BlockCraftGame {
     for (const [bx, by, bz] of toBreak) {
       this.world.setBlock(bx, by, bz, BLOCK.AIR, true);
       if (this.effects && toBreak.length <= 6) {
-        this.effects.spawnBlockBreak(bx, by, bz, this.entities.getDropColor(def.id));
+        this.effects.spawnBlockBreak(bx, by, bz, def);
       }
       if (this.player.mode === 'survival' && this.player.canHarvest(def) && def.drop) {
         const chance = def.dropChance !== undefined ? def.dropChance : 1.0;
@@ -627,14 +627,16 @@ class BlockCraftGame {
     if (!breaking || !this.currentTarget || !this.controls.enabled) {
       this.player.miningTarget = null;
       this.player.miningProgress = 0;
+      this.player.updateCrackOverlay(null, 0);
       this.ui.updateMiningRing(0);
       return;
     }
 
-    const { x, y, z, blockId } = this.currentTarget;
+    const { x, y, z, nx, ny, nz, blockId } = this.currentTarget;
     const key = `${x},${y},${z}`;
     const def = getBlockDef(blockId);
     if (!def || def.hardness < 0) {
+      this.player.updateCrackOverlay(null, 0);
       this.ui.updateMiningRing(0);
       return;
     }
@@ -642,17 +644,28 @@ class BlockCraftGame {
     if (this.player.miningTarget !== key) {
       this.player.miningTarget = key;
       this.player.miningProgress = 0;
+      this._chipTimer = 0;
     }
 
     if (this.player.swingAnim <= 0.1) this.player.swingAnim = 1.0;
 
     const speed = this.player.getMiningSpeed(def);
     this.player.miningProgress += speed * dt;
-    this.ui.updateMiningRing(Math.min(1, this.player.miningProgress));
+    const prog = Math.min(1, this.player.miningProgress);
+    this.player.updateCrackOverlay(this.currentTarget, prog);
+    this.ui.updateMiningRing(prog);
+
+    // Spray crisp pixel-art mining chips from the block face while cracking!
+    this._chipTimer = (this._chipTimer || 0) + dt;
+    if (this._chipTimer >= 0.13) {
+      this._chipTimer = 0;
+      if (this.effects) this.effects.spawnMiningChip(x, y, z, nx, ny, nz, def);
+    }
 
     if (this.player.miningProgress >= 1.0) {
       this.player.miningProgress = 0;
       this.player.miningTarget = null;
+      this.player.updateCrackOverlay(null, 0);
       this.ui.updateMiningRing(0);
       this.breakBlockWithMods(x, y, z, blockId);
     }

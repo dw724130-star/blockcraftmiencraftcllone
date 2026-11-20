@@ -673,38 +673,98 @@ input, select, textarea {
 
 .stat-bar {
   display: flex;
+  align-items: center;
   gap: 2px;
-  font-size: 13px;
-  line-height: 1;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85));
+  min-height: 18px;
+  filter: drop-shadow(0 2px 0 rgba(0,0,0,0.75));
+}
+
+.hud-px-icon {
+  width: 18px;
+  height: 18px;
+  image-rendering: pixelated;
+  display: block;
+  pointer-events: none;
+}
+
+body.large-ui .hud-px-icon {
+  width: 22px;
+  height: 22px;
+}
+
+@media (max-width: 600px) {
+  .hud-px-icon,
+  body.large-ui .hud-px-icon {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.stat-bar.low-alert .hud-px-icon {
+  animation: hudJitter 0.28s steps(2, end) infinite;
+}
+
+@keyframes hudJitter {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-2px); }
+  100% { transform: translateY(1px); }
 }
 
 #xp-bar-wrap {
   position: relative;
   width: 100%;
-  height: 7px;
-  background: rgba(10, 14, 18, 0.78);
-  border: 1px solid rgba(255,255,255,0.22);
-  border-radius: 4px;
+  height: 11px;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.55) 0px,
+      rgba(0, 0, 0, 0.55) 2px,
+      transparent 2px,
+      transparent 10%
+    ),
+    #1c2419;
+  border: 2px solid #0b0e0a;
+  border-radius: 0;
+  box-shadow: inset 0 2px 0 #0d120c, inset 0 -2px 0 #313d2c;
   overflow: visible;
 }
 
 #xp-bar-fill {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, #52d645, #a9f542);
-  border-radius: 3px;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.25) 0px,
+      rgba(0, 0, 0, 0.25) 2px,
+      transparent 2px,
+      transparent 24px
+    ),
+    linear-gradient(180deg, #b8ff4f 0%, #6ce031 45%, #3ea31d 100%);
+  border-radius: 0;
+  box-shadow: inset 0 1px 0 #dcff9e;
+  transition: width 0.15s ease-out;
 }
 
 #xp-level {
   position: absolute;
   left: 50%;
-  top: -11px;
+  top: -15px;
   transform: translateX(-50%);
-  font-size: 12px;
+  font-family: "Courier New", "Lucida Console", ui-monospace, monospace;
+  font-size: 16px;
   font-weight: 900;
-  color: #9cff57;
-  text-shadow: 0 1px 3px #000, 0 0 4px #000;
+  color: #80ff20;
+  letter-spacing: 1px;
+  text-shadow:
+    2px 0 0 #000,
+    -2px 0 0 #000,
+    0 2px 0 #000,
+    0 -2px 0 #000,
+    2px 2px 0 #000,
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000;
 }
 
 #hotbar-row {
@@ -1604,7 +1664,7 @@ body.mc-theme #joystick-knob {
 body.mc-theme #xp-bar-wrap {
   border-radius: 0;
   border: 2px solid #000;
-  height: 9px;
+  height: 12px;
 }
 
 body.mc-theme .world-card {

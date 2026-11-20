@@ -21,8 +21,9 @@ function createParticleSprite() {
 }
 
 export class EffectsManager {
-  constructor(scene) {
+  constructor(scene, textures = null) {
     this.scene = scene;
+    this.textures = textures;
     this.enabled = true;
     this.currentBiome = 'Plains';
 
@@ -52,9 +53,12 @@ export class EffectsManager {
     this.ambientPoints = new THREE.Points(geo, this.ambientMat);
     this.scene.add(this.ambientPoints);
 
-    // 2. Block Break Burst Particles
+    // 2. Pixel-Art Block Break & Mining Chip Particles
     this.bursts = [];
     this.cubeGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+    this.atlasMat = textures
+      ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
+      : null;
     this.burstGroup = new THREE.Group();
     this.scene.add(this.burstGroup);
   }
@@ -64,24 +68,74 @@ export class EffectsManager {
     this.ambientPoints.visible = val;
   }
 
-  spawnBlockBreak(x, y, z, colorHex = 0x999999) {
+  makeCrumbGeometry(blockDef) {
+    const faceName = blockDef?.faces?.side || blockDef?.faces?.all || blockDef?.faces?.top;
+    if (!this.textures || !faceName) return this.cubeGeo;
+    const tile = this.textures.getUV(faceName);
+    const geo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
+    const uvAttr = geo.attributes.uv;
+    // Pick a random 4x4 pixel patch inside the 16x16 block tile!
+    const uSpan = (tile.u1 - tile.u0) * 0.28;
+    const vSpan = (tile.v1 - tile.v0) * 0.28;
+    const uOff = tile.u0 + Math.random() * ((tile.u1 - tile.u0) - uSpan);
+    const vOff = tile.v0 + Math.random() * ((tile.v1 - tile.v0) - vSpan);
+    for (let i = 0; i < uvAttr.count; i++) {
+      const u = uvAttr.getX(i);
+      const v = uvAttr.getY(i);
+      uvAttr.setXY(i, uOff + u * uSpan, vOff + v * vSpan);
+    }
+    uvAttr.needsUpdate = true;
+    return geo;
+  }
+
+  spawnBlockBreak(x, y, z, blockDefOrColor = 0x999999) {
     if (!this.enabled) return;
-    const mat = new THREE.MeshLambertMaterial({ color: colorHex });
-    for (let i = 0; i < 10; i++) {
-      const m = new THREE.Mesh(this.cubeGeo, mat);
+    const isDef = blockDefOrColor && typeof blockDefOrColor === 'object';
+    const useAtlas = isDef && this.atlasMat;
+    const fallbackMat = useAtlas ? null : new THREE.MeshLambertMaterial({
+      color: typeof blockDefOrColor === 'number' ? blockDefOrColor : 0x999999
+    });
+
+    for (let i = 0; i < 12; i++) {
+      const geo = useAtlas ? this.makeCrumbGeometry(blockDefOrColor) : this.cubeGeo;
+      const m = new THREE.Mesh(geo, useAtlas ? this.atlasMat : fallbackMat);
       m.position.set(
-        x + 0.2 + Math.random() * 0.6,
-        y + 0.2 + Math.random() * 0.6,
-        z + 0.2 + Math.random() * 0.6
+        x + 0.15 + Math.random() * 0.7,
+        y + 0.15 + Math.random() * 0.7,
+        z + 0.15 + Math.random() * 0.7
       );
       this.burstGroup.add(m);
       this.bursts.push({
         mesh: m,
-        mat,
-        vx: (Math.random() - 0.5) * 4.5,
-        vy: 1.8 + Math.random() * 3.5,
-        vz: (Math.random() - 0.5) * 4.5,
+        ownGeo: useAtlas,
+        vx: (Math.random() - 0.5) * 4.8,
+        vy: 1.9 + Math.random() * 3.6,
+        vz: (Math.random() - 0.5) * 4.8,
         life: 0.45 + Math.random() * 0.35
+      });
+    }
+  }
+
+  // Live pixel-art chips spraying from the block face while actively mining!
+  spawnMiningChip(x, y, z, nx, ny, nz, blockDef) {
+    if (!this.enabled || !this.atlasMat || !blockDef) return;
+    for (let i = 0; i < 2; i++) {
+      const geo = this.makeCrumbGeometry(blockDef);
+      const m = new THREE.Mesh(geo, this.atlasMat);
+      m.position.set(
+        x + 0.5 + nx * 0.54 + (nx === 0 ? (Math.random() - 0.5) * 0.6 : 0),
+        y + 0.5 + ny * 0.54 + (ny === 0 ? (Math.random() - 0.5) * 0.6 : 0),
+        z + 0.5 + nz * 0.54 + (nz === 0 ? (Math.random() - 0.5) * 0.6 : 0)
+      );
+      m.scale.setScalar(0.75);
+      this.burstGroup.add(m);
+      this.bursts.push({
+        mesh: m,
+        ownGeo: true,
+        vx: nx * (1.2 + Math.random() * 1.4) + (Math.random() - 0.5) * 2.2,
+        vy: 1.4 + Math.random() * 2.0 + ny * 0.8,
+        vz: nz * (1.2 + Math.random() * 1.4) + (Math.random() - 0.5) * 2.2,
+        life: 0.28 + Math.random() * 0.22
       });
     }
   }
@@ -93,6 +147,7 @@ export class EffectsManager {
       p.life -= dt;
       if (p.life <= 0) {
         this.burstGroup.remove(p.mesh);
+        if (p.ownGeo) p.mesh.geometry.dispose();
         this.bursts.splice(i, 1);
         continue;
       }

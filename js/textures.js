@@ -37,6 +37,12 @@ export class TextureManager {
   constructor() {
     this.tileMap = {}; // name -> { col, row, u0, v0, u1, v1 }
     this.itemIcons = {}; // itemKey -> dataURL
+    this.itemTextures = {}; // itemKey -> THREE.CanvasTexture (for 3D pixel-art drops!)
+    this.blockDropGeoCache = {}; // "blockId:size" -> BufferGeometry
+    this.mobCoatCache = {}; // key -> THREE.CanvasTexture
+    this.hudIcons = {}; // name -> dataURL
+    this.crackTextures = []; // 10 stages (0..9) of pixel-art block breaking cracks
+
     this.canvas = document.createElement('canvas');
     this.canvas.width = ATLAS_COLS * TILE_SIZE;
     this.canvas.height = ATLAS_ROWS * TILE_SIZE;
@@ -53,6 +59,8 @@ export class TextureManager {
     this.atlasTexture.generateMipmaps = false;
 
     this.buildItemIcons();
+    this.buildCrackTextures();
+    this.buildHudIcons();
   }
 
   addTile(name, drawFn) {
@@ -486,34 +494,137 @@ export class TextureManager {
         p(5, 2, '#22d466', 6, 12); p(4, 4, '#17a84d', 8, 8); p(6, 4, '#8cffb3', 3, 4);
         break;
       case 'apple':
-        p(7, 2, '#6b4226', 2, 3); p(4, 5, '#e53935', 8, 8); p(5, 6, '#ff7961', 2, 2);
+        p(7, 1, '#5e391f', 2, 3);
+        p(9, 2, '#4ea632', 3, 2);
+        p(4, 4, '#240b0b', 8, 10); p(3, 5, '#240b0b', 10, 8);
+        p(4, 5, '#d92b2b', 8, 8); p(5, 4, '#e53935', 6, 10);
+        p(5, 6, '#ff8a80', 2, 2); p(6, 5, '#ffcdd2', 1, 1);
+        p(9, 10, '#a31b1b', 2, 2);
         break;
       case 'bread':
-        p(2, 6, '#c98e3e', 12, 5); p(4, 5, '#e6b160', 8, 2);
+        p(2, 5, '#3b240c', 12, 7); p(3, 4, '#3b240c', 10, 9);
+        p(3, 6, '#c98a38', 10, 5); p(4, 5, '#e8b563', 8, 3);
+        p(5, 5, '#f5d28e', 2, 2); p(9, 5, '#f5d28e', 2, 2);
+        p(7, 6, '#8f5a1e', 1, 3); p(10, 6, '#8f5a1e', 1, 3);
         break;
       case 'raw_porkchop':
-      case 'raw_beef':
-        p(3, 5, '#e07a7a', 10, 6); p(5, 6, '#f5b5b5', 5, 3);
+        // Distinct pink porkchop with creamy fat trim & dark pixel outline
+        p(3, 4, '#3d1518', 10, 8); p(2, 5, '#3d1518', 12, 6);
+        p(3, 5, '#f7c8c8', 10, 6); p(4, 6, '#e67580', 8, 4);
+        p(5, 7, '#d15664', 5, 2); p(6, 6, '#ffdada', 3, 1);
+        p(10, 6, '#fff0e6', 2, 2);
         break;
       case 'cooked_porkchop':
+        // Golden seared porkchop with grill marks
+        p(3, 4, '#2b160a', 10, 8); p(2, 5, '#2b160a', 12, 6);
+        p(3, 5, '#d49a6a', 10, 6); p(4, 6, '#a86432', 8, 4);
+        p(5, 6, '#7a421c', 1, 4); p(8, 6, '#7a421c', 1, 4); p(11, 6, '#e6be8a', 1, 3);
+        break;
+      case 'raw_beef':
+        // Deep ruby-red steak cut with white marbling
+        p(2, 4, '#2e0a0a', 12, 8); p(4, 3, '#2e0a0a', 8, 10);
+        p(3, 5, '#c92e36', 10, 6); p(5, 4, '#b3222b', 6, 8);
+        p(4, 6, '#f5d5d5', 3, 1); p(8, 8, '#f5d5d5', 3, 1); p(6, 5, '#e85860', 3, 2);
+        break;
       case 'steak':
-        p(3, 5, '#7a4024', 10, 6); p(5, 6, '#a65d38', 5, 3);
+        // Rich browned seared beefsteak with juicy center & char stripes
+        p(2, 4, '#1f0e07', 12, 8); p(4, 3, '#1f0e07', 8, 10);
+        p(3, 5, '#6b341c', 10, 6); p(5, 4, '#7d3e22', 6, 8);
+        p(4, 6, '#9c5634', 4, 2); p(9, 7, '#4a2110', 2, 3); p(6, 8, '#b56d45', 3, 1);
+        break;
+      case 'raw_chicken':
+        // Pale pink drumstick silhouette with white bone handle!
+        p(2, 9, '#2e2520', 4, 4); p(3, 10, '#f7f3eb', 2, 2);
+        p(5, 7, '#2e2520', 3, 3); p(5, 8, '#ebe3d5', 2, 2);
+        p(6, 3, '#3b1d1d', 7, 7); p(7, 4, '#f2b8ad', 5, 5);
+        p(8, 5, '#ffd4cb', 2, 2); p(10, 7, '#d98f82', 2, 2);
+        break;
+      case 'cooked_chicken':
+        // Crispy golden-brown roasted drumstick!
+        p(2, 9, '#2e2520', 4, 4); p(3, 10, '#f7f3eb', 2, 2);
+        p(5, 7, '#2e2520', 3, 3); p(5, 8, '#ebe3d5', 2, 2);
+        p(6, 3, '#2e1608', 7, 7); p(7, 4, '#c77a2e', 5, 5);
+        p(8, 5, '#e8a854', 2, 2); p(10, 7, '#8f4c16', 2, 2);
+        break;
+      case 'raw_mutton':
+        // Lamb chop with visible white rib bone on top-right
+        p(3, 5, '#361115', 9, 8); p(4, 6, '#d94854', 7, 6);
+        p(5, 7, '#f28b94', 4, 3); p(9, 3, '#2e2924', 4, 5);
+        p(10, 4, '#f5f2eb', 2, 4); p(7, 9, '#fce8e8', 3, 1);
+        break;
+      case 'cooked_mutton':
+        // Roasted lamb chop with bone
+        p(3, 5, '#26120a', 9, 8); p(4, 6, '#874624', 7, 6);
+        p(5, 7, '#ad6238', 4, 3); p(9, 3, '#2e2924', 4, 5);
+        p(10, 4, '#f5f2eb', 2, 4); p(6, 9, '#5e2c14', 3, 1);
+        break;
+      case 'raw_venison':
+        // Lean dark-crimson venison loin cut
+        p(2, 5, '#26080c', 12, 7); p(4, 4, '#26080c', 8, 9);
+        p(3, 6, '#9e1c2c', 10, 5); p(5, 5, '#b82538', 6, 7);
+        p(5, 6, '#e05366', 4, 2); p(8, 9, '#f0d5d5', 3, 1);
+        break;
+      case 'cooked_venison':
+        // Rich smoky mahogany roasted venison steak with herb flecks
+        p(2, 5, '#1c0c06', 12, 7); p(4, 4, '#1c0c06', 8, 9);
+        p(3, 6, '#5c2814', 10, 5); p(5, 5, '#73351d', 6, 7);
+        p(5, 6, '#9e5332', 4, 2); p(6, 8, '#5ea844', 1, 1); p(9, 6, '#5ea844', 1, 1);
+        break;
+      case 'raw_rabbit':
+        // Small tender pinkish-tan rabbit haunch
+        p(4, 4, '#361b18', 8, 8); p(3, 7, '#361b18', 6, 5);
+        p(5, 5, '#e8a296', 6, 6); p(4, 8, '#f5c2b8', 4, 3);
+        p(9, 9, '#f7f3eb', 2, 2); p(6, 6, '#ffd6ce', 2, 2);
+        break;
+      case 'cooked_rabbit':
+        // Golden roasted rabbit haunch
+        p(4, 4, '#29150a', 8, 8); p(3, 7, '#29150a', 6, 5);
+        p(5, 5, '#b86b2e', 6, 6); p(4, 8, '#d48a46', 4, 3);
+        p(9, 9, '#f7f3eb', 2, 2); p(6, 6, '#e8aa64', 2, 2);
+        break;
+      case 'raw_salmon':
+        // Whole pixel salmon with teal-silver back, coral belly, tail fin & eye!
+        p(1, 5, '#17292e', 3, 6); p(2, 6, '#486b73', 2, 4); // tail fin
+        p(3, 4, '#17292e', 11, 8);
+        p(4, 5, '#4b7a78', 9, 3); // teal-silver back
+        p(4, 8, '#e36f64', 9, 3); // salmon coral belly
+        p(6, 6, '#75a6a3', 5, 1); // scale sheen
+        p(11, 6, '#ffffff', 1, 1); p(12, 6, '#111111', 1, 1); // eye
+        break;
+      case 'cooked_salmon':
+        // Golden-glazed grilled salmon fillet with flaky orange lines!
+        p(1, 5, '#29140a', 3, 6); p(2, 6, '#7d4728', 2, 4);
+        p(3, 4, '#29140a', 11, 8);
+        p(4, 5, '#b85b30', 9, 3);
+        p(4, 8, '#e88b4f', 9, 3);
+        p(6, 6, '#ffd09c', 1, 4); p(9, 6, '#ffd09c', 1, 4);
+        p(11, 6, '#fff2d6', 1, 1);
         break;
       case 'gunpowder':
-        p(4, 5, '#555', 8, 7); p(6, 6, '#888', 3, 3);
+        p(4, 5, '#2b2b2b', 8, 7); p(5, 6, '#555555', 6, 5); p(6, 6, '#8a8a8a', 3, 2);
         break;
       case 'bone':
-        p(3, 10, '#f0eee9', 3, 3); p(10, 3, '#f0eee9', 3, 3);
-        for (let i = 0; i < 6; i++) p(5 + i, 10 - i, '#f0eee9', 2, 2);
+        p(2, 10, '#363430', 4, 4); p(10, 2, '#363430', 4, 4);
+        p(3, 11, '#f2efe9', 2, 2); p(11, 3, '#f2efe9', 2, 2);
+        for (let i = 0; i < 7; i++) {
+          p(4 + i, 10 - i, '#e6e2d8', 2, 2);
+          p(5 + i, 10 - i, '#ffffff', 1, 1);
+        }
         break;
       case 'leather':
-        p(3, 4, '#9c5a2c', 10, 9); p(5, 6, '#bd7440', 5, 4);
+        p(3, 3, '#331c0b', 10, 10); p(4, 4, '#9c5a2c', 8, 8);
+        p(5, 5, '#bd7440', 5, 5); p(6, 6, '#d48b55', 2, 2);
         break;
       case 'feather':
-        for (let i = 0; i < 9; i++) p(3 + i, 12 - i, '#f2f5f7', 2, 2);
+        for (let i = 0; i < 10; i++) p(3 + i, 12 - i, '#dfe6ed', 2, 2);
+        for (let i = 2; i < 9; i++) p(4 + i, 11 - i, '#ffffff', 2, 2);
+        p(3, 12, '#7d8590', 2, 2);
         break;
       case 'wheat':
-        for (let i = 0; i < 9; i++) p(4 + i * 0.8, 12 - i, '#e6c24c', 2, 2);
+        for (let i = 0; i < 9; i++) {
+          p(4 + i * 0.8, 12 - i, '#d9b13b', 2, 2);
+          p(5 + i * 0.8, 11 - i, '#f5dc78', 1, 1);
+        }
         break;
       default:
         p(4, 4, '#999', 8, 8);
@@ -522,5 +633,441 @@ export class TextureManager {
 
   getIcon(itemKey) {
     return this.itemIcons[itemKey] || '';
+  }
+
+  // Crisp 3D Three.js CanvasTexture for dropped pixel-art items & foods!
+  getItemTexture(itemKey) {
+    if (this.itemTextures[itemKey]) return this.itemTextures[itemKey];
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 32;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const def = ITEMS[itemKey];
+    if (def && def.isBlock && def.cross) {
+      const tile = this.getUV(def.faces.all);
+      ctx.drawImage(this.canvas, tile.ox, tile.oy, TILE_SIZE, TILE_SIZE, 0, 0, 32, 32);
+    } else if (def) {
+      this.drawPixelItem(ctx, itemKey, def);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.generateMipmaps = false;
+    this.itemTextures[itemKey] = tex;
+    return tex;
+  }
+
+  // Real 3D pixel-art mini-block geometry mapped to exact atlas top/side/bottom UVs!
+  createBlockDropGeometry(blockDef, size = 0.28) {
+    const cacheKey = `${blockDef.id}:${size}`;
+    if (this.blockDropGeoCache[cacheKey]) return this.blockDropGeoCache[cacheKey];
+
+    const h = size * 0.5;
+    const topUV = this.getUV(blockDef.faces.top || blockDef.faces.all || blockDef.faces.side);
+    const botUV = this.getUV(blockDef.faces.bottom || blockDef.faces.all || blockDef.faces.side);
+    const sideUV = this.getUV(blockDef.faces.side || blockDef.faces.all || blockDef.faces.top);
+
+    const faces = [
+      { uv: topUV, n: [0, 1, 0], v: [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]] },
+      { uv: botUV, n: [0, -1, 0], v: [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]] },
+      { uv: sideUV, n: [1, 0, 0], v: [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]] },
+      { uv: sideUV, n: [-1, 0, 0], v: [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]] },
+      { uv: sideUV, n: [0, 0, 1], v: [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]] },
+      { uv: sideUV, n: [0, 0, -1], v: [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]] }
+    ];
+
+    const pos = [], norm = [], uv = [], idx = [];
+    let base = 0;
+    for (const f of faces) {
+      const u = f.uv;
+      for (const pt of f.v) {
+        pos.push(pt[0], pt[1], pt[2]);
+        norm.push(f.n[0], f.n[1], f.n[2]);
+      }
+      uv.push(u.u0, u.v0, u.u1, u.v0, u.u1, u.v1, u.u0, u.v1);
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      base += 4;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    this.blockDropGeoCache[cacheKey] = geo;
+    return geo;
+  }
+
+  // 10-Stage Minecraft-style Pixel-Art Block Breaking Crack Overlays!
+  buildCrackTextures() {
+    // Deterministic branching fracture pixel paths radiating from block center (7,7)
+    const branches = [
+      [[7,7],[8,7],[8,6],[9,5],[10,5],[11,4],[12,3],[13,3],[14,2],[15,1]],
+      [[7,7],[6,8],[5,8],[4,9],[3,10],[2,11],[2,12],[1,13],[0,14]],
+      [[7,7],[7,6],[6,5],[6,4],[5,3],[4,2],[3,1],[2,0]],
+      [[8,8],[9,9],[10,9],[11,10],[12,11],[13,12],[14,13],[14,14],[15,15]],
+      [[8,6],[9,7],[10,8],[11,8],[12,8],[13,7],[14,7],[15,7]],
+      [[6,8],[5,7],[4,7],[3,6],[2,6],[1,5],[0,5]],
+      [[7,9],[7,10],[8,11],[8,12],[9,13],[9,14],[10,15]],
+      [[8,5],[8,4],[9,3],[9,2],[10,1],[11,0]],
+      [[4,9],[4,10],[5,11],[5,12],[4,13],[3,14]],
+      [[11,10],[11,11],[12,12],[12,13],[13,14]]
+    ];
+
+    for (let stage = 0; stage < 10; stage++) {
+      const c = document.createElement('canvas');
+      c.width = 16;
+      c.height = 16;
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, 16, 16);
+
+      const numBranches = Math.min(branches.length, 2 + stage);
+      const frac = (stage + 1) / 10;
+
+      // Subtle dark fracture vignette at late stages
+      if (stage >= 6) {
+        ctx.fillStyle = `rgba(0,0,0,${(stage - 5) * 0.055})`;
+        ctx.fillRect(0, 0, 16, 16);
+      }
+
+      for (let b = 0; b < numBranches; b++) {
+        const pts = branches[b];
+        const count = Math.max(1, Math.ceil(pts.length * frac));
+        for (let i = 0; i < count; i++) {
+          const [x, y] = pts[i];
+          // Crisp dark fracture pixel + subtle pale edge highlight
+          ctx.fillStyle = 'rgba(10, 10, 12, 0.88)';
+          ctx.fillRect(x, y, 1, 1);
+          if (stage >= 4 && i < count - 1) {
+            ctx.fillStyle = 'rgba(20, 20, 24, 0.55)';
+            ctx.fillRect(Math.min(15, x + 1), y, 1, 1);
+          }
+          if (stage >= 7 && (i % 2 === 0)) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+            ctx.fillRect(x, Math.min(15, y + 1), 1, 1);
+          }
+        }
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      this.crackTextures.push(tex);
+    }
+  }
+
+  // Procedural 16x16 Pixel-Art Animal Fur / Wool / Scale / Shell Coat Textures!
+  makeMobCoatTexture(baseHex, darkHex, lightHex, pattern = 'fur', seed = 1) {
+    const key = `${baseHex}_${darkHex}_${lightHex}_${pattern}_${seed}`;
+    if (this.mobCoatCache[key]) return this.mobCoatCache[key];
+
+    const c = document.createElement('canvas');
+    c.width = 16;
+    c.height = 16;
+    const ctx = c.getContext('2d');
+    const hexStr = (n) => '#' + n.toString(16).padStart(6, '0');
+    const baseStr = hexStr(baseHex);
+    const darkStr = hexStr(darkHex);
+    const lightStr = hexStr(lightHex);
+
+    fillNoise(ctx, 0, 0, baseStr, 11, seed);
+
+    if (pattern === 'fur') {
+      for (let i = 0; i < 28; i++) {
+        const x = Math.floor(pxHash(i, 1, seed + 5) * 16);
+        const y = Math.floor(pxHash(i, 2, seed + 5) * 15);
+        px(ctx, 0, 0, x, y, i % 2 === 0 ? darkStr : lightStr, 1, 2);
+      }
+    } else if (pattern === 'wool') {
+      for (let y = 0; y < 16; y += 2) {
+        for (let x = 0; x < 16; x += 2) {
+          const h = pxHash(x, y, seed + 9);
+          px(ctx, 0, 0, x, y, h > 0.65 ? lightStr : (h < 0.3 ? darkStr : baseStr), 2, 2);
+        }
+      }
+    } else if (pattern === 'spots') {
+      for (let i = 0; i < 8; i++) {
+        const x = Math.floor(pxHash(i, 3, seed + 11) * 12);
+        const y = Math.floor(pxHash(i, 4, seed + 11) * 12);
+        const w = 2 + Math.floor(pxHash(i, 5, seed + 11) * 3);
+        const h = 2 + Math.floor(pxHash(i, 6, seed + 11) * 3);
+        px(ctx, 0, 0, x, y, i % 3 === 0 ? darkStr : lightStr, w, h);
+      }
+    } else if (pattern === 'dappled') {
+      for (let i = 0; i < 12; i++) {
+        const x = Math.floor(pxHash(i, 7, seed + 13) * 14);
+        const y = Math.floor(pxHash(i, 8, seed + 13) * 14);
+        px(ctx, 0, 0, x, y, lightStr, 2, 1);
+      }
+    } else if (pattern === 'shell') {
+      ctx.fillStyle = darkStr;
+      for (let y = 0; y < 16; y += 4) ctx.fillRect(0, y, 16, 1);
+      for (let x = 0; x < 16; x += 4) ctx.fillRect(x, 0, 1, 16);
+      for (let y = 1; y < 16; y += 4) {
+        for (let x = 1; x < 16; x += 4) {
+          px(ctx, 0, 0, x, y, lightStr, 2, 2);
+        }
+      }
+    } else if (pattern === 'scales') {
+      for (let y = 0; y < 16; y += 2) {
+        for (let x = (y % 4 === 0 ? 0 : 1); x < 16; x += 2) {
+          px(ctx, 0, 0, x, y, (x + y) % 3 === 0 ? lightStr : darkStr, 1, 1);
+        }
+      }
+    }
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.generateMipmaps = false;
+    this.mobCoatCache[key] = tex;
+    return tex;
+  }
+
+  // Crisp 16x16 Minecraft-Style Pixel-Art HUD Icons (Hearts, Food, Water Bubbles, Armor!)
+  buildHudIcons() {
+    const renderGrid = (rows, palette) => {
+      const c = document.createElement('canvas');
+      c.width = 18;
+      c.height = 18;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      for (let y = 0; y < rows.length; y++) {
+        const row = rows[y];
+        for (let x = 0; x < row.length; x++) {
+          const col = palette[row[x]];
+          if (col) {
+            ctx.fillStyle = col;
+            ctx.fillRect(x * 2, y * 2, 2, 2);
+          }
+        }
+      }
+      return c.toDataURL();
+    };
+
+    // 9x9 Classic Pixel Heart (scaled 2x to 18x18)
+    const heartFull = [
+      '.OO...OO.',
+      'ORRO.ORRO',
+      'ORWROORRO',
+      'ORRRRRRRO',
+      'ORRRRRRRO',
+      '.ORRRRDO.',
+      '..ORRDO..',
+      '...ODO...',
+      '....O....'
+    ];
+    const heartHalf = [
+      '.OO...OO.',
+      'ORRO.O..O',
+      'ORWROO..O',
+      'ORRRR...O',
+      'ORRRR...O',
+      '.ORRR..O.',
+      '..ORR.O..',
+      '...OD.O..',
+      '....O....'
+    ];
+    const heartEmpty = [
+      '.OO...OO.',
+      'O..O.O..O',
+      'O...O...O',
+      'O.......O',
+      'O.......O',
+      '.O.....O.',
+      '..O...O..',
+      '...O.O...',
+      '....O....'
+    ];
+    const heartPal = {
+      O: '#141414',
+      R: '#e02424',
+      D: '#9c1111',
+      W: '#ffbaba',
+      '.': null
+    };
+    const heartEmptyPal = {
+      O: '#141414',
+      '.': null
+    };
+    // Fill interior of empty/half heart with dark container shade
+    const fillHeartBg = (rows, pal) => {
+      const c = document.createElement('canvas');
+      c.width = 18; c.height = 18;
+      const ctx = c.getContext('2d');
+      const mask = [
+        '.OO...OO.',
+        'OBBO.OBBO',
+        'OBBBOBBBO',
+        'OBBBBBBBO',
+        'OBBBBBBBO',
+        '.OBBBBBO.',
+        '..OBBBO..',
+        '...OBO...',
+        '....O....'
+      ];
+      for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+          if (mask[y][x] === 'B') {
+            ctx.fillStyle = '#2d1c1c';
+            ctx.fillRect(x * 2, y * 2, 2, 2);
+          }
+          const col = pal[rows[y][x]];
+          if (col) {
+            ctx.fillStyle = col;
+            ctx.fillRect(x * 2, y * 2, 2, 2);
+          }
+        }
+      }
+      return c.toDataURL();
+    };
+    this.hudIcons.heart_full = fillHeartBg(heartFull, heartPal);
+    this.hudIcons.heart_half = fillHeartBg(heartHalf, heartPal);
+    this.hudIcons.heart_empty = fillHeartBg(heartEmpty, heartEmptyPal);
+
+    // 9x9 Classic Pixel Meat Drumstick (Food / Hunger)
+    const foodFull = [
+      '....OOOO.',
+      '...OLLLOO',
+      '..OLMMMLO',
+      '..OMMMMDO',
+      '..OMMMDDO',
+      '.OOBBDDO.',
+      'OWWBOOO..',
+      'OWWO.....',
+      '.OO......'
+    ];
+    const foodHalf = [
+      '....OOOO.',
+      '...O....O',
+      '..O.....O',
+      '..O..MMDO',
+      '..O..MDDO',
+      '.OOBBDDO.',
+      'OWWBOOO..',
+      'OWWO.....',
+      '.OO......'
+    ];
+    const foodEmpty = [
+      '....OOOO.',
+      '...O....O',
+      '..O.....O',
+      '..O.....O',
+      '..O.....O',
+      '.OO....O.',
+      'O..OOOO..',
+      'O..O.....',
+      '.OO......'
+    ];
+    const foodPal = {
+      O: '#1e120a',
+      L: '#e8a254',
+      M: '#ba6c2c',
+      D: '#7d3e14',
+      B: '#d6ccb8',
+      W: '#ffffff'
+    };
+    const fillFoodBg = (rows, pal) => {
+      const c = document.createElement('canvas');
+      c.width = 18; c.height = 18;
+      const ctx = c.getContext('2d');
+      const mask = [
+        '....OOOO.',
+        '...OBBBBO',
+        '..OBBBBBO',
+        '..OBBBBBO',
+        '..OBBBBBO',
+        '.OOBBBBO.',
+        'OBBBOOO..',
+        'OBBO.....',
+        '.OO......'
+      ];
+      for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+          if (mask[y][x] === 'B') {
+            ctx.fillStyle = '#2b2019';
+            ctx.fillRect(x * 2, y * 2, 2, 2);
+          }
+          const col = pal[rows[y][x]];
+          if (col) {
+            ctx.fillStyle = col;
+            ctx.fillRect(x * 2, y * 2, 2, 2);
+          }
+        }
+      }
+      return c.toDataURL();
+    };
+    this.hudIcons.food_full = fillFoodBg(foodFull, foodPal);
+    this.hudIcons.food_half = fillFoodBg(foodHalf, foodPal);
+    this.hudIcons.food_empty = fillFoodBg(foodEmpty, foodPal);
+
+    // 9x9 Pixel Water / Air Bubble
+    const bubbleFull = [
+      '..OOOOO..',
+      '.OBWWWBO.',
+      'OBWLLLBBO',
+      'OBLBBBBBO',
+      'OBBBBBDBO',
+      'OBBBBDDDO',
+      'OBBBDDDDO',
+      '.ODDDDDO.',
+      '..OOOOO..'
+    ];
+    const bubblePop = [
+      '.O.....O.',
+      '..O...O..',
+      '....L....',
+      '.O.L.L.O.',
+      '..L...L..',
+      '.O.L.L.O.',
+      '....L....',
+      '..O...O..',
+      '.O.....O.'
+    ];
+    const bubblePal = {
+      O: '#0d3d66',
+      W: '#ffffff',
+      L: '#a6e4ff',
+      B: '#38bdf8',
+      D: '#1d7cb8'
+    };
+    this.hudIcons.bubble_full = renderGrid(bubbleFull, bubblePal);
+    this.hudIcons.bubble_pop = renderGrid(bubblePop, bubblePal);
+
+    // 9x9 Pixel Armor Chestplate / Shield
+    const armorFull = [
+      '.OO...OO.',
+      'OSSO.OSSO',
+      'OSWOOOWSO',
+      'OSWWWWWSO',
+      'OSWSSSWO.',
+      'OSSDDDSSO',
+      'OSDDDDDSO',
+      '.ODDDDDO.',
+      '..OOOOO..'
+    ];
+    const armorHalf = [
+      '.OO...OO.',
+      'OSSO.O..O',
+      'OSWOO...O',
+      'OSWW....O',
+      'OSWS....O',
+      'OSSD....O',
+      'OSDD....O',
+      '.ODD...O.',
+      '..OOOOO..'
+    ];
+    const armorPal = {
+      O: '#14171c',
+      W: '#ffffff',
+      S: '#c8d1db',
+      D: '#7d8896'
+    };
+    this.hudIcons.armor_full = renderGrid(armorFull, armorPal);
+    this.hudIcons.armor_half = renderGrid(armorHalf, armorPal);
   }
 }

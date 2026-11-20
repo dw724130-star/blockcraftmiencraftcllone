@@ -177,6 +177,16 @@ regItem('raw_porkchop', { name: 'Raw Porkchop', icon: 'raw_porkchop', food: 3 })
 regItem('cooked_porkchop', { name: 'Cooked Porkchop', icon: 'cooked_porkchop', food: 8 });
 regItem('raw_beef', { name: 'Raw Beef', icon: 'raw_beef', food: 3 });
 regItem('steak', { name: 'Steak', icon: 'steak', food: 8 });
+regItem('raw_chicken', { name: 'Raw Poultry', icon: 'raw_chicken', food: 2 });
+regItem('cooked_chicken', { name: 'Roast Poultry', icon: 'cooked_chicken', food: 6 });
+regItem('raw_mutton', { name: 'Raw Mutton', icon: 'raw_mutton', food: 2 });
+regItem('cooked_mutton', { name: 'Cooked Mutton', icon: 'cooked_mutton', food: 6 });
+regItem('raw_venison', { name: 'Raw Venison', icon: 'raw_venison', food: 3 });
+regItem('cooked_venison', { name: 'Cooked Venison', icon: 'cooked_venison', food: 8 });
+regItem('raw_rabbit', { name: 'Raw Rabbit', icon: 'raw_rabbit', food: 2 });
+regItem('cooked_rabbit', { name: 'Cooked Rabbit', icon: 'cooked_rabbit', food: 6 });
+regItem('raw_salmon', { name: 'Raw Salmon', icon: 'raw_salmon', food: 2 });
+regItem('cooked_salmon', { name: 'Cooked Salmon', icon: 'cooked_salmon', food: 7 });
 
 // --- TOOLS & WEAPONS ---
 const TIERS = [
