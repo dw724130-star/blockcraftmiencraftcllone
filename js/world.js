@@ -97,11 +97,16 @@ export class World {
     this.caveNoise = new Noise(this.seed + 303);
     this.oreNoise = new Noise(this.seed + 404);
 
-    this.chunks = new Map(); // "cx,cz" -> { cx, cz, data: Uint8Array, meshes: [], dirty: bool }
-    this.modifiedBlocks = new Map(); // "x,y,z" -> blockId
+    this.chunks = new Map(); // numeric chunkKey -> { cx, cz, key, data: Uint8Array, maxY, meshes: [], dirty: bool }
+    this.modifiedBlocks = new Map(); // "x,y,z" -> blockId (for save serialization)
+    this.modsByChunk = new Map(); // numeric chunkKey -> Array<[lx, y, lz, blockId]>
     this.chests = new Map(); // "x,y,z" -> Array(27)
     this.furnaces = new Map(); // "x,y,z" -> { input, fuel, output, burnTime, burnMax, cookTime }
-    this.villageChunks = new Map(); // "cx,cz" -> { x, y, z, biome, spawned: bool }
+    this.villageChunks = new Map(); // numeric chunkKey -> { x, y, z, biome, spawned: bool }
+    this._lastChunkPcx = 1e9;
+    this._lastChunkPcz = 1e9;
+    this._lastChunkRD = -1;
+    this._chunksAllLoaded = false;
     this.renderDistance = options.renderDistance || 6;
     this.shaderMode = options.shaders || 'ultra';
     this.shaderUniforms = {
@@ -413,18 +418,13 @@ export class World {
         }
 
         float fbmWater(vec2 p) {
-          float v = 0.0;
-          float amp = 0.52;
-          mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-          for (int i = 0; i < 4; i++) {
-            v += amp * noise2D(p);
-            p = rot * p * 2.02 + vec2(17.1, 31.7);
-            amp *= 0.5;
-          }
+          float v = 0.62 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.02 + vec2(17.1, 31.7);
+          v += 0.34 * noise2D(p);
           return v;
         }
 
-        // Exact mirror of SkyDome's atmospheric gradient + puffy volumetric clouds!
+        // Fast mirror of SkyDome's atmospheric gradient + puffy volumetric clouds!
         vec3 sampleSkyReflection(vec3 dir, vec3 sunDir) {
           float h = clamp(dir.y, 0.0, 1.0);
           float sunDot = max(0.0, dot(dir, sunDir));
@@ -432,24 +432,23 @@ export class World {
           skyCol = mix(skyCol, uTopColor, smoothstep(0.22, 0.92, h));
 
           float horizonBand = pow(1.0 - h, 3.0);
-          float sunSide = pow(sunDot, 2.0);
+          float sunSide = sunDot * sunDot;
           skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.3 + 0.62 * sunSide) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
 
           float twilightArc = smoothstep(0.02, 0.26, h) * (1.0 - smoothstep(0.26, 0.68, h));
           skyCol += vec3(0.28, 0.12, 0.24) * twilightArc * uSunsetFactor * (1.0 - uRainFactor * 0.8);
 
-          // Sun reflection bloom
           float clearAmt = 1.0 - uRainFactor * 0.85;
           float sunVisible = smoothstep(-0.12, 0.05, sunDir.y) * clearAmt;
-          skyCol += uSunColor * (pow(sunDot, 8.0) * (0.35 + 0.65 * uSunsetFactor) + pow(sunDot, 54.0) * 1.1) * sunVisible;
+          float s4 = sunSide * sunSide;
+          skyCol += uSunColor * (s4 * s4 * (0.35 + 0.65 * uSunsetFactor) + pow(sunDot, 48.0) * 1.1) * sunVisible;
 
-          // Reflected puffy clouds!
-          if (dir.y > 0.012) {
+          if (dir.y > 0.015) {
             vec2 cloudUV = (dir.xz / (dir.y + 0.11)) * 0.42;
             vec2 drift = vec2(uCloudTime * 0.0085, uCloudTime * 0.0032);
             float rawD = fbmWater(cloudUV * 1.15 + drift);
             float thresh = mix(0.49, 0.36, uRainFactor);
-            float cAlpha = smoothstep(thresh, thresh + 0.22, rawD) * smoothstep(0.012, 0.18, dir.y) * 0.88;
+            float cAlpha = smoothstep(thresh, thresh + 0.22, rawD) * smoothstep(0.015, 0.18, dir.y) * 0.88;
             vec3 cCol = mix(uCloudShadowColor, uCloudLitColor, clamp(rawD * 1.35 - 0.15, 0.0, 1.0));
             skyCol = mix(skyCol, cCol, cAlpha);
           }
@@ -462,57 +461,54 @@ export class World {
           vec3 V = viewVec / max(dist, 0.001);
           vec3 sunDir = normalize(uSunDir);
 
-          // Multi-octave silky animated ripple normal (BSL water ripples)
+          // Ultra-fast multi-wave silky animated ripple normal
           vec2 p = vWorldPos.xz;
           float t = uTime;
           float r1 = sin(p.x * 1.9 + t * 1.7 + p.y * 0.9) * cos(p.y * 1.6 - t * 1.3);
-          float r2 = sin(p.x * 3.7 - t * 2.3 + p.y * 2.5) * 0.55;
-          float r3 = (noise2D(p * 1.6 + vec2(t * 0.55, -t * 0.42)) - 0.5) * 1.2;
-          float r4 = (noise2D(p * 3.4 - vec2(t * 0.72, t * 0.58)) - 0.5) * 0.7;
+          float r2 = sin(p.x * 3.7 - t * 2.3 + p.y * 2.5) * 0.6;
+          float nWave = noise2D(p * 1.7 + vec2(t * 0.55, -t * 0.42));
+          float r3 = (nWave - 0.5) * 1.25;
 
           float amp = mix(0.02, 0.13, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(45.0, 130.0, dist) * 0.45);
           vec3 N = normalize(vec3(
-            (r1 + r3 + r4) * amp,
+            (r1 + r3) * amp,
             1.0,
-            (r2 + r3 - r4) * amp
+            (r2 - r3) * amp
           ));
           if (vBaseNormal.y < 0.5) N = normalize(vBaseNormal);
 
           // Fresnel Mirror Reflection of Live Sky & Clouds!
           float NoV = max(0.0, dot(N, V));
-          float fresnel = clamp(0.10 + 0.90 * pow(1.0 - NoV, 3.2), 0.10, 0.96);
+          float oneMinusNoV = 1.0 - NoV;
+          float fresnel = clamp(0.10 + 0.90 * oneMinusNoV * oneMinusNoV * oneMinusNoV, 0.10, 0.96);
 
           vec3 R = reflect(-V, N);
           R.y = max(0.02, abs(R.y));
           vec3 reflCol = sampleSkyReflection(normalize(R), sunDir);
 
-          // Crystal clear deep-teal water absorption tint
           vec3 deepWater = mix(vec3(0.02, 0.05, 0.10), vec3(0.04, 0.24, 0.34), uDayFactor);
           deepWater = mix(deepWater, vec3(0.14, 0.11, 0.20), uSunsetFactor * 0.55);
-
-          // Subtle caustic shimmer in shallow/steep view angles
-          float caustic = pow(max(0.0, noise2D(p * 2.4 + vec2(t * 0.8, t * 0.6))), 3.0) * 0.18 * uDayFactor;
-          deepWater += vec3(0.06, 0.22, 0.26) * caustic;
+          // Reuse nWave for free caustic shimmer (zero extra noise call!)
+          deepWater += vec3(0.06, 0.22, 0.26) * (nWave * nWave * nWave) * 0.2 * uDayFactor;
 
           vec3 col = mix(deepWater, reflCol, fresnel);
 
           // Sparkling Sun Specular Glitter across the Ripples!
           vec3 H = normalize(V + sunDir);
-          float specTight = pow(max(0.0, dot(N, H)), 180.0) * 2.6;
-          float specBroad = pow(max(0.0, dot(N, H)), 26.0) * 0.45;
+          float NoH = max(0.0, dot(N, H));
+          float specTight = pow(NoH, 160.0) * 2.5;
+          float specBroad = pow(NoH, 24.0) * 0.42;
           float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.85);
           col += uSunColor * (specTight + specBroad) * sunUp;
 
           // Atmospheric Distance Haze matching Terrain & Sky seamlessly!
-          vec3 viewOut = -V;
           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
-          float sunAlign = pow(max(0.0, dot(viewOut, sunDir)), 3.0);
+          float sunAlign = pow(max(0.0, dot(-V, sunDir)), 3.0);
           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
           col = mix(col, atmFog, hazeFactor);
 
-          float alpha = mix(0.74, 0.96, fresnel);
-          alpha = mix(alpha, 1.0, hazeFactor);
+          float alpha = mix(mix(0.74, 0.96, fresnel), 1.0, hazeFactor);
 
           gl_FragColor = vec4(col, alpha);
           #include <tonemapping_fragment>
@@ -527,8 +523,23 @@ export class World {
     this.meshQueue = [];
   }
 
+  // Fast numeric integer key — ZERO string allocations in getBlock/raycast/meshing!
   chunkKey(cx, cz) {
-    return `${cx},${cz}`;
+    return (cx + 32768) * 65536 + (cz + 32768);
+  }
+
+  indexModifiedBlock(x, y, z, blockId) {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const ck = this.chunkKey(cx, cz);
+    const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    let map = this.modsByChunk.get(ck);
+    if (!map) {
+      map = new Map();
+      this.modsByChunk.set(ck, map);
+    }
+    map.set(lx + (lz << 4) + (y << 8), blockId);
   }
 
   getBiomeAt(wx, wz) {
@@ -725,13 +736,15 @@ export class World {
     if (this.chunks.has(key)) return this.chunks.get(key);
 
     const data = new Uint8Array(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
+    let maxY = 1;
     const setLocal = (lx, y, lz, id) => {
       if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT) return;
-      data[lx + lz * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE] = id;
+      data[lx + (lz << 4) + (y << 8)] = id;
+      if (id !== 0 && y > maxY) maxY = y;
     };
     const getLocal = (lx, y, lz) => {
       if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT) return 0;
-      return data[lx + lz * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE];
+      return data[lx + (lz << 4) + (y << 8)];
     };
 
     const ox = cx * CHUNK_SIZE;
@@ -954,19 +967,17 @@ export class World {
       }
     }
 
-    // 3. Apply player-modified blocks in this chunk
-    for (const [mkey, blockId] of this.modifiedBlocks.entries()) {
-      const [mx, my, mz] = mkey.split(',').map(Number);
-      const mcx = Math.floor(mx / CHUNK_SIZE);
-      const mcz = Math.floor(mz / CHUNK_SIZE);
-      if (mcx === cx && mcz === cz) {
-        const lx = ((mx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        const lz = ((mz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-        setLocal(lx, my, lz, blockId);
+    // 3. Apply player-modified blocks in this chunk in O(1)!
+    const chunkMods = this.modsByChunk.get(key);
+    if (chunkMods) {
+      for (const [idx, blockId] of chunkMods.entries()) {
+        data[idx] = blockId;
+        const my = idx >> 8;
+        if (blockId !== 0 && my > maxY) maxY = my;
       }
     }
 
-    const chunk = { cx, cz, key, data, meshes: [], dirty: true };
+    const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true };
     this.chunks.set(key, chunk);
     return chunk;
   }
@@ -976,13 +987,11 @@ export class World {
     if (y < 0 || y >= CHUNK_HEIGHT) return BLOCK.AIR;
     const x = Math.floor(wx);
     const z = Math.floor(wz);
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const chunk = this.chunks.get(this.chunkKey(cx, cz));
-    if (!chunk) return BLOCK.AIR;
-    const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    return chunk.data[lx + lz * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE];
+    const cx = x >> 4;
+    const cz = z >> 4;
+    const chunk = this.chunks.get((cx + 32768) * 65536 + (cz + 32768));
+    if (!chunk || y > chunk.maxY) return BLOCK.AIR;
+    return chunk.data[(x & 15) + ((z & 15) << 4) + (y << 8)];
   }
 
   setBlock(wx, wy, wz, blockId, record = true) {
@@ -993,6 +1002,7 @@ export class World {
 
     if (record) {
       this.modifiedBlocks.set(`${x},${y},${z}`, blockId);
+      this.indexModifiedBlock(x, y, z, blockId);
     }
 
     // Clean up tile entities if broken
@@ -1008,14 +1018,15 @@ export class World {
       });
     }
 
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
+    const cx = x >> 4;
+    const cz = z >> 4;
     const chunk = this.chunks.get(this.chunkKey(cx, cz));
     if (!chunk) return;
 
-    const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    chunk.data[lx + lz * CHUNK_SIZE + y * CHUNK_SIZE * CHUNK_SIZE] = blockId;
+    const lx = x & 15;
+    const lz = z & 15;
+    chunk.data[lx + (lz << 4) + (y << 8)] = blockId;
+    if (blockId !== 0 && y > chunk.maxY) chunk.maxY = y;
     this.markDirty(cx, cz);
 
     // Neighbor chunks if on edge
@@ -1049,22 +1060,51 @@ export class World {
       water: { pos: [], norm: [], uv: [], col: [], idx: [] }
     };
 
-    const ox = chunk.cx * CHUNK_SIZE;
-    const oz = chunk.cz * CHUNK_SIZE;
+    const cx = chunk.cx;
+    const cz = chunk.cz;
+    const ox = cx << 4;
+    const oz = cz << 4;
     const data = chunk.data;
 
-    for (let y = 0; y < CHUNK_HEIGHT; y++) {
-      const yOff = y * CHUNK_SIZE * CHUNK_SIZE;
+    // Pre-fetch 3x3 neighbor chunk Uint8Arrays ONCE -> ZERO Map/string lookups in the inner loop!
+    const getNbr = (dcx, dcz) => {
+      const c = this.chunks.get((cx + dcx + 32768) * 65536 + (cz + dcz + 32768));
+      return c ? c.data : null;
+    };
+    const dPX = getNbr(1, 0), dNX = getNbr(-1, 0), dPZ = getNbr(0, 1), dNZ = getNbr(0, -1);
+    const dPP = getNbr(1, 1), dPN = getNbr(1, -1), dNP = getNbr(-1, 1), dNN = getNbr(-1, -1);
+
+    const fastGet = (lx, y, lz) => {
+      if (y < 0 || y >= CHUNK_HEIGHT) return 0;
+      if (lx >= 0 && lx < 16) {
+        if (lz >= 0 && lz < 16) return data[lx + (lz << 4) + (y << 8)];
+        if (lz < 0) return dNZ ? dNZ[lx + ((lz + 16) << 4) + (y << 8)] : 0;
+        return dPZ ? dPZ[lx + ((lz - 16) << 4) + (y << 8)] : 0;
+      }
+      if (lx < 0) {
+        if (lz >= 0 && lz < 16) return dNX ? dNX[(lx + 16) + (lz << 4) + (y << 8)] : 0;
+        if (lz < 0) return dNN ? dNN[(lx + 16) + ((lz + 16) << 4) + (y << 8)] : 0;
+        return dNP ? dNP[(lx + 16) + ((lz - 16) << 4) + (y << 8)] : 0;
+      }
+      if (lz >= 0 && lz < 16) return dPX ? dPX[(lx - 16) + (lz << 4) + (y << 8)] : 0;
+      if (lz < 0) return dPN ? dPN[(lx - 16) + ((lz + 16) << 4) + (y << 8)] : 0;
+      return dPP ? dPP[(lx - 16) + ((lz - 16) << 4) + (y << 8)] : 0;
+    };
+
+    const yLimit = Math.min(CHUNK_HEIGHT - 1, (chunk.maxY || CHUNK_HEIGHT - 1) + 1);
+
+    for (let y = 0; y <= yLimit; y++) {
+      const yOff = y << 8;
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-        const zOff = lz * CHUNK_SIZE;
+        const zOff = lz << 4;
+        const wz = oz + lz;
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
           const id = data[lx + zOff + yOff];
-          if (id === BLOCK.AIR) continue;
+          if (id === 0) continue;
           const def = getBlockDef(id);
           if (!def) continue;
 
           const wx = ox + lx;
-          const wz = oz + lz;
 
           // Cross-quad blocks (flowers, tall grass sway; torches & ladders stay static!)
           if (def.cross) {
@@ -1096,21 +1136,23 @@ export class World {
           const b = isWater
             ? buckets.water
             : (isStaticCutout ? buckets.staticCutout : (isCutout ? buckets.cutout : buckets.opaque));
+          const waterTopLower = isWater && fastGet(lx, y + 1, lz) !== BLOCK.WATER;
 
-          for (const face of FACES) {
-            const nx = wx + face.dir[0];
+          for (let fi = 0; fi < 6; fi++) {
+            const face = FACES[fi];
+            const nlx = lx + face.dir[0];
             const ny = y + face.dir[1];
-            const nz = wz + face.dir[2];
-            const neighbor = this.getBlock(nx, ny, nz);
+            const nlz = lz + face.dir[2];
+            const neighbor = fastGet(nlx, ny, nlz);
 
             // Culling logic
             if (isWater) {
-              if (neighbor === BLOCK.WATER || (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor))) continue;
+              if (neighbor === BLOCK.WATER || (neighbor !== 0 && !isBlockTransparent(neighbor))) continue;
             } else if (isCutout || isStaticCutout) {
               if (neighbor === id && (id === BLOCK.GLASS || id === BLOCK.ICE)) continue;
-              if (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor)) continue;
+              if (neighbor !== 0 && !isBlockTransparent(neighbor)) continue;
             } else {
-              if (neighbor !== BLOCK.AIR && !isBlockTransparent(neighbor)) continue;
+              if (neighbor !== 0 && !isBlockTransparent(neighbor)) continue;
             }
 
             const texName = def.faces[face.faceType] || def.faces.all || def.faces.side;
@@ -1118,29 +1160,29 @@ export class World {
             const baseIdx = b.pos.length / 3;
             const lightBoost = def.light > 0 ? 1.18 : 1.0;
 
-            for (const [cx0, cy0, cz0, u, v] of face.corners) {
-              const py = (isWater && cy0 === 1 && this.getBlock(wx, y + 1, wz) !== BLOCK.WATER) ? y + 0.88 : y + cy0;
+            for (let ci = 0; ci < 4; ci++) {
+              const [cx0, cy0, cz0, u, v] = face.corners[ci];
+              const py = (waterTopLower && cy0 === 1) ? y + 0.88 : y + cy0;
               b.pos.push(wx + cx0, py, wz + cz0);
               b.norm.push(face.dir[0], face.dir[1], face.dir[2]);
               b.uv.push(u ? uv.u1 : uv.u0, v ? uv.v1 : uv.v0);
 
-              // 4-corner Ambient Occlusion on all 6 faces for rich Minecraft depth!
               let ao = 1.0;
               if (!isWater) {
                 let occ = 0;
                 if (face.faceType === 'top') {
                   const dx = cx0 === 0 ? -1 : 1;
                   const dz = cz0 === 0 ? -1 : 1;
-                  if (isBlockSolid(this.getBlock(wx + dx, y + 1, wz))) occ++;
-                  if (isBlockSolid(this.getBlock(wx, y + 1, wz + dz))) occ++;
-                  if (isBlockSolid(this.getBlock(wx + dx, y + 1, wz + dz))) occ++;
+                  if (isBlockSolid(fastGet(lx + dx, y + 1, lz))) occ++;
+                  if (isBlockSolid(fastGet(lx, y + 1, lz + dz))) occ++;
+                  if (isBlockSolid(fastGet(lx + dx, y + 1, lz + dz))) occ++;
                 } else if (face.faceType === 'side') {
                   const dy = cy0 === 0 ? -1 : 1;
                   const sdx = face.dir[0] === 0 ? (cx0 === 0 ? -1 : 1) : 0;
                   const sdz = face.dir[2] === 0 ? (cz0 === 0 ? -1 : 1) : 0;
-                  if (isBlockSolid(this.getBlock(nx, y + dy, nz))) occ++;
-                  if (isBlockSolid(this.getBlock(nx + sdx, y, nz + sdz))) occ++;
-                  if (isBlockSolid(this.getBlock(nx + sdx, y + dy, nz + sdz))) occ++;
+                  if (isBlockSolid(fastGet(nlx, y + dy, nlz))) occ++;
+                  if (isBlockSolid(fastGet(nlx + sdx, y, nlz + sdz))) occ++;
+                  if (isBlockSolid(fastGet(nlx + sdx, y + dy, nlz + sdz))) occ++;
                 }
                 ao = 1.0 - occ * 0.12;
               }
@@ -1219,62 +1261,78 @@ export class World {
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const r = this.renderDistance;
 
-    // 1. Generate missing chunks in spiral-like distance order
-    const needed = [];
-    for (let dz = -r; dz <= r; dz++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (dx * dx + dz * dz > (r + 0.5) * (r + 0.5)) continue;
-        const cx = pcx + dx;
-        const cz = pcz + dz;
-        const key = this.chunkKey(cx, cz);
-        if (!this.chunks.has(key)) {
-          needed.push({ cx, cz, dist: dx * dx + dz * dz });
+    const movedChunk = pcx !== this._lastChunkPcx || pcz !== this._lastChunkPcz || r !== this._lastChunkRD;
+    if (movedChunk) {
+      this._lastChunkPcx = pcx;
+      this._lastChunkPcz = pcz;
+      this._lastChunkRD = r;
+      this._chunksAllLoaded = false;
+    }
+
+    // 1. Only scan spiral grid when still streaming chunks or after crossing a chunk border!
+    if (!this._chunksAllLoaded) {
+      const needed = [];
+      const rSq = (r + 0.5) * (r + 0.5);
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const d2 = dx * dx + dz * dz;
+          if (d2 > rSq) continue;
+          const cx = pcx + dx;
+          const cz = pcz + dz;
+          if (!this.chunks.has(this.chunkKey(cx, cz))) {
+            needed.push({ cx, cz, dist: d2 });
+          }
         }
       }
-    }
-    needed.sort((a, b) => a.dist - b.dist);
 
-    let generated = 0;
-    const maxGen = this.renderDistance > 8 ? 4 : 2;
-    for (const n of needed) {
-      if (generated >= maxGen) break;
-      const chunk = this.generateChunk(n.cx, n.cz);
-      this.meshQueue.push(chunk);
-      generated++;
+      if (needed.length === 0) {
+        this._chunksAllLoaded = true;
+      } else {
+        needed.sort((a, b) => a.dist - b.dist);
+        const maxGen = this.renderDistance > 8 ? 4 : 2;
+        for (let i = 0; i < needed.length && i < maxGen; i++) {
+          const chunk = this.generateChunk(needed[i].cx, needed[i].cz);
+          this.meshQueue.push(chunk);
+        }
+      }
     }
 
     // 2. Build dirty chunk meshes (prioritize closest)
-    if (this.meshQueue.length > 1) {
-      this.meshQueue.sort((a, b) => {
-        const da = (a.cx - pcx) ** 2 + (a.cz - pcz) ** 2;
-        const db = (b.cx - pcx) ** 2 + (b.cz - pcz) ** 2;
-        return da - db;
-      });
-    }
+    if (this.meshQueue.length > 0) {
+      if (this.meshQueue.length > 1) {
+        this.meshQueue.sort((a, b) => {
+          const da = (a.cx - pcx) ** 2 + (a.cz - pcz) ** 2;
+          const db = (b.cx - pcx) ** 2 + (b.cz - pcz) ** 2;
+          return da - db;
+        });
+      }
 
-    let built = 0;
-    const tStart = performance.now();
-    while (this.meshQueue.length > 0 && built < maxBuildsPerFrame) {
-      const chunk = this.meshQueue.shift();
-      if (chunk && chunk.dirty && this.chunks.has(chunk.key)) {
-        this.buildChunkMesh(chunk);
-        built++;
-        // Frame-budget guard for smooth iPad 60FPS even at high render distances
-        if (performance.now() - tStart > 5.5) break;
+      let built = 0;
+      const tStart = performance.now();
+      while (this.meshQueue.length > 0 && built < maxBuildsPerFrame) {
+        const chunk = this.meshQueue.shift();
+        if (chunk && chunk.dirty && this.chunks.has(chunk.key)) {
+          this.buildChunkMesh(chunk);
+          built++;
+          if (performance.now() - tStart > 4.5) break;
+        }
       }
     }
 
-    // 3. Unload far chunks
-    const unloadR = r + 2;
-    for (const [key, chunk] of this.chunks.entries()) {
-      const dx = chunk.cx - pcx;
-      const dz = chunk.cz - pcz;
-      if (dx * dx + dz * dz > unloadR * unloadR) {
-        for (const m of chunk.meshes) {
-          this.group.remove(m);
-          m.geometry.dispose();
+    // 3. Only check unload when crossing a chunk border!
+    if (movedChunk) {
+      const unloadR = r + 2;
+      const unloadSq = unloadR * unloadR;
+      for (const [key, chunk] of this.chunks.entries()) {
+        const dx = chunk.cx - pcx;
+        const dz = chunk.cz - pcz;
+        if (dx * dx + dz * dz > unloadSq) {
+          for (const m of chunk.meshes) {
+            this.group.remove(m);
+            m.geometry.dispose();
+          }
+          this.chunks.delete(key);
         }
-        this.chunks.delete(key);
       }
     }
   }

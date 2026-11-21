@@ -6,56 +6,56 @@ export const MOD_LIST = [
   {
     id: 'treecapitator',
     name: 'Timber / TreeCapitator',
-    icon: '🪓',
+    icon: 'axe',
     desc: 'Breaking a tree log automatically chops connected logs above it.',
     defaultOn: false
   },
   {
     id: 'veinminer',
     name: 'VeinMiner',
-    icon: '⛏️',
+    icon: 'pickaxe',
     desc: 'Mining an ore block chain-mines adjacent ores of the same type.',
     defaultOn: false
   },
   {
     id: 'minimap',
     name: 'Live Mini-Map Radar',
-    icon: '🗺️',
+    icon: 'map',
     desc: 'Adds a live terrain & mob radar to the top-right HUD.',
     defaultOn: true
   },
   {
     id: 'keep_inventory',
     name: 'Keep Inventory',
-    icon: '🎒',
+    icon: 'bag',
     desc: 'Keep all items and XP when respawning after death.',
     defaultOn: true
   },
   {
     id: 'auto_smelt',
     name: 'Auto-Smelt & Magnet',
-    icon: '🔥',
+    icon: 'flame',
     desc: 'Mined blocks go directly to inventory and ores auto-smelt into ingots.',
     defaultOn: false
   },
   {
     id: 'super_mobility',
     name: 'Parkour & Speed Boost',
-    icon: '⚡',
+    icon: 'sprint',
     desc: 'Higher jumps, faster sprint speed, and halved fall damage.',
     defaultOn: false
   },
   {
     id: 'moon_gravity',
     name: 'Moon Gravity',
-    icon: '🌙',
+    icon: 'moon',
     desc: 'Low-gravity physics for massive leaps across mountains.',
     defaultOn: false
   },
   {
     id: 'more_mobs',
     name: 'Wilderness Plus',
-    icon: '🐺',
+    icon: 'paw',
     desc: 'Increases wildlife & village guard Iron Golems across the world.',
     defaultOn: false
   }

@@ -1993,4 +1993,130 @@ body.mc-theme .trade-row.available {
   background: #488532;
 }
 
+/* =========================================================
+   PIXEL-ART UI BUTTON ICONS & CONTEXT-AWARE ACTION STATES
+   ========================================================= */
+.px-ui-icon {
+  image-rendering: pixelated;
+  display: inline-block;
+  vertical-align: middle;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+.hud-btn-px {
+  width: 24px;
+  height: 24px;
+}
+
+body.large-ui .hud-btn-px {
+  width: 30px;
+  height: 30px;
+}
+
+.action-px {
+  width: 34px;
+  height: 34px;
+}
+
+.action-px.sm {
+  width: 26px;
+  height: 26px;
+}
+
+body.large-ui .action-px {
+  width: 40px;
+  height: 40px;
+}
+
+body.large-ui .action-px.sm {
+  width: 30px;
+  height: 30px;
+}
+
+.dpad-px {
+  width: 26px;
+  height: 26px;
+}
+
+.btn-px {
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+}
+
+.chip-px {
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+}
+
+.inline-px {
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+}
+
+.close-px {
+  width: 16px;
+  height: 16px;
+}
+
+.arrow-px {
+  width: 26px;
+  height: 26px;
+}
+
+.flame-px {
+  width: 28px;
+  height: 28px;
+}
+
+.mod-px {
+  width: 28px;
+  height: 28px;
+}
+
+.slot-placeholder-px {
+  width: 28px;
+  height: 28px;
+  opacity: 0.42;
+}
+
+.cmd-chip,
+.header-with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close-modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Dynamic PLACE -> USE highlight when hovering Villager / Crafting Table / Furnace / Chest / Bed */
+.touch-action-btn.place-btn.mode-use,
+body.mc-theme .touch-action-btn.place-btn.mode-use {
+  background: rgba(28, 138, 132, 0.88);
+  border-color: #7df9ff;
+  box-shadow:
+    inset 3px 3px 0 rgba(190, 255, 255, 0.35),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.45),
+    0 0 16px rgba(92, 242, 247, 0.55);
+}
+
+/* Dynamic MINE -> DAMAGE highlight when hovering over any animal or mob! */
+.touch-action-btn.break-btn.mode-damage,
+body.mc-theme .touch-action-btn.break-btn.mode-damage {
+  background: rgba(188, 32, 32, 0.9);
+  border-color: #ff8a80;
+  box-shadow:
+    inset 3px 3px 0 rgba(255, 195, 190, 0.35),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.5),
+    0 0 16px rgba(255, 82, 82, 0.65);
+}
+
+
 

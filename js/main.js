@@ -23,10 +23,10 @@ class BlockCraftGame {
     this.textures = new TextureManager();
     this.ui = new UIManager(this.textures, this.sound);
 
-    // Three.js Renderer
+    // Three.js Renderer (capped pixelRatio <= 1.5 for blazing-fast GPU fill rate on Retina/iPad!)
     this.container = document.getElementById('game-container');
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = (this.settings.shaders || 'ultra') === 'ultra';
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -57,6 +57,15 @@ class BlockCraftGame {
     this.autosaveTimer = 0;
     this.furnaceUiTimer = 0;
     this.minimapTimer = 0;
+    this._eyeVec = new THREE.Vector3();
+    this._dirVec = new THREE.Vector3();
+    this._cachedBiome = 'Plains';
+    this._cachedBiomeBx = 1e9;
+    this._cachedBiomeBz = 1e9;
+    this._emptyInput = {
+      moveForward: 0, moveRight: 0, jump: false, sneak: false, sprint: false,
+      breaking: false, lookDeltaX: 0, lookDeltaY: 0
+    };
 
     this.bindControlActions();
     window.addEventListener('resize', () => this.onResize());
@@ -185,7 +194,11 @@ class BlockCraftGame {
     // Restore modified blocks & tile entities before preloading spawn chunks
     if (saved) {
       if (Array.isArray(saved.modifiedBlocks)) {
-        for (const [k, v] of saved.modifiedBlocks) this.world.modifiedBlocks.set(k, v);
+        for (const [k, v] of saved.modifiedBlocks) {
+          this.world.modifiedBlocks.set(k, v);
+          const [mx, my, mz] = k.split(',').map(Number);
+          this.world.indexModifiedBlock(mx, my, mz, v);
+        }
       }
       if (Array.isArray(saved.chests)) {
         for (const [k, v] of saved.chests) this.world.chests.set(k, v);
@@ -267,9 +280,12 @@ class BlockCraftGame {
 
     this.running = true;
     this.controls.enabled = true;
+    this._cachedBiomeBx = 1e9;
+    this._cachedBiomeBz = 1e9;
     this.ui.showTitleScreen(false);
     this.ui.updateHotbar();
-    this.ui.updateStats();
+    this.ui.updateStats(true);
+    this.ui.updateActionButtons(false, false);
     this.ui.addChatMessage(`Welcome to ${meta.name}! (${meta.mode.toUpperCase()})`);
   }
 
@@ -686,23 +702,33 @@ class BlockCraftGame {
     }
 
     if (this.running && this.world && this.player) {
-      const input = this.controls.enabled ? this.controls.poll() : {
-        moveForward: 0, moveRight: 0, jump: false, sneak: false, sprint: false,
-        breaking: false, lookDeltaX: 0, lookDeltaY: 0
-      };
+      const input = this.controls.enabled ? this.controls.poll() : this._emptyInput;
 
       this.player.update(dt, input, this.mods);
       this.ui.setUnderwater(this.player.headInWater);
 
-      // Raycast targeted block & Villager / Wildlife tooltip
-      const eye = this.player.getEyePosition();
-      const dir = this.player.getLookDirection();
+      // Raycast targeted block & Villager / Wildlife (zero Vector3 allocations!)
+      const eye = this.player.getEyePosition(this._eyeVec);
+      const dir = this.player.getLookDirection(this._dirVec);
       const lookMob = this.entities.raycastMob(eye, dir, 5.2);
       this.currentTarget = this.world.raycast(eye, dir, 5.5);
-      if (lookMob && lookMob.type === 'villager') {
+
+      const mobHit = !!(lookMob && (!this.currentTarget || lookMob.pos.distanceTo(eye) < this.currentTarget.dist));
+      const targetDef = this.currentTarget ? getBlockDef(this.currentTarget.blockId) : null;
+
+      // Dynamic context-aware buttons:
+      // - PLACE -> USE when hovering Villager or interactive block (Crafting Table, Furnace, Chest, Bed, TNT)
+      // - MINE -> DAMAGE when hovering over any animal/mob!
+      const isVillagerHover = !!(mobHit && lookMob.type === 'villager');
+      const isInteractiveBlock = !!(targetDef && targetDef.interactive && !this.player.sneaking);
+      const useMode = isVillagerHover || (!mobHit && isInteractiveBlock);
+      const damageMode = mobHit;
+      this.ui.updateActionButtons(useMode, damageMode);
+
+      if (isVillagerHover) {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip(`${lookMob.profession || 'Villager'} — Tap USE to Trade`);
-      } else if (lookMob && (!this.currentTarget || lookMob.pos.distanceTo(eye) < this.currentTarget.dist)) {
+      } else if (mobHit) {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip(lookMob.label || lookMob.def.label || lookMob.type);
       } else if (this.currentTarget) {
@@ -712,18 +738,27 @@ class BlockCraftGame {
           this.currentTarget.y + 0.5,
           this.currentTarget.z + 0.5
         );
-        const def = getBlockDef(this.currentTarget.blockId);
-        this.ui.updateTargetTooltip(def ? def.name : '');
+        this.ui.updateTargetTooltip(targetDef ? targetDef.name : '');
       } else {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip('');
       }
 
       this.updateMining(dt, input.breaking);
-      const maxBuilds = this.settings.renderDistance > 8 ? 4 : 2;
+      const maxBuilds = this.settings.renderDistance > 8 ? 3 : 2;
       this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds);
       this.world.updateFurnaces(dt);
-      const curBiome = this.world.getBiomeAt(Math.floor(this.player.pos.x), Math.floor(this.player.pos.z));
+
+      // Cache biome lookup per 4x4 block cell (eliminates 120x/sec Simplex noise!)
+      const bx4 = Math.floor(this.player.pos.x) >> 2;
+      const bz4 = Math.floor(this.player.pos.z) >> 2;
+      if (bx4 !== this._cachedBiomeBx || bz4 !== this._cachedBiomeBz) {
+        this._cachedBiomeBx = bx4;
+        this._cachedBiomeBz = bz4;
+        this._cachedBiome = this.world.getBiomeAt(bx4 << 2, bz4 << 2);
+      }
+      const curBiome = this._cachedBiome;
+
       this.sky.update(dt, this.player.pos, curBiome);
       this.world.updateShaders(dt, this.sky);
       if (this.effects) {
@@ -731,11 +766,11 @@ class BlockCraftGame {
       }
       this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods);
 
-      this.ui.updateTopHUD(this.player, this.world, this.sky, this.currentFps);
+      this.ui.updateTopHUD(this.player, curBiome, this.sky, this.currentFps);
       this.minimapTimer += dt;
-      if (this.minimapTimer >= 0.14) {
+      if (this.minimapTimer >= 0.16) {
         this.minimapTimer = 0;
-        this.ui.renderMinimap(this.player, this.world, this.entities);
+        this.ui.renderMinimap(this.player, this.world, this.entities, curBiome);
       }
       if (this.player.headInWater || this.player.air < this.player.maxAir) {
         this.ui.updateStats();

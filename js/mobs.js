@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid } from './blocks.js';
 
+// Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
+const _scratchV1 = new THREE.Vector3();
+const _scratchV2 = new THREE.Vector3();
+
 export const VILLAGER_TRADES = {
   Farmer: [
     { give: 'wheat', giveCount: 4, get: 'emerald', getCount: 1 },
@@ -644,6 +648,7 @@ export class EntityManager {
 
     this.dropGeo = new THREE.BoxGeometry(0.28, 0.28, 0.28);
     this.dropSpriteGeo = new THREE.PlaneGeometry(0.36, 0.36);
+    this.dropSpriteMatCache = {};
     this.blockDropMat = textures
       ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
       : null;
@@ -829,18 +834,22 @@ export class EntityManager {
       mesh = new THREE.Mesh(geo, this.blockDropMat);
       mesh.castShadow = true;
     } else if (this.textures && def) {
-      // Crisp 3D crossed double-sided pixel-art sprite for foods, meats, fish, tools & flowers!
-      const tex = this.textures.getItemTexture(itemId);
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        alphaTest: 0.45,
-        side: THREE.DoubleSide
-      });
+      // Crisp 3D crossed double-sided pixel-art sprite (cached material per itemId!)
+      let mat = this.dropSpriteMatCache[itemId];
+      if (!mat) {
+        const tex = this.textures.getItemTexture(itemId);
+        mat = new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          alphaTest: 0.45,
+          side: THREE.DoubleSide
+        });
+        this.dropSpriteMatCache[itemId] = mat;
+      }
       mesh = new THREE.Group();
       const p1 = new THREE.Mesh(this.dropSpriteGeo, mat);
       const p2 = new THREE.Mesh(this.dropSpriteGeo, mat);
-      p2.position.z = 0.025; // subtle 3D pixel thickness!
+      p2.position.z = 0.025;
       mesh.add(p1, p2);
     } else {
       const mat = new THREE.MeshLambertMaterial({ color: this.getDropColor(itemId) });
@@ -876,14 +885,21 @@ export class EntityManager {
   raycastMob(origin, dir, maxDist = 4.2) {
     let best = null;
     let bestDist = maxDist;
-    const toMob = new THREE.Vector3();
+    const maxSq = (maxDist + 2.0) * (maxDist + 2.0);
 
-    for (const mob of this.mobs) {
-      const center = mob.pos.clone().add(new THREE.Vector3(0, mob.def.size[1] * 0.5, 0));
-      toMob.subVectors(center, origin);
-      const proj = toMob.dot(dir);
+    for (let i = 0; i < this.mobs.length; i++) {
+      const mob = this.mobs[i];
+      const cx = mob.pos.x;
+      const cy = mob.pos.y + mob.def.size[1] * 0.5;
+      const cz = mob.pos.z;
+      const dx = cx - origin.x;
+      const dy = cy - origin.y;
+      const dz = cz - origin.z;
+      const lenSq = dx * dx + dy * dy + dz * dz;
+      if (lenSq > maxSq) continue;
+      const proj = dx * dir.x + dy * dir.y + dz * dir.z;
       if (proj < 0 || proj > bestDist) continue;
-      const perpSq = toMob.lengthSq() - proj * proj;
+      const perpSq = lenSq - proj * proj;
       const rad = Math.max(mob.def.size[0], mob.def.size[2]) * 0.65;
       if (perpSq <= rad * rad) {
         bestDist = proj;
@@ -1315,10 +1331,10 @@ export class EntityManager {
         d.pos.y = ny;
       }
 
-      const toPlayer = new THREE.Vector3(player.pos.x, player.pos.y + 0.9, player.pos.z).sub(d.pos);
-      const dist = toPlayer.length();
-      if (dist < 2.6 && d.age > 0.25) {
-        d.pos.addScaledVector(toPlayer.normalize(), dt * 7.5);
+      _scratchV1.set(player.pos.x - d.pos.x, player.pos.y + 0.9 - d.pos.y, player.pos.z - d.pos.z);
+      const dist = _scratchV1.length();
+      if (dist < 2.6 && d.age > 0.25 && dist > 0.001) {
+        d.pos.addScaledVector(_scratchV1, (dt * 7.5) / dist);
       }
       if (dist < 0.85 && d.age > 0.2) {
         if (player.inventory.addItem(d.id, d.count)) {

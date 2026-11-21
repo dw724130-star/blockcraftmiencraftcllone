@@ -41,6 +41,7 @@ export class TextureManager {
     this.blockDropGeoCache = {}; // "blockId:size" -> BufferGeometry
     this.mobCoatCache = {}; // key -> THREE.CanvasTexture
     this.hudIcons = {}; // name -> dataURL
+    this.uiIcons = {}; // name -> dataURL (every UI button pixel art!)
     this.crackTextures = []; // 10 stages (0..9) of pixel-art block breaking cracks
 
     this.canvas = document.createElement('canvas');
@@ -61,6 +62,7 @@ export class TextureManager {
     this.buildItemIcons();
     this.buildCrackTextures();
     this.buildHudIcons();
+    this.buildUiIcons();
   }
 
   addTile(name, drawFn) {
@@ -1069,5 +1071,384 @@ export class TextureManager {
     };
     this.hudIcons.armor_full = renderGrid(armorFull, armorPal);
     this.hudIcons.armor_half = renderGrid(armorHalf, armorPal);
+  }
+
+  getUiIcon(name) {
+    return this.uiIcons[name] || this.hudIcons[name] || this.itemIcons[name] || '';
+  }
+
+  // Crisp 16x16 Pixel Art for EVERY UI Button, Tab, Action Control & Command (ZERO EMOJIS!)
+  buildUiIcons() {
+    const make = (drawFn) => {
+      const c = document.createElement('canvas');
+      c.width = 32;
+      c.height = 32;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      const p = (x, y, col, w = 1, h = 1) => {
+        ctx.fillStyle = col;
+        ctx.fillRect(x * 2, y * 2, w * 2, h * 2);
+      };
+      drawFn(p, ctx);
+      return c.toDataURL();
+    };
+
+    // 1. PLACE — Isometric pixel grass/dirt block with bright green placement highlight!
+    this.uiIcons.place = make((p) => {
+      // Outline
+      p(4, 2, '#141812', 8, 1);
+      p(2, 3, '#141812', 12, 2);
+      p(1, 5, '#141812', 14, 7);
+      p(3, 12, '#141812', 10, 2);
+      p(6, 14, '#141812', 4, 1);
+      // Top bright grass diamond
+      p(5, 3, '#72c944', 6, 1);
+      p(3, 4, '#63b538', 10, 2);
+      p(5, 6, '#529e2b', 6, 1);
+      p(6, 4, '#a2f06c', 3, 1);
+      // Left shaded dirt/grass face
+      p(2, 6, '#488725', 6, 2);
+      p(2, 8, '#8a5d36', 6, 4);
+      p(4, 12, '#734b29', 4, 1);
+      p(3, 9, '#694425', 2, 1);
+      // Right darker dirt/grass face
+      p(8, 6, '#396e1d', 6, 2);
+      p(8, 8, '#6b4526', 6, 4);
+      p(8, 12, '#57361d', 4, 1);
+      p(10, 10, '#4d2e17', 2, 1);
+      // Center seam highlight
+      p(7, 7, '#a8794c', 1, 6);
+    });
+
+    // 2. USE — Glowing interact hand / golden-teal activation spark (Villagers, Crafting Table, Furnace, Chest, Bed)
+    this.uiIcons.use = make((p) => {
+      // Pixel open hand reaching forward + golden interact sparkle!
+      p(5, 2, '#1f140d', 2, 6);
+      p(8, 1, '#1f140d', 2, 7);
+      p(11, 2, '#1f140d', 2, 6);
+      p(2, 6, '#1f140d', 3, 5);
+      p(4, 7, '#1f140d', 9, 7);
+      // Skin fill
+      p(6, 3, '#f0be96', 1, 5);
+      p(9, 2, '#f0be96', 1, 6);
+      p(12, 3, '#e3ad84', 1, 5);
+      p(3, 7, '#f0be96', 2, 3);
+      p(5, 8, '#e8b38a', 7, 5);
+      p(6, 9, '#ffd7b5', 4, 2);
+      p(5, 12, '#c48d66', 7, 1);
+      // Golden interact glint above fingers
+      p(2, 2, '#ffe066', 2, 1);
+      p(3, 1, '#fff5b8', 1, 3);
+      p(14, 1, '#5cf2f7', 1, 2);
+    });
+
+    // 3. MINE — Crisp pixel iron/diamond pickaxe!
+    this.uiIcons.mine = make((p) => {
+      // Handle (diagonal)
+      for (let i = 0; i < 9; i++) {
+        p(2 + i, 13 - i, '#2b1b0e', 2, 2);
+        p(2 + i, 13 - i, i % 2 === 0 ? '#9c6b36' : '#7d5225', 1, 1);
+      }
+      // Pickaxe steel/cyan head with dark outline
+      p(4, 1, '#162026', 8, 3);
+      p(10, 2, '#162026', 4, 4);
+      p(12, 5, '#162026', 3, 6);
+      p(5, 2, '#dce6f0', 6, 1);
+      p(6, 3, '#9fb0c2', 5, 1);
+      p(11, 3, '#ffffff', 2, 2);
+      p(13, 5, '#b8c8d8', 1, 5);
+      p(12, 4, '#5ce6ed', 1, 2);
+    });
+
+    // 4. DAMAGE — Gleaming crimson-edged pixel battle sword (when aiming at animals/mobs!)
+    this.uiIcons.damage = make((p) => {
+      // Pommel & hilt
+      p(2, 12, '#24140c', 3, 3);
+      p(3, 13, '#f5c731', 1, 1);
+      p(4, 10, '#6e451e', 2, 2);
+      // Crossguard
+      p(3, 8, '#1f1610', 3, 2);
+      p(6, 11, '#1f1610', 2, 3);
+      p(4, 9, '#f5c731', 4, 2);
+      p(5, 10, '#c7961a', 2, 2);
+      // Diagonal razor blade
+      for (let i = 0; i < 8; i++) {
+        p(6 + i, 9 - i, '#1f1014', 3, 3);
+      }
+      for (let i = 0; i < 8; i++) {
+        p(7 + i, 9 - i, '#e6eef5', 1, 2);
+        p(7 + i, 8 - i, '#ffffff', 1, 1);
+      }
+      // Crimson attack slash sparks!
+      p(2, 4, '#ff4d4d', 2, 1);
+      p(4, 3, '#ff8a80', 3, 1);
+      p(11, 11, '#ff4d4d', 2, 1);
+    });
+
+    // 5. JUMP — Crisp upward pixel boot/arrow
+    this.uiIcons.jump = make((p) => {
+      p(7, 2, '#0d1a26', 2, 12);
+      p(5, 4, '#0d1a26', 6, 3);
+      p(3, 6, '#0d1a26', 10, 3);
+      p(7, 3, '#e8f6ff', 2, 10);
+      p(6, 4, '#7dd3fc', 4, 2);
+      p(4, 6, '#38bdf8', 8, 2);
+      p(7, 4, '#ffffff', 2, 3);
+      p(5, 13, '#38bdf8', 6, 1);
+    });
+
+    // 6. SNEAK — Crisp downward pixel arrow
+    this.uiIcons.sneak = make((p) => {
+      p(7, 2, '#14181f', 2, 11);
+      p(3, 7, '#14181f', 10, 3);
+      p(5, 10, '#14181f', 6, 3);
+      p(7, 3, '#cbd5e1', 2, 9);
+      p(4, 8, '#94a3b8', 8, 2);
+      p(6, 10, '#e2e8f0', 4, 2);
+      p(7, 12, '#ffffff', 2, 1);
+    });
+
+    // 7. SPRINT — Golden pixel lightning bolt
+    this.uiIcons.sprint = make((p) => {
+      p(8, 1, '#261a05', 5, 2);
+      p(6, 3, '#261a05', 5, 3);
+      p(4, 6, '#261a05', 9, 3);
+      p(6, 9, '#261a05', 5, 3);
+      p(4, 12, '#261a05', 5, 3);
+      p(9, 2, '#fff08a', 3, 2);
+      p(7, 4, '#ffd54f', 3, 2);
+      p(5, 6, '#ffca28', 7, 2);
+      p(7, 8, '#ffb300', 3, 3);
+      p(5, 11, '#ff9800', 3, 3);
+      p(6, 6, '#ffffff', 2, 1);
+    });
+
+    // 8. MENU (Pause) — Pixel 3-bar bevel lines
+    this.uiIcons.menu = make((p) => {
+      for (const y of [3, 7, 11]) {
+        p(2, y, '#141414', 12, 3);
+        p(3, y + 1, '#f0f4f8', 10, 1);
+        p(3, y, '#ffffff', 10, 1);
+      }
+    });
+
+    // 9. CHAT — Pixel speech bubble
+    this.uiIcons.chat = make((p) => {
+      p(2, 2, '#141414', 12, 9);
+      p(4, 11, '#141414', 4, 3);
+      p(3, 3, '#f0f4f8', 10, 7);
+      p(5, 10, '#f0f4f8', 2, 3);
+      p(5, 5, '#475569', 6, 1);
+      p(5, 7, '#475569', 4, 1);
+    });
+
+    // 10. CAMERA (Perspective Eye) — Crisp pixel eye
+    this.uiIcons.camera = make((p) => {
+      p(4, 4, '#141414', 8, 8);
+      p(2, 6, '#141414', 12, 4);
+      p(3, 6, '#ffffff', 10, 4);
+      p(5, 5, '#ffffff', 6, 6);
+      p(6, 6, '#2563eb', 4, 4);
+      p(7, 7, '#0f172a', 2, 2);
+      p(6, 6, '#93c5fd', 1, 1);
+    });
+
+    // 11. MODS — Emerald pixel cog/addon block
+    this.uiIcons.mods = make((p) => {
+      p(6, 1, '#142614', 4, 14);
+      p(1, 6, '#142614', 14, 4);
+      p(3, 3, '#142614', 10, 10);
+      p(7, 2, '#52e052', 2, 12);
+      p(2, 7, '#52e052', 12, 2);
+      p(4, 4, '#3ab53a', 8, 8);
+      p(5, 5, '#8cff8c', 2, 2);
+      p(6, 6, '#182b18', 4, 4);
+    });
+
+    // 12. BAG / INVENTORY — Pixel leather adventurer backpack/chest
+    this.uiIcons.bag = make((p) => {
+      p(5, 2, '#24160b', 6, 2);
+      p(3, 4, '#24160b', 10, 10);
+      p(4, 5, '#b87638', 8, 8);
+      p(4, 5, '#d69652', 8, 3);
+      p(3, 8, '#3b2410', 10, 1);
+      p(7, 7, '#ffd54f', 2, 3);
+      p(7, 8, '#fff2a6', 1, 1);
+    });
+
+    // 13. DOTS (Hotbar Inventory Grid)
+    this.uiIcons.dots = make((p) => {
+      for (const y of [3, 7, 11]) {
+        for (const x of [3, 7, 11]) {
+          p(x, y, '#141414', 3, 3);
+          p(x, y, '#f0f4f8', 2, 2);
+        }
+      }
+    });
+
+    // 14. CLOSE (Pixel X)
+    this.uiIcons.close = make((p) => {
+      for (let i = 0; i < 8; i++) {
+        p(3 + i, 3 + i, '#1a0a0a', 3, 3);
+        p(10 - i, 3 + i, '#1a0a0a', 3, 3);
+      }
+      for (let i = 0; i < 8; i++) {
+        p(4 + i, 4 + i, '#ffffff', 1, 1);
+        p(11 - i, 4 + i, '#ffffff', 1, 1);
+      }
+    });
+
+    // 15. PLAY (Green pixel triangle)
+    this.uiIcons.play = make((p) => {
+      for (let i = 0; i < 6; i++) {
+        p(4 + i, 2 + i, '#142914', 2, 12 - i * 2);
+      }
+      for (let i = 0; i < 5; i++) {
+        p(5 + i, 3 + i, '#8cff66', 1, 10 - i * 2);
+      }
+    });
+
+    // 16. BOOK (Guide)
+    this.uiIcons.book = make((p) => {
+      p(2, 2, '#1f140a', 12, 12);
+      p(3, 3, '#8f4a24', 10, 10);
+      p(4, 3, '#f2ead8', 8, 8);
+      p(7, 3, '#bfa98a', 2, 8);
+      p(5, 5, '#64748b', 2, 1);
+      p(9, 5, '#64748b', 2, 1);
+      p(5, 7, '#64748b', 2, 1);
+      p(9, 7, '#64748b', 2, 1);
+    });
+
+    // 17. ARROWS (D-Pad + Crafting Arrow)
+    this.uiIcons.arrow_up = make((p) => {
+      for (let i = 0; i < 6; i++) p(7 - i, 3 + i, '#ffffff', 2 + i * 2, 1);
+      p(6, 9, '#cbd5e1', 4, 4);
+    });
+    this.uiIcons.arrow_down = make((p) => {
+      p(6, 3, '#cbd5e1', 4, 4);
+      for (let i = 0; i < 6; i++) p(2 + i, 7 + i, '#ffffff', 12 - i * 2, 1);
+    });
+    this.uiIcons.arrow_left = make((p) => {
+      for (let i = 0; i < 6; i++) p(3 + i, 7 - i, '#ffffff', 1, 2 + i * 2);
+      p(9, 6, '#cbd5e1', 4, 4);
+    });
+    this.uiIcons.arrow_right = make((p) => {
+      p(3, 6, '#cbd5e1', 4, 4);
+      for (let i = 0; i < 6; i++) p(7 + i, 2 + i, '#ffffff', 1, 12 - i * 2);
+    });
+    this.uiIcons.arrow_right_gold = make((p) => {
+      p(2, 5, '#2b1e05', 6, 6);
+      for (let i = 0; i < 6; i++) p(7 + i, 2 + i, '#2b1e05', 2, 12 - i * 2);
+      p(3, 6, '#ffd54f', 5, 4);
+      for (let i = 0; i < 5; i++) p(8 + i, 3 + i, '#ffe57f', 1, 10 - i * 2);
+    });
+
+    // 18. FURNACE FLAME
+    this.uiIcons.flame = make((p) => {
+      p(6, 1, '#ff5722', 4, 3);
+      p(4, 4, '#ff7043', 8, 5);
+      p(3, 8, '#f4511e', 10, 6);
+      p(5, 6, '#ffb300', 6, 7);
+      p(6, 9, '#fff176', 4, 4);
+      p(7, 11, '#ffffff', 2, 2);
+    });
+
+    // 19. TIME & WEATHER PIXEL ICONS
+    this.uiIcons.sunrise = make((p) => {
+      p(1, 10, '#2e4a7d', 14, 5);
+      p(1, 9, '#ff9e5e', 14, 2);
+      p(5, 5, '#ffd54f', 6, 5);
+      p(6, 4, '#fff176', 4, 4);
+      p(7, 2, '#ffe082', 2, 2);
+      p(3, 6, '#ffe082', 2, 1);
+      p(11, 6, '#ffe082', 2, 1);
+    });
+    this.uiIcons.sun = make((p) => {
+      p(5, 5, '#ffb300', 6, 6);
+      p(6, 6, '#fff176', 4, 4);
+      p(7, 1, '#ffd54f', 2, 3); p(7, 12, '#ffd54f', 2, 3);
+      p(1, 7, '#ffd54f', 3, 2); p(12, 7, '#ffd54f', 3, 2);
+      p(3, 3, '#ffd54f', 2, 2); p(11, 3, '#ffd54f', 2, 2);
+      p(3, 11, '#ffd54f', 2, 2); p(11, 11, '#ffd54f', 2, 2);
+    });
+    this.uiIcons.sunset = make((p) => {
+      p(1, 2, '#4a3d8c', 14, 4);
+      p(1, 6, '#d96b8a', 14, 3);
+      p(1, 9, '#ff9b54', 14, 2);
+      p(5, 7, '#ffe082', 6, 3);
+      p(1, 11, '#3b4f85', 14, 4);
+      p(4, 12, '#ffb574', 8, 1);
+      p(6, 13, '#ffd299', 4, 1);
+    });
+    this.uiIcons.moon = make((p) => {
+      p(4, 2, '#cbd5e1', 7, 12);
+      p(3, 4, '#e2e8f0', 9, 8);
+      p(7, 4, '#1e293b', 6, 8);
+      p(8, 3, '#1e293b', 4, 10);
+      p(12, 3, '#fff59d', 1, 1);
+      p(13, 10, '#fff59d', 1, 1);
+    });
+    this.uiIcons.rain = make((p) => {
+      p(4, 2, '#94a3b8', 8, 5);
+      p(2, 4, '#cbd5e1', 12, 4);
+      p(4, 9, '#38bdf8', 1, 3);
+      p(7, 10, '#38bdf8', 1, 4);
+      p(10, 9, '#38bdf8', 1, 3);
+      p(12, 11, '#7dd3fc', 1, 3);
+    });
+
+    // 20. COMMAND & MOD PIXEL ICONS
+    this.uiIcons.star = make((p) => {
+      p(7, 1, '#ffd54f', 2, 14);
+      p(1, 7, '#ffd54f', 14, 2);
+      p(4, 4, '#ffe57f', 8, 8);
+      p(6, 6, '#ffffff', 4, 4);
+    });
+    this.uiIcons.map = make((p) => {
+      p(2, 2, '#241a0d', 12, 12);
+      p(3, 3, '#e8d7a8', 10, 10);
+      p(4, 4, '#5da135', 4, 4);
+      p(8, 7, '#38bdf8', 4, 4);
+      p(6, 6, '#e53935', 2, 2);
+    });
+    this.uiIcons.paw = make((p) => {
+      p(5, 8, '#3d2414', 6, 5);
+      p(6, 9, '#b87642', 4, 3);
+      p(3, 4, '#b87642', 2, 3);
+      p(6, 3, '#b87642', 2, 3);
+      p(9, 3, '#b87642', 2, 3);
+      p(11, 5, '#b87642', 2, 3);
+    });
+    this.uiIcons.wing = make((p) => {
+      p(2, 4, '#e2e8f0', 10, 3);
+      p(4, 7, '#cbd5e1', 9, 3);
+      p(6, 10, '#94a3b8', 6, 2);
+      p(3, 5, '#ffffff', 6, 1);
+    });
+    this.uiIcons.axe = this.itemIcons.iron_axe || this.uiIcons.mine;
+    this.uiIcons.pickaxe = this.itemIcons.diamond_pickaxe || this.uiIcons.mine;
+    this.uiIcons.torch = this.itemIcons.torch || this.uiIcons.flame;
+    this.uiIcons.tnt = this.itemIcons.tnt || this.uiIcons.place;
+    this.uiIcons.heart = this.hudIcons.heart_full;
+
+    // 21. ARMOR SLOT SILHOUETTE PLACEHOLDERS (Pixel Art, No Emojis!)
+    this.uiIcons.slot_helmet = make((p) => {
+      p(4, 4, '#6b7280', 8, 6);
+      p(6, 7, '#1e222b', 4, 3);
+    });
+    this.uiIcons.slot_chestplate = make((p) => {
+      p(3, 3, '#6b7280', 10, 10);
+      p(6, 3, '#1e222b', 4, 2);
+    });
+    this.uiIcons.slot_leggings = make((p) => {
+      p(4, 3, '#6b7280', 8, 4);
+      p(4, 7, '#6b7280', 3, 6);
+      p(9, 7, '#6b7280', 3, 6);
+    });
+    this.uiIcons.slot_boots = make((p) => {
+      p(3, 8, '#6b7280', 4, 5);
+      p(9, 8, '#6b7280', 4, 5);
+    });
   }
 }

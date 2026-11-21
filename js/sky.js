@@ -37,16 +37,16 @@ export class SkySystem {
     this.sunLight = new THREE.DirectionalLight(0xfff4dc, 1.35);
     this.sunLight.position.set(55, 85, 35);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.mapSize.set(1024, 1024);
     this.sunLight.shadow.camera.near = 10;
-    this.sunLight.shadow.camera.far = 230;
-    const d = 58;
+    this.sunLight.shadow.camera.far = 200;
+    const d = 46;
     this.sunLight.shadow.camera.left = -d;
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;
     this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0007;
-    this.sunLight.shadow.normalBias = 0.035;
+    this.sunLight.shadow.bias = -0.0008;
+    this.sunLight.shadow.normalBias = 0.04;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
@@ -127,14 +127,18 @@ export class SkySystem {
         }
 
         float fbmCloud(vec2 p) {
-          float v = 0.0;
-          float amp = 0.52;
-          mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-          for (int i = 0; i < 5; i++) {
-            v += amp * noise2D(p);
-            p = rot * p * 2.04 + vec2(17.1, 31.7);
-            amp *= 0.5;
-          }
+          float v = 0.54 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
+          v += 0.28 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
+          v += 0.14 * noise2D(p);
+          return v;
+        }
+
+        float fbmCloudFast(vec2 p) {
+          float v = 0.64 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
+          v += 0.32 * noise2D(p);
           return v;
         }
 
@@ -186,16 +190,19 @@ export class SkySystem {
             vec2 drift = vec2(uTime * 0.0085, uTime * 0.0032);
 
             float n1 = fbmCloud(cloudUV * 1.15 + drift);
-            float n2 = fbmCloud(cloudUV * 2.35 - drift * 0.65 + vec2(4.2, 9.1));
+            float n2 = fbmCloudFast(cloudUV * 2.35 - drift * 0.65 + vec2(4.2, 9.1));
             float rawDensity = n1 * 0.72 + n2 * 0.28;
 
             float thresh = mix(0.49, 0.36, uRainFactor);
             float cloudAlpha = smoothstep(thresh, thresh + 0.22, rawDensity);
 
-            // Directional pseudo-volumetric self-shadowing: sample slightly toward the sun!
-            vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.075;
-            float nSun = fbmCloud((cloudUV + sunStep) * 1.15 + drift) * 0.72 + n2 * 0.28;
-            float selfLight = clamp((rawDensity - nSun) * 3.4 + 0.58, 0.0, 1.0);
+            // Fast directional volumetric self-shadowing (only evaluate when cloud is visible!)
+            float selfLight = 0.65;
+            if (cloudAlpha > 0.01) {
+              vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.075;
+              float nSun = fbmCloudFast((cloudUV + sunStep) * 1.15 + drift) * 0.72 + n2 * 0.28;
+              selfLight = clamp((rawDensity - nSun) * 3.4 + 0.58, 0.0, 1.0);
+            }
 
             // Warm sunlit rim + silver lining around sun
             float silverLining = pow(sunDot, 9.0) * (1.0 - cloudAlpha * 0.45) * sunVisible;
@@ -298,6 +305,21 @@ export class SkySystem {
     this._cloudShadow = new THREE.Color();
     this._hemiSky = new THREE.Color();
     this._hemiGround = new THREE.Color();
+    this._tmp = new THREE.Color();
+    this._shaderParams = {
+      sunDir: this.skyUniforms.uSunDir.value,
+      topColor: this.skyUniforms.uTopColor.value,
+      midColor: this.skyUniforms.uMidColor.value,
+      horizonColor: this.skyUniforms.uHorizonColor.value,
+      sunsetColor: this.skyUniforms.uSunsetColor.value,
+      sunColor: this.skyUniforms.uSunColor.value,
+      cloudLitColor: this.skyUniforms.uCloudLitColor.value,
+      cloudShadowColor: this.skyUniforms.uCloudShadowColor.value,
+      dayFactor: 1.0,
+      sunsetFactor: 0.0,
+      rainFactor: 0.0,
+      cloudTime: 0.0
+    };
   }
 
   isNight() {
@@ -324,20 +346,11 @@ export class SkySystem {
   }
 
   getShaderParams() {
-    return {
-      sunDir: this.skyUniforms.uSunDir.value,
-      topColor: this.skyUniforms.uTopColor.value,
-      midColor: this.skyUniforms.uMidColor.value,
-      horizonColor: this.skyUniforms.uHorizonColor.value,
-      sunsetColor: this.skyUniforms.uSunsetColor.value,
-      sunColor: this.skyUniforms.uSunColor.value,
-      cloudLitColor: this.skyUniforms.uCloudLitColor.value,
-      cloudShadowColor: this.skyUniforms.uCloudShadowColor.value,
-      dayFactor: this.skyUniforms.uDayFactor.value,
-      sunsetFactor: this.skyUniforms.uSunsetFactor.value,
-      rainFactor: this.skyUniforms.uRainFactor.value,
-      cloudTime: this.cloudTime
-    };
+    this._shaderParams.dayFactor = this.skyUniforms.uDayFactor.value;
+    this._shaderParams.sunsetFactor = this.skyUniforms.uSunsetFactor.value;
+    this._shaderParams.rainFactor = this.skyUniforms.uRainFactor.value;
+    this._shaderParams.cloudTime = this.cloudTime;
+    return this._shaderParams;
   }
 
   update(dt, playerPos, biome = 'Plains') {
@@ -372,32 +385,30 @@ export class SkySystem {
     this.skyUniforms.uDayFactor.value = dayFactor;
     this.skyUniforms.uSunsetFactor.value = sunsetFactor;
 
-    // Palette inspired by BSL / Complementary Shaders (Images 1 & 2)
-    this._dayTop.setHex(0x245ec2).lerp(new THREE.Color(0x465569), rainFactor * 0.8);
-    this._dayMid.setHex(0x63a8ed).lerp(new THREE.Color(0x647488), rainFactor * 0.8);
-    this._dayHor.setHex(0xd4e8fa).lerp(new THREE.Color(0x8898ab), rainFactor * 0.8);
+    // Palette inspired by BSL / Complementary Shaders — ZERO per-frame allocations!
+    const tmp = this._tmp;
+    this._dayTop.setHex(0x245ec2).lerp(tmp.setHex(0x465569), rainFactor * 0.8);
+    this._dayMid.setHex(0x63a8ed).lerp(tmp.setHex(0x647488), rainFactor * 0.8);
+    this._dayHor.setHex(0xd4e8fa).lerp(tmp.setHex(0x8898ab), rainFactor * 0.8);
 
-    // Subtle Biome Atmosphere Tint
     if (this.biomeEffects && rainFactor < 0.5) {
       if (biome === 'Desert') {
-        this._dayHor.lerp(new THREE.Color(0xf5e3ba), 0.42);
-        this._dayMid.lerp(new THREE.Color(0x88bfe8), 0.3);
+        this._dayHor.lerp(tmp.setHex(0xf5e3ba), 0.42);
+        this._dayMid.lerp(tmp.setHex(0x88bfe8), 0.3);
       } else if (biome === 'Snowy Taiga') {
-        this._dayHor.lerp(new THREE.Color(0xe2f1ff), 0.45);
-        this._dayTop.lerp(new THREE.Color(0x4a82c9), 0.3);
+        this._dayHor.lerp(tmp.setHex(0xe2f1ff), 0.45);
+        this._dayTop.lerp(tmp.setHex(0x4a82c9), 0.3);
       } else if (biome === 'Forest' || biome === 'Birch Forest') {
-        this._dayHor.lerp(new THREE.Color(0xbce6dc), 0.2);
+        this._dayHor.lerp(tmp.setHex(0xbce6dc), 0.2);
       } else if (biome === 'Mountains') {
-        this._dayTop.lerp(new THREE.Color(0x1b4fb8), 0.35);
+        this._dayTop.lerp(tmp.setHex(0x1b4fb8), 0.35);
       }
     }
 
-    // Golden-Hour & Dreamy Sunset Palette (warm peach/gold horizon -> rose/violet sky!)
     this._sunsetHor.setHex(0xffb574);
     this._sunsetMid.setHex(0xd47d9e);
     this._sunsetTop.setHex(0x3b488c);
 
-    // Blend Night -> Day -> Sunset
     const topCol = this.skyUniforms.uTopColor.value.copy(this._nightTop).lerp(this._dayTop, dayFactor);
     const midCol = this.skyUniforms.uMidColor.value.copy(this._nightMid).lerp(this._dayMid, dayFactor);
     const horCol = this.skyUniforms.uHorizonColor.value.copy(this._nightHor).lerp(this._dayHor, dayFactor);
@@ -407,52 +418,48 @@ export class SkySystem {
     midCol.lerp(this._sunsetMid, clearSunset * 0.82);
     horCol.lerp(this._sunsetHor, clearSunset * 0.92);
 
-    this.skyUniforms.uSunsetColor.value.setHex(0xff9b54).lerp(new THREE.Color(0xffcfa0), 0.35);
-    this._sunCol.setHex(0xfff6dc).lerp(new THREE.Color(0xffb86b), clearSunset * 0.88);
+    this.skyUniforms.uSunsetColor.value.setHex(0xff9b54).lerp(tmp.setHex(0xffcfa0), 0.35);
+    this._sunCol.setHex(0xfff6dc).lerp(tmp.setHex(0xffb86b), clearSunset * 0.88);
     this.skyUniforms.uSunColor.value.copy(this._sunCol);
 
-    // Volumetric Cloud Lighting (warm golden-cream tops, soft violet-blue undersides!)
     this._cloudLit.setHex(0x1f2b47)
-      .lerp(new THREE.Color(0xfffcf5), dayFactor)
-      .lerp(new THREE.Color(0xffd2b3), clearSunset * 0.85)
-      .lerp(new THREE.Color(0x7c8a9b), rainFactor * 0.75);
+      .lerp(tmp.setHex(0xfffcf5), dayFactor)
+      .lerp(tmp.setHex(0xffd2b3), clearSunset * 0.85)
+      .lerp(tmp.setHex(0x7c8a9b), rainFactor * 0.75);
 
     this._cloudShadow.setHex(0x0c1326)
-      .lerp(new THREE.Color(0x88a4c7), dayFactor)
-      .lerp(new THREE.Color(0x876c96), clearSunset * 0.85)
-      .lerp(new THREE.Color(0x4c5866), rainFactor * 0.75);
+      .lerp(tmp.setHex(0x88a4c7), dayFactor)
+      .lerp(tmp.setHex(0x876c96), clearSunset * 0.85)
+      .lerp(tmp.setHex(0x4c5866), rainFactor * 0.75);
 
     this.skyUniforms.uCloudLitColor.value.copy(this._cloudLit);
     this.skyUniforms.uCloudShadowColor.value.copy(this._cloudShadow);
 
-    // Match scene background & fog smoothly to atmospheric horizon
     this.skyColor.copy(horCol);
     this.scene.background = this.skyColor;
     this.fog.color.copy(horCol);
 
-    // Directional Sun & Hemisphere Lighting
     const rainDim = 1.0 - rainFactor * 0.42;
     const shaderBoost = this.shaderMode === 'ultra' ? 1.28 : (this.shaderMode === 'enhanced' ? 1.16 : 1.0);
     this.sunLight.intensity = (0.16 + dayFactor * 1.12) * rainDim * shaderBoost;
     this.sunLight.color.setHex(0x9ab8ff)
-      .lerp(new THREE.Color(0xfff5e0), dayFactor)
-      .lerp(new THREE.Color(0xffa65c), clearSunset * 0.82);
+      .lerp(tmp.setHex(0xfff5e0), dayFactor)
+      .lerp(tmp.setHex(0xffa65c), clearSunset * 0.82);
 
-    // Texel-snapped shadow camera follows player smoothly without shimmer!
     const snapX = Math.round(playerPos.x);
     const snapY = Math.round(playerPos.y);
     const snapZ = Math.round(playerPos.z);
     const lightDir = dayFactor > 0.08 ? this.skyUniforms.uSunDir.value : this.skyUniforms.uMoonDir.value;
     this.sunLight.position.set(
-      snapX + lightDir.x * 85,
-      snapY + Math.max(26, lightDir.y * 85),
-      snapZ + lightDir.z * 85
+      snapX + lightDir.x * 80,
+      snapY + Math.max(26, lightDir.y * 80),
+      snapZ + lightDir.z * 80
     );
     this.sunLight.target.position.set(snapX, snapY, snapZ);
     this.sunLight.target.updateMatrixWorld();
 
-    this._hemiSky.copy(midCol).lerp(new THREE.Color(0xdcf0ff), 0.35);
-    this._hemiGround.setHex(0x212926).lerp(new THREE.Color(0x63704d), dayFactor).lerp(new THREE.Color(0x7a5646), clearSunset * 0.55);
+    this._hemiSky.copy(midCol).lerp(tmp.setHex(0xdcf0ff), 0.35);
+    this._hemiGround.setHex(0x212926).lerp(tmp.setHex(0x63704d), dayFactor).lerp(tmp.setHex(0x7a5646), clearSunset * 0.55);
     this.hemiLight.color.copy(this._hemiSky);
     this.hemiLight.groundColor.copy(this._hemiGround);
     this.hemiLight.intensity = (0.34 + dayFactor * 0.58) * rainDim;

@@ -53,9 +53,10 @@ export class EffectsManager {
     this.ambientPoints = new THREE.Points(geo, this.ambientMat);
     this.scene.add(this.ambientPoints);
 
-    // 2. Pixel-Art Block Break & Mining Chip Particles
+    // 2. Pixel-Art Block Break & Mining Chip Particles (cached UV crumb geometries!)
     this.bursts = [];
     this.cubeGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+    this.crumbGeoCache = {};
     this.atlasMat = textures
       ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
       : null;
@@ -71,21 +72,26 @@ export class EffectsManager {
   makeCrumbGeometry(blockDef) {
     const faceName = blockDef?.faces?.side || blockDef?.faces?.all || blockDef?.faces?.top;
     if (!this.textures || !faceName) return this.cubeGeo;
-    const tile = this.textures.getUV(faceName);
-    const geo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
-    const uvAttr = geo.attributes.uv;
-    // Pick a random 4x4 pixel patch inside the 16x16 block tile!
-    const uSpan = (tile.u1 - tile.u0) * 0.28;
-    const vSpan = (tile.v1 - tile.v0) * 0.28;
-    const uOff = tile.u0 + Math.random() * ((tile.u1 - tile.u0) - uSpan);
-    const vOff = tile.v0 + Math.random() * ((tile.v1 - tile.v0) - vSpan);
-    for (let i = 0; i < uvAttr.count; i++) {
-      const u = uvAttr.getX(i);
-      const v = uvAttr.getY(i);
-      uvAttr.setXY(i, uOff + u * uSpan, vOff + v * vSpan);
+    let pool = this.crumbGeoCache[faceName];
+    if (!pool) {
+      pool = [];
+      const tile = this.textures.getUV(faceName);
+      const uSpan = (tile.u1 - tile.u0) * 0.28;
+      const vSpan = (tile.v1 - tile.v0) * 0.28;
+      for (let k = 0; k < 6; k++) {
+        const geo = new THREE.BoxGeometry(0.13, 0.13, 0.13);
+        const uvAttr = geo.attributes.uv;
+        const uOff = tile.u0 + ((k * 0.29) % 0.72) * (tile.u1 - tile.u0);
+        const vOff = tile.v0 + ((k * 0.43) % 0.72) * (tile.v1 - tile.v0);
+        for (let i = 0; i < uvAttr.count; i++) {
+          uvAttr.setXY(i, uOff + uvAttr.getX(i) * uSpan, vOff + uvAttr.getY(i) * vSpan);
+        }
+        uvAttr.needsUpdate = true;
+        pool.push(geo);
+      }
+      this.crumbGeoCache[faceName] = pool;
     }
-    uvAttr.needsUpdate = true;
-    return geo;
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   spawnBlockBreak(x, y, z, blockDefOrColor = 0x999999) {
@@ -96,7 +102,7 @@ export class EffectsManager {
       color: typeof blockDefOrColor === 'number' ? blockDefOrColor : 0x999999
     });
 
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 10; i++) {
       const geo = useAtlas ? this.makeCrumbGeometry(blockDefOrColor) : this.cubeGeo;
       const m = new THREE.Mesh(geo, useAtlas ? this.atlasMat : fallbackMat);
       m.position.set(
@@ -107,7 +113,6 @@ export class EffectsManager {
       this.burstGroup.add(m);
       this.bursts.push({
         mesh: m,
-        ownGeo: useAtlas,
         vx: (Math.random() - 0.5) * 4.8,
         vy: 1.9 + Math.random() * 3.6,
         vz: (Math.random() - 0.5) * 4.8,
@@ -118,7 +123,7 @@ export class EffectsManager {
 
   // Live pixel-art chips spraying from the block face while actively mining!
   spawnMiningChip(x, y, z, nx, ny, nz, blockDef) {
-    if (!this.enabled || !this.atlasMat || !blockDef) return;
+    if (!this.enabled || !this.atlasMat || !blockDef || this.bursts.length > 48) return;
     for (let i = 0; i < 2; i++) {
       const geo = this.makeCrumbGeometry(blockDef);
       const m = new THREE.Mesh(geo, this.atlasMat);
@@ -131,7 +136,6 @@ export class EffectsManager {
       this.burstGroup.add(m);
       this.bursts.push({
         mesh: m,
-        ownGeo: true,
         vx: nx * (1.2 + Math.random() * 1.4) + (Math.random() - 0.5) * 2.2,
         vy: 1.4 + Math.random() * 2.0 + ny * 0.8,
         vz: nz * (1.2 + Math.random() * 1.4) + (Math.random() - 0.5) * 2.2,
@@ -147,7 +151,6 @@ export class EffectsManager {
       p.life -= dt;
       if (p.life <= 0) {
         this.burstGroup.remove(p.mesh);
-        if (p.ownGeo) p.mesh.geometry.dispose();
         this.bursts.splice(i, 1);
         continue;
       }

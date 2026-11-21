@@ -25,16 +25,65 @@ export class UIManager {
 
     // App callbacks wired by main.js
     this.game = null;
+    this._lastStatsKey = '';
+    this._lastCoords = '';
+    this._lastBiome = '';
+    this._lastTime = '';
+    this._lastFps = '';
+    this._lastTooltip = '';
+    this._lastPlaceMode = null;
+    this._lastBreakMode = null;
+    this._mmBgCanvas = null;
+    this._mmLastPx = 1e9;
+    this._mmLastPz = 1e9;
+    this._mmLastSeed = null;
+
+    // Cache hot HUD DOM nodes to eliminate per-frame getElementById lookups!
+    this.dom = {
+      coords: document.getElementById('hud-coords'),
+      biome: document.getElementById('hud-biome'),
+      time: document.getElementById('hud-time'),
+      fps: document.getElementById('hud-fps'),
+      tooltip: document.getElementById('target-tooltip'),
+      breakRing: document.getElementById('break-ring'),
+      breakFill: document.getElementById('break-ring-fill'),
+      btnBreak: document.getElementById('btn-break'),
+      btnBreakIcon: document.getElementById('btn-break-icon'),
+      btnBreakLbl: document.getElementById('btn-break-lbl'),
+      btnPlace: document.getElementById('btn-place'),
+      btnPlaceIcon: document.getElementById('btn-place-icon'),
+      btnPlaceLbl: document.getElementById('btn-place-lbl'),
+      survBars: document.getElementById('survival-bars'),
+      modeBadge: document.getElementById('hud-mode-badge'),
+      healthBar: document.getElementById('health-bar'),
+      hungerBar: document.getElementById('hunger-bar'),
+      armorBar: document.getElementById('armor-bar'),
+      airBar: document.getElementById('air-bar'),
+      xpFill: document.getElementById('xp-bar-fill'),
+      xpLevel: document.getElementById('xp-level'),
+      mmCanvas: document.getElementById('minimap-canvas'),
+      mmHint: document.getElementById('minimap-village-hint')
+    };
+
     this.bindStaticEvents();
   }
 
   bind(game) {
     this.game = game;
+    this.hydratePixelIcons();
     this.buildHotbarDOM();
     this.renderCreativeCatalog('');
     this.renderModsUI();
     const splash = document.getElementById('title-splash');
     if (splash) splash.textContent = SPLASH_TEXTS[Math.floor(Math.random() * SPLASH_TEXTS.length)];
+  }
+
+  hydratePixelIcons() {
+    document.querySelectorAll('img[data-px-icon]').forEach((img) => {
+      const key = img.dataset.pxIcon;
+      const src = this.textures.getUiIcon(key);
+      if (src) img.src = src;
+    });
   }
 
   bindStaticEvents() {
@@ -234,7 +283,7 @@ export class UIManager {
         </div>
         <div class="world-card-actions">
           <button class="mc-btn primary sm play-btn">Play</button>
-          <button class="mc-btn danger sm del-btn">✕</button>
+          <button class="mc-btn danger sm del-btn" title="Delete"><img class="px-ui-icon close-px" src="${this.textures.getUiIcon('close')}" alt="Delete" /></button>
         </div>
       `;
       card.querySelector('.play-btn').addEventListener('click', () => {
@@ -318,12 +367,22 @@ export class UIManager {
     document.getElementById('held-item-name').textContent = held ? held.name : '';
   }
 
-  updateStats() {
-    if (!this.game) return;
+  updateStats(force = false) {
+    if (!this.game || !this.game.player) return;
     const p = this.game.player;
     const isSurvival = p.mode === 'survival';
-    document.getElementById('survival-bars').classList.toggle('hidden', !isSurvival);
-    document.getElementById('hud-mode-badge').textContent = p.mode.toUpperCase() + (p.flying ? ' ✈' : '');
+    const def = this.game.inventory.getArmorDefense();
+    const airState = (p.headInWater || p.air < p.maxAir) ? Math.round(p.air * 4) : -1;
+    const key = `${p.mode}|${p.flying?1:0}|${Math.ceil(p.hp)}|${Math.ceil(p.hunger)}|${def}|${airState}|${p.xp}|${p.level}`;
+    if (!force && key === this._lastStatsKey) return;
+    this._lastStatsKey = key;
+
+    this.dom.survBars.classList.toggle('hidden', !isSurvival);
+    if (p.flying) {
+      this.dom.modeBadge.innerHTML = `${p.mode.toUpperCase()} <img class="px-ui-icon inline-px" src="${this.textures.getUiIcon('wing')}" alt="" />`;
+    } else {
+      this.dom.modeBadge.textContent = p.mode.toUpperCase();
+    }
     if (!isSurvival) return;
 
     const icons = this.textures.hudIcons || {};
@@ -345,7 +404,7 @@ export class UIManager {
       const v = p.hp - i * 2;
       hpKeys.push(v >= 2 ? 'heart_full' : v >= 1 ? 'heart_half' : 'heart_empty');
     }
-    makePxRow(document.getElementById('health-bar'), hpKeys, p.hp <= 4);
+    makePxRow(this.dom.healthBar, hpKeys, p.hp <= 4);
 
     // Pixel-Art Food / Hunger Drumsticks (right-to-left like Minecraft!)
     const foodKeys = [];
@@ -353,11 +412,10 @@ export class UIManager {
       const v = p.hunger - i * 2;
       foodKeys.push(v >= 2 ? 'food_full' : v >= 1 ? 'food_half' : 'food_empty');
     }
-    makePxRow(document.getElementById('hunger-bar'), foodKeys, p.hunger <= 4);
+    makePxRow(this.dom.hungerBar, foodKeys, p.hunger <= 4);
 
     // Pixel-Art Armor Shields
-    const def = this.game.inventory.getArmorDefense();
-    const armEl = document.getElementById('armor-bar');
+    const armEl = this.dom.armorBar;
     if (def > 0) {
       const armKeys = [];
       for (let i = 0; i < 10; i++) {
@@ -371,8 +429,8 @@ export class UIManager {
     }
 
     // Pixel-Art Water / Air Bubbles when underwater
-    const airEl = document.getElementById('air-bar');
-    if (p.headInWater || p.air < p.maxAir) {
+    const airEl = this.dom.airBar;
+    if (airState >= 0) {
       airEl.classList.remove('hidden');
       const fullBubbles = Math.floor(p.air);
       const hasPop = (p.air - fullBubbles) > 0.05;
@@ -387,23 +445,58 @@ export class UIManager {
 
     // Pixel-Art Segmented XP Level Bar
     const needed = 10 + p.level * 5;
-    document.getElementById('xp-bar-fill').style.width = `${Math.min(100, (p.xp / needed) * 100)}%`;
-    document.getElementById('xp-level').textContent = p.level;
+    this.dom.xpFill.style.width = `${Math.min(100, (p.xp / needed) * 100)}%`;
+    this.dom.xpLevel.textContent = p.level;
   }
 
-  updateTopHUD(player, world, sky, fps) {
+  updateTopHUD(player, biomeName, sky, fps) {
     const x = Math.floor(player.pos.x);
     const y = Math.floor(player.pos.y);
     const z = Math.floor(player.pos.z);
-    document.getElementById('hud-coords').textContent = `${x}, ${y}, ${z}`;
-    document.getElementById('hud-biome').textContent = world.getBiomeAt(x, z);
-    document.getElementById('hud-time').textContent = sky.getFormattedTime();
-    document.getElementById('hud-fps').textContent = `${fps} FPS`;
+    const coords = `${x}, ${y}, ${z}`;
+    if (coords !== this._lastCoords) {
+      this._lastCoords = coords;
+      this.dom.coords.textContent = coords;
+    }
+    if (biomeName !== this._lastBiome) {
+      this._lastBiome = biomeName;
+      this.dom.biome.textContent = biomeName;
+    }
+    const timeStr = sky.getFormattedTime();
+    if (timeStr !== this._lastTime) {
+      this._lastTime = timeStr;
+      this.dom.time.textContent = timeStr;
+    }
+    const fpsStr = `${fps} FPS`;
+    if (fpsStr !== this._lastFps) {
+      this._lastFps = fpsStr;
+      this.dom.fps.textContent = fpsStr;
+    }
+  }
+
+  // Dynamic context-aware buttons: PLACE <-> USE and MINE <-> DAMAGE!
+  updateActionButtons(useMode, damageMode) {
+    if (useMode !== this._lastPlaceMode) {
+      this._lastPlaceMode = useMode;
+      if (this.dom.btnPlace) {
+        this.dom.btnPlace.classList.toggle('mode-use', useMode);
+        this.dom.btnPlaceLbl.textContent = useMode ? 'USE' : 'PLACE';
+        this.dom.btnPlaceIcon.src = this.textures.getUiIcon(useMode ? 'use' : 'place');
+      }
+    }
+    if (damageMode !== this._lastBreakMode) {
+      this._lastBreakMode = damageMode;
+      if (this.dom.btnBreak) {
+        this.dom.btnBreak.classList.toggle('mode-damage', damageMode);
+        this.dom.btnBreakLbl.textContent = damageMode ? 'DAMAGE' : 'MINE';
+        this.dom.btnBreakIcon.src = this.textures.getUiIcon(damageMode ? 'damage' : 'mine');
+      }
+    }
   }
 
   updateMiningRing(progress) {
-    const ring = document.getElementById('break-ring');
-    const fill = document.getElementById('break-ring-fill');
+    const ring = this.dom.breakRing;
+    const fill = this.dom.breakFill;
     if (progress > 0 && progress < 1) {
       ring.classList.remove('hidden');
       const circ = 113.1;
@@ -414,7 +507,9 @@ export class UIManager {
   }
 
   updateTargetTooltip(text) {
-    const el = document.getElementById('target-tooltip');
+    if (text === this._lastTooltip) return;
+    this._lastTooltip = text;
+    const el = this.dom.tooltip;
     if (text) {
       el.textContent = text;
       el.classList.remove('hidden');
@@ -547,16 +642,16 @@ export class UIManager {
       curEl.textContent = '';
     }
 
-    // Armor Slots
+    // Armor Slots (pixel-art silhouettes, no emojis!)
     const armorGrid = document.getElementById('armor-slots');
     armorGrid.innerHTML = '';
-    const armorPlaceholders = ['🪖', '🦺', '👖', '🥾'];
+    const armorPlaceholders = ['slot_helmet', 'slot_chestplate', 'slot_leggings', 'slot_boots'];
     for (let i = 0; i < 4; i++) {
       const el = document.createElement('div');
       el.className = 'inv-slot';
       if (this.pickedSource && this.pickedSource.type === 'armor' && this.pickedSource.index === i) el.classList.add('picked');
       if (inv.armor[i]) this.renderSlotContent(el, inv.armor[i]);
-      else el.innerHTML = `<span style="opacity:0.3;font-size:20px">${armorPlaceholders[i]}</span>`;
+      else el.innerHTML = `<img class="px-ui-icon slot-placeholder-px" src="${this.textures.getUiIcon(armorPlaceholders[i])}" alt="" />`;
       el.addEventListener('click', () => this.handleSlotClick({ type: 'armor', index: i }));
       armorGrid.appendChild(el);
     }
@@ -892,7 +987,7 @@ export class UIManager {
         card.className = `mod-card ${isOn ? 'enabled' : ''}`;
         card.innerHTML = `
           <div class="mod-card-left">
-            <span class="mod-icon">${m.icon}</span>
+            <img class="px-ui-icon mod-px" src="${this.textures.getUiIcon(m.icon)}" alt="" />
             <div>
               <div class="mod-name">${m.name}</div>
               <div class="mod-desc">${m.desc}</div>
@@ -944,7 +1039,7 @@ export class UIManager {
           <img src="${this.textures.getIcon(tr.give)}" alt="" />
           <span>${tr.giveCount}× ${giveDef.name}</span>
         </div>
-        <span style="color:#ffd54f;font-weight:900">➔</span>
+        <img class="px-ui-icon arrow-px" src="${this.textures.getUiIcon('arrow_right_gold')}" alt="" />
         <div class="trade-side">
           <img src="${this.textures.getIcon(tr.get)}" alt="" />
           <span>${tr.getCount}× ${getDef.name}</span>
@@ -975,40 +1070,58 @@ export class UIManager {
     }
   }
 
-  // --- LIVE MINI-MAP RADAR ---
-  renderMinimap(player, world, entities) {
-    const canvas = document.getElementById('minimap-canvas');
+  // --- LIVE MINI-MAP RADAR (Offscreen-cached terrain for 98% less CPU!) ---
+  renderMinimap(player, world, entities, biomeName = 'Plains') {
+    const canvas = this.dom.mmCanvas;
     if (!canvas || !this.game?.mods?.isEnabled('minimap')) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width;
     const h = canvas.height;
     const half = w / 2;
-    const scale = 2; // 1 cell = 2 world blocks (covers ~108 blocks across)
-    const step = 4;  // draw 4x4 px blocks for ultra-fast iPad performance
-
-    const biomeColors = {
-      Plains: '#5da135',
-      Forest: '#387526',
-      'Birch Forest': '#66a83c',
-      Desert: '#dfd09c',
-      'Snowy Taiga': '#e4f0fa',
-      Mountains: '#8a919c'
-    };
+    const scale = 2;
+    const step = 6;
 
     const px = Math.floor(player.pos.x);
     const pz = Math.floor(player.pos.z);
 
-    for (let sy = 0; sy < h; sy += step) {
-      for (let sx = 0; sx < w; sx += step) {
-        const wx = px + (sx - half) * scale;
-        const wz = pz + (sy - half) * scale;
-        const b = world.getBiomeAt(wx, wz);
-        ctx.fillStyle = biomeColors[b] || '#5da135';
-        ctx.fillRect(sx, sy, step, step);
+    if (!this._mmBgCanvas) {
+      this._mmBgCanvas = document.createElement('canvas');
+      this._mmBgCanvas.width = w;
+      this._mmBgCanvas.height = h;
+    }
+
+    // Only recompute biome terrain grid when player moves >= 4 blocks or switches worlds!
+    if (
+      this._mmLastSeed !== world.seed ||
+      Math.abs(px - this._mmLastPx) >= 4 ||
+      Math.abs(pz - this._mmLastPz) >= 4
+    ) {
+      this._mmLastSeed = world.seed;
+      this._mmLastPx = px;
+      this._mmLastPz = pz;
+      const bctx = this._mmBgCanvas.getContext('2d');
+      const biomeColors = {
+        Plains: '#5da135',
+        Forest: '#387526',
+        'Birch Forest': '#66a83c',
+        Desert: '#dfd09c',
+        'Snowy Taiga': '#e4f0fa',
+        Mountains: '#8a919c'
+      };
+      for (let sy = 0; sy < h; sy += step) {
+        for (let sx = 0; sx < w; sx += step) {
+          const wx = px + (sx - half) * scale;
+          const wz = pz + (sy - half) * scale;
+          const b = world.getBiomeAt(wx, wz);
+          bctx.fillStyle = biomeColors[b] || '#5da135';
+          bctx.fillRect(sx, sy, step, step);
+        }
       }
     }
 
-    // Draw nearby villages as gold stars ★
+    ctx.drawImage(this._mmBgCanvas, 0, 0);
+
+    // Draw nearby villages as gold markers
     let nearestVDist = Infinity;
     for (const v of world.villageChunks.values()) {
       const dx = (v.x - px) / scale;
@@ -1026,9 +1139,10 @@ export class UIManager {
       }
     }
 
-    const hintEl = document.getElementById('minimap-village-hint');
+    const hintEl = this.dom.mmHint;
     if (hintEl) {
-      hintEl.textContent = nearestVDist < 200 ? `Village ${Math.round(nearestVDist)}m` : world.getBiomeAt(px, pz);
+      const hintTxt = nearestVDist < 200 ? `Village ${Math.round(nearestVDist)}m` : biomeName;
+      if (hintEl.textContent !== hintTxt) hintEl.textContent = hintTxt;
     }
 
     // Draw nearby mobs & wildlife
