@@ -113,17 +113,17 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV & far plane — always strictly larger than SkyDome (420) so sky NEVER clips!
+    // Camera FOV & far plane — always strictly larger than SkyDome (1600) & 64-chunk Distant Horizons LOD!
     this.camera.fov = this.settings.fov;
-    this.camera.far = Math.max(700, this.settings.renderDistance * 24 + 260);
+    this.camera.far = Math.max(2200, this.settings.renderDistance * 24 + 520);
     this.camera.updateProjectionMatrix();
     if (this.player) this.player.baseFov = this.settings.fov;
 
-    // Shaders & Cinematic ACES Filmic Tone Mapping
+    // Shaders & Cinematic ACES Filmic Tone Mapping (20x BSL vibrancy!)
     const sh = this.settings.shaders || 'ultra';
     this.renderer.shadowMap.enabled = sh === 'ultra';
     this.renderer.toneMapping = sh === 'off' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.08 : (sh === 'enhanced' ? 1.05 : 1.0);
+    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.12 : (sh === 'enhanced' ? 1.08 : 1.0);
 
     if (this.world) {
       this.world.renderDistance = this.settings.renderDistance;
@@ -260,6 +260,7 @@ class BlockCraftGame {
         seed: meta.seed,
         worldType: meta.worldType,
         renderDistance: this.settings.renderDistance,
+        maxDetailRadius: this.isTouch ? 6 : 10,
         shaders: shaderMode
       });
 

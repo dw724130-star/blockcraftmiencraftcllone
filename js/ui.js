@@ -282,11 +282,12 @@ export class UIManager {
         }
       });
     }
+    const rdLabel = (v) => (v > 10 ? `${v} (LOD)` : `${v}`);
     const titleRD = document.getElementById('title-set-render-dist');
     if (titleRD) {
       titleRD.addEventListener('input', (e) => {
         const v = parseInt(e.target.value, 10);
-        document.getElementById('title-val-render-dist').textContent = v;
+        document.getElementById('title-val-render-dist').textContent = rdLabel(v);
         if (this.game) {
           this.game.updateSetting('renderDistance', v);
           this.syncSettingsUI(this.game.settings);
@@ -362,7 +363,7 @@ export class UIManager {
     // Settings inputs
     document.getElementById('set-render-dist').addEventListener('input', (e) => {
       const v = parseInt(e.target.value, 10);
-      document.getElementById('val-render-dist').textContent = v;
+      document.getElementById('val-render-dist').textContent = v > 10 ? `${v} (LOD)` : `${v}`;
       if (this.game) this.game.updateSetting('renderDistance', v);
     });
     document.getElementById('set-sensitivity').addEventListener('input', (e) => {
@@ -506,10 +507,12 @@ export class UIManager {
     if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
     const tShaders = document.getElementById('title-set-shaders');
     if (tShaders) tShaders.value = settings.shaders || 'ultra';
+    const rdText = settings.renderDistance > 10 ? `${settings.renderDistance} (LOD)` : `${settings.renderDistance}`;
+    document.getElementById('val-render-dist').textContent = rdText;
     const tRD = document.getElementById('title-set-render-dist');
     const tRDVal = document.getElementById('title-val-render-dist');
     if (tRD) tRD.value = settings.renderDistance;
-    if (tRDVal) tRDVal.textContent = settings.renderDistance;
+    if (tRDVal) tRDVal.textContent = rdText;
     this.renderKeybindsUI(settings.keybinds);
   }
 

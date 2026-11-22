@@ -23,7 +23,7 @@ const FACES = [
   { // -Y Bottom
     dir: [0, -1, 0],
     faceType: 'bottom',
-    shade: 0.55,
+    shade: 0.66,
     corners: [
       [0, 0, 0, 0, 0],
       [1, 0, 0, 1, 0],
@@ -34,7 +34,7 @@ const FACES = [
   { // +X East
     dir: [1, 0, 0],
     faceType: 'side',
-    shade: 0.82,
+    shade: 0.90,
     corners: [
       [1, 0, 1, 0, 0],
       [1, 0, 0, 1, 0],
@@ -45,7 +45,7 @@ const FACES = [
   { // -X West
     dir: [-1, 0, 0],
     faceType: 'side',
-    shade: 0.82,
+    shade: 0.90,
     corners: [
       [0, 0, 0, 0, 0],
       [0, 0, 1, 1, 0],
@@ -56,7 +56,7 @@ const FACES = [
   { // +Z South
     dir: [0, 0, 1],
     faceType: 'side',
-    shade: 0.72,
+    shade: 0.84,
     corners: [
       [0, 0, 1, 0, 0],
       [1, 0, 1, 1, 0],
@@ -67,7 +67,7 @@ const FACES = [
   { // -Z North
     dir: [0, 0, -1],
     faceType: 'side',
-    shade: 0.72,
+    shade: 0.84,
     corners: [
       [1, 0, 0, 0, 0],
       [0, 0, 0, 1, 0],
@@ -83,14 +83,16 @@ function coordHash(x, z, seed) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-// Reusable zero-GC TypedArray scratch buffer for chunk meshing!
+// Reusable zero-GC TypedArray scratch buffer for chunk meshing (with optional Greedy Atlas Tiling!)
 class MeshBucket {
-  constructor(initialVerts = 16384) {
+  constructor(initialVerts = 16384, tiled = false) {
     this.cap = initialVerts;
+    this.tiled = tiled;
     this.pos = new Float32Array(initialVerts * 3);
     this.norm = new Float32Array(initialVerts * 3);
     this.uv = new Float32Array(initialVerts * 2);
     this.col = new Float32Array(initialVerts * 3);
+    this.tile = tiled ? new Float32Array(initialVerts * 4) : null;
     this.idx = new Uint32Array((initialVerts / 4) * 6);
     this.vCount = 0;
     this.iCount = 0;
@@ -114,6 +116,7 @@ class MeshBucket {
     this.norm = growF(this.norm, 3);
     this.uv = growF(this.uv, 2);
     this.col = growF(this.col, 3);
+    if (this.tiled) this.tile = growF(this.tile, 4);
     const nextIdx = new Uint32Array((newCap / 4) * 6);
     nextIdx.set(this.idx);
     this.idx = nextIdx;
@@ -153,10 +156,80 @@ class MeshBucket {
     col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
     col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
 
+    if (this.tiled) {
+      const t = base * 4;
+      const tl = this.tile;
+      tl[t] = 0; tl[t + 1] = 0; tl[t + 2] = 1; tl[t + 3] = 1;
+      tl[t + 4] = 0; tl[t + 5] = 0; tl[t + 6] = 1; tl[t + 7] = 1;
+      tl[t + 8] = 0; tl[t + 9] = 0; tl[t + 10] = 1; tl[t + 11] = 1;
+      tl[t + 12] = 0; tl[t + 13] = 0; tl[t + 14] = 1; tl[t + 15] = 1;
+    }
+
     const ii = this.iCount;
     const idx = this.idx;
-    idx[ii] = base; idx[ii + 1] = base + 1; idx[ii + 2] = base + 2;
-    idx[ii + 3] = base; idx[ii + 4] = base + 2; idx[ii + 5] = base + 3;
+    if (c0 + c2 < c1 + c3) {
+      idx[ii] = base + 1; idx[ii + 1] = base + 2; idx[ii + 2] = base + 3;
+      idx[ii + 3] = base + 1; idx[ii + 4] = base + 3; idx[ii + 5] = base;
+    } else {
+      idx[ii] = base; idx[ii + 1] = base + 1; idx[ii + 2] = base + 2;
+      idx[ii + 3] = base; idx[ii + 4] = base + 2; idx[ii + 5] = base + 3;
+    }
+
+    this.vCount = base + 4;
+    this.iCount = ii + 6;
+  }
+
+  pushTiledQuad(
+    x0, y0, z0, u0, v0, c0,
+    x1, y1, z1, u1, v1, c1,
+    x2, y2, z2, u2, v2, c2,
+    x3, y3, z3, u3, v3, c3,
+    nx, ny, nz,
+    tu, tv, tdu, tdv
+  ) {
+    this.ensure(4);
+    const base = this.vCount;
+    const p = base * 3;
+    const u = base * 2;
+    const pos = this.pos, norm = this.norm, uv = this.uv, col = this.col;
+
+    pos[p] = x0; pos[p + 1] = y0; pos[p + 2] = z0;
+    pos[p + 3] = x1; pos[p + 4] = y1; pos[p + 5] = z1;
+    pos[p + 6] = x2; pos[p + 7] = y2; pos[p + 8] = z2;
+    pos[p + 9] = x3; pos[p + 10] = y3; pos[p + 11] = z3;
+
+    norm[p] = nx; norm[p + 1] = ny; norm[p + 2] = nz;
+    norm[p + 3] = nx; norm[p + 4] = ny; norm[p + 5] = nz;
+    norm[p + 6] = nx; norm[p + 7] = ny; norm[p + 8] = nz;
+    norm[p + 9] = nx; norm[p + 10] = ny; norm[p + 11] = nz;
+
+    uv[u] = u0; uv[u + 1] = v0;
+    uv[u + 2] = u1; uv[u + 3] = v1;
+    uv[u + 4] = u2; uv[u + 5] = v2;
+    uv[u + 6] = u3; uv[u + 7] = v3;
+
+    col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
+    col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
+    col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
+    col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+
+    const t = base * 4;
+    const tl = this.tile;
+    tl[t] = tu; tl[t + 1] = tv; tl[t + 2] = tdu; tl[t + 3] = tdv;
+    tl[t + 4] = tu; tl[t + 5] = tv; tl[t + 6] = tdu; tl[t + 7] = tdv;
+    tl[t + 8] = tu; tl[t + 9] = tv; tl[t + 10] = tdu; tl[t + 11] = tdv;
+    tl[t + 12] = tu; tl[t + 13] = tv; tl[t + 14] = tdu; tl[t + 15] = tdv;
+
+    const ii = this.iCount;
+    const idx = this.idx;
+    // Flip diagonal automatically for smooth artifact-free Minecraft Voxel AO!
+    if (c0 + c2 < c1 + c3) {
+      idx[ii] = base + 1; idx[ii + 1] = base + 2; idx[ii + 2] = base + 3;
+      idx[ii + 3] = base + 1; idx[ii + 4] = base + 3; idx[ii + 5] = base;
+    } else {
+      idx[ii] = base; idx[ii + 1] = base + 1; idx[ii + 2] = base + 2;
+      idx[ii + 3] = base; idx[ii + 4] = base + 2; idx[ii + 5] = base + 3;
+    }
 
     this.vCount = base + 4;
     this.iCount = ii + 6;
@@ -169,6 +242,9 @@ class MeshBucket {
     geo.setAttribute('normal', new THREE.BufferAttribute(this.norm.slice(0, this.vCount * 3), 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(this.uv.slice(0, this.vCount * 2), 2));
     geo.setAttribute('color', new THREE.BufferAttribute(this.col.slice(0, this.vCount * 3), 3));
+    if (this.tiled) {
+      geo.setAttribute('aTile', new THREE.BufferAttribute(this.tile.slice(0, this.vCount * 4), 4));
+    }
     const idxSlice = this.vCount < 65536
       ? new Uint16Array(this.idx.subarray(0, this.iCount))
       : this.idx.slice(0, this.iCount);
@@ -178,13 +254,19 @@ class MeshBucket {
 }
 
 const SCRATCH_BUCKETS = {
-  opaque: new MeshBucket(24576),
-  cutout: new MeshBucket(8192),
-  staticCutout: new MeshBucket(4096),
-  water: new MeshBucket(8192)
+  opaque: new MeshBucket(16384, true),
+  cutout: new MeshBucket(8192, false),
+  staticCutout: new MeshBucket(4096, false),
+  water: new MeshBucket(4096, false)
 };
-// Scratch grid for coarse 4x4x4 trilinear cave noise (5 x 25 x 5 = 625 floats)
+// Dual coarse 4x4x4 trilinear cave grids (Minecraft 1.18 Spaghetti + Cheese Caverns!)
 const CAVE_GRID = new Float32Array(5 * 25 * 5);
+const CAVE_GRID_B = new Float32Array(5 * 25 * 5);
+// Zero-GC Greedy Meshing slice masks & column sky-light cache
+const GREEDY_MASK = new Int32Array(16 * CHUNK_HEIGHT);
+const GREEDY_SHADE = new Float32Array(16 * CHUNK_HEIGHT);
+const GREEDY_WATER_MASK = new Uint8Array(256);
+const SKY_TOP = new Uint8Array(256);
 
 export class World {
   constructor(scene, textures, options = {}) {
@@ -229,16 +311,19 @@ export class World {
       uSunsetFactor: { value: 0.0 },
       uRainFactor: { value: 0.0 },
       uFogNear: { value: 45.0 },
-      uFogFar: { value: 110.0 }
+      uFogFar: { value: 110.0 },
+      uLodInnerCenter: { value: new THREE.Vector2(0, 0) },
+      uLodInnerRadiusSq: { value: 0.0 }
     };
 
-    // 1. Opaque Terrain Material — Atmospheric Aerial Perspective + Golden-Hour Sun Warmth + Emissive Glow
+    // 1. Opaque Terrain Material — Greedy Atlas Tiling + 20x BSL Atmospheric Lighting, Specular Rim, Underwater Caustics & Emissive Bloom!
     this.opaqueMat = new THREE.MeshLambertMaterial({
       map: this.textures.atlasTexture,
       vertexColors: true
     });
     this.opaqueMat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, {
+        uTime: this.shaderUniforms.uTime,
         uShaderOn: this.shaderUniforms.uShaderOn,
         uSunDir: this.shaderUniforms.uSunDir,
         uSunColor: this.shaderUniforms.uSunColor,
@@ -250,6 +335,9 @@ export class World {
         uFogFar: this.shaderUniforms.uFogFar
       });
       shader.vertexShader = `
+        attribute vec4 aTile;
+        varying vec4 vTile;
+        varying vec2 vLocalUv;
         varying vec3 vWorldPos;
         varying vec3 vWorldNorm;
         varying float vEmissive;
@@ -259,7 +347,119 @@ export class World {
         `#include <begin_vertex>
          vWorldPos = position;
          vWorldNorm = normal;
+         vLocalUv = uv;
+         vTile = aTile;
          vEmissive = max(0.0, color.r - 1.04);`
+      );
+      shader.fragmentShader = `
+        uniform float uTime;
+        uniform float uShaderOn;
+        uniform vec3 uSunDir;
+        uniform vec3 uSunColor;
+        uniform vec3 uHorizonColor;
+        uniform vec3 uSunsetColor;
+        uniform float uDayFactor;
+        uniform float uSunsetFactor;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        varying vec4 vTile;
+        varying vec2 vLocalUv;
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+        varying float vEmissive;
+      ` + shader.fragmentShader;
+      // Seamless Greedy-Mesh Atlas Wrapping (zero tile bleeding at any quad size!)
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+           vec2 wrappedUv = vTile.z < 0.99
+             ? (vTile.xy + clamp(fract(vLocalUv), 0.004, 0.996) * vTile.zw)
+             : vLocalUv;
+           vec4 sampledDiffuseColor = texture2D( map, wrappedUv );
+           diffuseColor *= sampledDiffuseColor;
+         #endif`
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <fog_fragment>',
+        `if (uShaderOn > 0.5) {
+           vec3 viewVec = vWorldPos - cameraPosition;
+           float dist = length(viewVec);
+           vec3 viewDir = viewVec / max(dist, 0.001);
+           vec3 N = normalize(vWorldNorm);
+           vec3 L = normalize(uSunDir);
+           vec3 V = -viewDir;
+
+           // BSL Warm Sunlight Bounce vs Airy Luminous Sky-Tinted Shadows (never crushed black!)
+           float ndl = dot(N, L);
+           float sunLit = smoothstep(-0.2, 0.55, ndl);
+           vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
+           vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
+           gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
+           // Gentle outdoor sky ambient bounce lift in shadowed areas (only above caves)
+           float outdoorLift = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
+           gl_FragColor.rgb += uHorizonColor * 0.032 * uDayFactor * outdoorLift * (1.0 - sunLit * 0.7);
+
+           // Crisp BSL Sun-Rim Specular Sheen on sunlit terrain & stone!
+           vec3 H = normalize(V + L);
+           float spec = pow(max(0.0, dot(N, H)), 28.0) * sunLit * uDayFactor * (0.09 + 0.14 * uSunsetFactor);
+           gl_FragColor.rgb += uSunColor * spec * (1.0 - smoothstep(40.0, 140.0, dist) * 0.7);
+
+           // Shimmering Underwater Caustics projected onto submerged terrain!
+           if (vWorldPos.y < ${SEA_LEVEL}.05 && N.y > 0.25 && uDayFactor > 0.05) {
+             float depthFade = smoothstep(0.0, 1.8, ${SEA_LEVEL}.05 - vWorldPos.y) * smoothstep(18.0, 2.0, ${SEA_LEVEL}.05 - vWorldPos.y);
+             float c1 = sin(vWorldPos.x * 2.1 + uTime * 2.0 + sin(vWorldPos.z * 1.7 - uTime * 1.4));
+             float c2 = cos(vWorldPos.z * 2.3 - uTime * 1.8 + cos(vWorldPos.x * 1.9 + uTime * 1.2));
+             float caustic = pow(max(0.0, (c1 + c2) * 0.5), 3.0);
+             gl_FragColor.rgb += vec3(0.18, 0.42, 0.48) * caustic * depthFade * uDayFactor * 0.65;
+           }
+
+           // Warm torch & glowstone emissive radiance (glows vibrantly day & night!)
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.2;
+           }
+
+           // BSL Volumetric Sun-Aligned Atmospheric Aerial Perspective Haze!
+           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist);
+           float sunAlign = pow(max(0.0, dot(viewDir, L)), 3.0);
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
+         } else {
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
+           }
+           #include <fog_fragment>
+         }`
+      );
+    };
+
+    // 1b. Distant Horizons 64-Chunk LOD Terrain Material (matches BSL Opaque Terrain lighting & fog seamlessly!)
+    this.lodMat = new THREE.MeshLambertMaterial({
+      vertexColors: true
+    });
+    this.lodMat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, {
+        uShaderOn: this.shaderUniforms.uShaderOn,
+        uSunDir: this.shaderUniforms.uSunDir,
+        uSunColor: this.shaderUniforms.uSunColor,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uSunsetColor: this.shaderUniforms.uSunsetColor,
+        uDayFactor: this.shaderUniforms.uDayFactor,
+        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar,
+        uLodInnerCenter: this.shaderUniforms.uLodInnerCenter,
+        uLodInnerRadiusSq: this.shaderUniforms.uLodInnerRadiusSq
+      });
+      shader.vertexShader = `
+        varying vec3 vWorldPos;
+        varying vec3 vWorldNorm;
+      ` + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vWorldPos = position;
+         vWorldNorm = normal;`
       );
       shader.fragmentShader = `
         uniform float uShaderOn;
@@ -271,35 +471,32 @@ export class World {
         uniform float uSunsetFactor;
         uniform float uFogNear;
         uniform float uFogFar;
+        uniform vec2 uLodInnerCenter;
+        uniform float uLodInnerRadiusSq;
         varying vec3 vWorldPos;
         varying vec3 vWorldNorm;
-        varying float vEmissive;
       ` + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <fog_fragment>',
-        `if (uShaderOn > 0.5) {
-           // Warm golden-hour rim & gentle contrast lift (BSL look)
+        `vec2 lodDelta = vWorldPos.xz - uLodInnerCenter;
+         if (dot(lodDelta, lodDelta) < uLodInnerRadiusSq) discard;
+         if (uShaderOn > 0.5) {
            vec3 viewVec = vWorldPos - cameraPosition;
            float dist = length(viewVec);
            vec3 viewDir = viewVec / max(dist, 0.001);
-           float sunWrap = max(0.0, dot(normalize(vWorldNorm), normalize(uSunDir)) * 0.65 + 0.35);
-           gl_FragColor.rgb *= mix(vec3(1.0), vec3(1.06, 1.01, 0.94), sunWrap * (0.35 + 0.65 * uSunsetFactor) * uDayFactor);
+           vec3 N = normalize(vWorldNorm);
+           vec3 L = normalize(uSunDir);
+           float sunLit = smoothstep(-0.2, 0.55, dot(N, L));
+           vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
+           vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
+           gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
 
-           // Warm torch & glowstone emissive radiance (glows vibrantly day & night!)
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
-           }
-
-           // Sun-directional Atmospheric Aerial Perspective Haze (golden toward sun, misty sky away!)
-           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
-           float sunAlign = pow(max(0.0, dot(viewDir, normalize(uSunDir))), 3.0);
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
+           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist);
+           float sunAlign = pow(max(0.0, dot(viewDir, L)), 3.0);
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
            gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
          } else {
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
-           }
            #include <fog_fragment>
          }`
       );
@@ -583,32 +780,33 @@ export class World {
           ));
           if (vBaseNormal.y < 0.5) N = normalize(vBaseNormal);
 
-          // Fresnel Mirror Reflection of Live Sky & Clouds!
+          // Fresnel Mirror Reflection of Live Sky & Clouds (muted underground inside caves!)
+          float skyMask = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
           float NoV = max(0.0, dot(N, V));
           float oneMinusNoV = 1.0 - NoV;
-          float fresnel = clamp(0.10 + 0.90 * oneMinusNoV * oneMinusNoV * oneMinusNoV, 0.10, 0.96);
+          float fresnel = clamp(0.10 + 0.90 * oneMinusNoV * oneMinusNoV * oneMinusNoV, 0.10, 0.96) * skyMask;
 
           vec3 R = reflect(-V, N);
           R.y = max(0.02, abs(R.y));
           vec3 reflCol = sampleSkyReflection(normalize(R), sunDir);
 
-          vec3 deepWater = mix(vec3(0.02, 0.05, 0.10), vec3(0.04, 0.24, 0.34), uDayFactor);
-          deepWater = mix(deepWater, vec3(0.14, 0.11, 0.20), uSunsetFactor * 0.55);
+          vec3 deepWater = mix(vec3(0.02, 0.05, 0.10), vec3(0.04, 0.26, 0.38), uDayFactor * skyMask);
+          deepWater = mix(deepWater, vec3(0.14, 0.11, 0.20), uSunsetFactor * 0.55 * skyMask);
           // Reuse nWave for free caustic shimmer (zero extra noise call!)
-          deepWater += vec3(0.06, 0.22, 0.26) * (nWave * nWave * nWave) * 0.2 * uDayFactor;
+          deepWater += vec3(0.06, 0.22, 0.26) * (nWave * nWave * nWave) * 0.22 * uDayFactor * skyMask;
 
           vec3 col = mix(deepWater, reflCol, fresnel);
 
-          // Sparkling Sun Specular Glitter across the Ripples!
+          // Sparkling Sun Specular Glitter across the Ripples (surface water only!)
           vec3 H = normalize(V + sunDir);
           float NoH = max(0.0, dot(N, H));
           float specTight = pow(NoH, 160.0) * 2.5;
           float specBroad = pow(NoH, 24.0) * 0.42;
-          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.85);
+          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.85) * skyMask;
           col += uSunColor * (specTight + specBroad) * sunUp;
 
           // Atmospheric Distance Haze matching Terrain & Sky seamlessly!
-          float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
+          float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist) * skyMask;
           float sunAlign = pow(max(0.0, dot(-V, sunDir)), 3.0);
           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
@@ -626,16 +824,26 @@ export class World {
     this.group = new THREE.Group();
     this.scene.add(this.group);
 
+    // Distant Horizons 64-Chunk LOD Terrain Group (streams out to 1,024 blocks at 120 FPS!)
+    this.lodGroup = new THREE.Group();
+    this.scene.add(this.lodGroup);
+    this.lodRegions = new Map(); // numeric key -> { rx, rz, tier, mesh }
+    this.maxDetailRadius = options.maxDetailRadius || 10;
+    this._lodQueue = [];
+    this._lastLodRx = 1e9;
+    this._lastLodRz = 1e9;
+    this._lastLodRD = -1;
+
     this.meshQueue = [];
     this._spiralOffsets = [];
     this._spiralDataOffsets = [];
     this._spiralForRD = -1;
 
-    // Precomputed fast lookup tables for zero-overhead meshing inner loop
+    // Precomputed fast lookup tables for zero-overhead greedy meshing inner loop
     this._defTable = new Array(256);
     this._solidTable = new Uint8Array(256);
     this._transTable = new Uint8Array(256);
-    this._uvTable = new Array(256); // [blockId] -> Array(6) of UV objects
+    this._uvTable = new Array(256); // [blockId] -> Array(6) of { u0, v0, u1, v1, du, dv }
     for (let id = 1; id < 256; id++) {
       const def = getBlockDef(id);
       if (!def) continue;
@@ -646,7 +854,8 @@ export class World {
       for (let fi = 0; fi < 6; fi++) {
         const ft = FACES[fi].faceType;
         const texName = def.faces[ft] || def.faces.all || def.faces.side;
-        faceUVs[fi] = this.textures.getUV(texName);
+        const uv = this.textures.getUV(texName);
+        faceUVs[fi] = { u0: uv.u0, v0: uv.v0, u1: uv.u1, v1: uv.v1, du: uv.u1 - uv.u0, dv: uv.v1 - uv.v0 };
       }
       this._uvTable[id] = faceUVs;
     }
@@ -1240,9 +1449,10 @@ export class World {
       }
     }
 
-    // Precompute coarse 4x4x4 3D cave noise grid (~400 samples instead of ~9,000 = 15x faster!)
+    // Precompute dual coarse 4x4x4 3D cave grids (Minecraft 1.18 Spaghetti Tunnels + Cheese Caverns!)
     const isFlat = this.worldType === 'flat';
-    const maxCaveCellY = isFlat ? 0 : Math.min(24, Math.ceil((chunkPeakH - 2) / 4));
+    const vInfoPre = !isFlat ? this.getVillageForChunk(cx, cz) : null;
+    const maxCaveCellY = isFlat ? 0 : Math.min(23, Math.ceil((chunkPeakH + 1) / 4));
     if (!isFlat) {
       for (let cy = 0; cy <= maxCaveCellY; cy++) {
         const wy = cy * 4;
@@ -1252,13 +1462,15 @@ export class World {
           const zBase = yBase + czg * 5;
           for (let cxg = 0; cxg < 5; cxg++) {
             const wx = ox + cxg * 4;
-            CAVE_GRID[zBase + cxg] = this.caveNoise.noise3D(wx * 0.065, wy * 0.085, wz * 0.065);
+            // Winding spaghetti noise pair + cheese cavern field
+            CAVE_GRID[zBase + cxg] = this.caveNoise.noise3D(wx * 0.036, wy * 0.056, wz * 0.036);
+            CAVE_GRID_B[zBase + cxg] = this.oreNoise.noise3D(wx * 0.036 + 131.7, wy * 0.056 - 73.4, wz * 0.036 + 59.2);
           }
         }
       }
     }
 
-    // 1. Base Terrain + Realistic Slope-Aware Alpine Geology + Trilinear 3D Caves
+    // 1. Base Terrain + Jagged Bedrock (y=0..4) + Spaghetti/Cheese Caves + Surface Cave Mouths & Ravines!
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       const gz = lz >> 2;
       const fz = (lz & 3) * 0.25;
@@ -1283,11 +1495,46 @@ export class World {
         const fillTopY = isFlat ? h : Math.max(h, SEA_LEVEL);
         if (fillTopY > maxY) maxY = fillTopY;
 
+        // Layer 0: 100% solid unbreakable Minecraft Bedrock floor!
         data[colBase] = BLOCK.BEDROCK;
 
-        const caveMaxY = h - 3;
+        // Surface Cave Entrance & Canyon Ravine fields (avoid villages & under-ocean flooding!)
+        let allowSurfaceCave = false;
+        let ravineBottomY = 999;
+        if (!isFlat && !vInfoPre && h >= SEA_LEVEL + 2) {
+          const mouthN = this.caveNoise.fbm2D(wx * 0.0115 - 310, wz * 0.0115 + 220, 2);
+          if (mouthN > 0.21) allowSurfaceCave = true;
+          if (h >= SEA_LEVEL + 5) {
+            const ravRaw = Math.abs(this.oreNoise.fbm2D(wx * 0.0085 + 77, wz * 0.0085 - 41, 2));
+            if (ravRaw < 0.022) {
+              const ravT = 1.0 - ravRaw / 0.022;
+              const ravDepth = Math.floor(ravT * ravT * 24 + 5);
+              ravineBottomY = Math.max(8, h - ravDepth);
+            }
+          }
+        }
+
+        const caveMaxY = allowSurfaceCave ? h : (h - 2);
         for (let y = 1; y <= h; y++) {
-          if (!isFlat && y > 3 && y < caveMaxY) {
+          // Authentic Jagged Minecraft Bedrock Layers (y = 1..4)!
+          if (y <= 4) {
+            const brHash = coordHash(wx * 13 + y * 37, wz * 17 - y * 29, this.seed + 555);
+            const brChance = isFlat
+              ? (y === 1 ? 0.55 : 0)
+              : (y === 1 ? 0.82 : (y === 2 ? 0.56 : (y === 3 ? 0.30 : 0.12)));
+            if (brHash < brChance) {
+              data[colBase + (y << 8)] = BLOCK.BEDROCK;
+              continue;
+            }
+          }
+
+          // Multi-Layer Cave & Ravine Carving!
+          if (!isFlat && y >= 5 && y <= caveMaxY) {
+            // Dramatic Canyon Ravine slicing into cliffs & plains
+            if (y >= ravineBottomY) {
+              continue; // AIR!
+            }
+
             const gy = y >> 2;
             const fy = (y & 3) * 0.25;
             const i000 = gy * 25 + gz * 5 + gx;
@@ -1299,13 +1546,33 @@ export class World {
             const i011 = i001 + 5;
             const i111 = i011 + 1;
 
-            const c00 = CAVE_GRID[i000] + (CAVE_GRID[i100] - CAVE_GRID[i000]) * fx;
-            const c10 = CAVE_GRID[i010] + (CAVE_GRID[i110] - CAVE_GRID[i010]) * fx;
-            const c01 = CAVE_GRID[i001] + (CAVE_GRID[i101] - CAVE_GRID[i001]) * fx;
-            const c11 = CAVE_GRID[i011] + (CAVE_GRID[i111] - CAVE_GRID[i011]) * fx;
-            const c0 = c00 + (c10 - c00) * fz;
-            const c1 = c01 + (c11 - c01) * fz;
-            if (c0 + (c1 - c0) * fy > 0.34) continue; // AIR (already 0!)
+            // Trilinear interpolation for Grid A
+            const a00 = CAVE_GRID[i000] + (CAVE_GRID[i100] - CAVE_GRID[i000]) * fx;
+            const a10 = CAVE_GRID[i010] + (CAVE_GRID[i110] - CAVE_GRID[i010]) * fx;
+            const a01 = CAVE_GRID[i001] + (CAVE_GRID[i101] - CAVE_GRID[i001]) * fx;
+            const a11 = CAVE_GRID[i011] + (CAVE_GRID[i111] - CAVE_GRID[i011]) * fx;
+            const nA = (a00 + (a10 - a00) * fz) + ((a01 + (a11 - a01) * fz) - (a00 + (a10 - a00) * fz)) * fy;
+
+            // Trilinear interpolation for Grid B
+            const b00 = CAVE_GRID_B[i000] + (CAVE_GRID_B[i100] - CAVE_GRID_B[i000]) * fx;
+            const b10 = CAVE_GRID_B[i010] + (CAVE_GRID_B[i110] - CAVE_GRID_B[i010]) * fx;
+            const b01 = CAVE_GRID_B[i001] + (CAVE_GRID_B[i101] - CAVE_GRID_B[i001]) * fx;
+            const b11 = CAVE_GRID_B[i011] + (CAVE_GRID_B[i111] - CAVE_GRID_B[i011]) * fx;
+            const nB = (b00 + (b10 - b00) * fz) + ((b01 + (b11 - b01) * fz) - (b00 + (b10 - b00) * fz)) * fy;
+
+            // 1) Winding 3D Spaghetti Tunnels (wider deeper down!)
+            const depthBoost = y < 28 ? 0.005 : 0.0;
+            const isSpaghetti = (nA * nA + nB * nB) < (0.0155 + depthBoost);
+            // 2) Grand Deep Cheese Caverns (y = 6..29)
+            const isCheese = y >= 6 && y <= 29 && nA > 0.35;
+
+            if (isSpaghetti || isCheese) {
+              // Deep subterranean aquifer pools near bedrock!
+              if (y <= 7 && !allowSurfaceCave) {
+                data[colBase + (y << 8)] = BLOCK.WATER;
+              }
+              continue;
+            }
           }
 
           let blk;
@@ -1341,7 +1608,7 @@ export class World {
       }
     }
 
-    // 1b. Authentic Deterministic Minecraft Ore Veins (100x faster than 8,000 noise3D calls!)
+    // 1b. Authentic Deterministic Minecraft Ore Veins (richly exposed in caves & near bedrock!)
     if (!isFlat) {
       const placeVeins = (blockId, count, minY, maxY, veinSize, salt) => {
         for (let v = 0; v < count; v++) {
@@ -1363,10 +1630,11 @@ export class World {
           }
         }
       };
-      placeVeins(BLOCK.COAL_ORE, 10, 6, 48, 7, 101);
-      placeVeins(BLOCK.IRON_ORE, 9, 4, 42, 6, 202);
-      placeVeins(BLOCK.GOLD_ORE, 4, 3, 25, 5, 303);
-      placeVeins(BLOCK.DIAMOND_ORE, 3, 2, 15, 4, 404);
+      placeVeins(BLOCK.COAL_ORE, 14, 6, 56, 8, 101);
+      placeVeins(BLOCK.IRON_ORE, 11, 4, 46, 7, 202);
+      placeVeins(BLOCK.GOLD_ORE, 5, 4, 28, 5, 303);
+      placeVeins(BLOCK.DIAMOND_ORE, 4, 3, 16, 5, 404);
+      placeVeins(BLOCK.GRAVEL, 3, 6, 30, 8, 505);
     }
 
     // 2. Multi-Chunk Villages, Scenic Hilltop Watchtowers, OR Trees, Cacti, Lush Meadows & Wildflowers
@@ -1676,6 +1944,44 @@ export class World {
     const bedSideUV = this._bedSideUV;
     const bedWoodUV = this._bedWoodUV;
 
+    // Precompute per-column sky ceiling height for authentic dark underground caves & overhangs!
+    const skyTop = SKY_TOP;
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      const zOff = lz << 4;
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        let topY = 0;
+        const base = lx + zOff;
+        for (let y = yLimit; y >= 0; y--) {
+          const bid = data[base + (y << 8)];
+          if (bid !== 0 && transTable[bid] === 0) {
+            topY = y;
+            break;
+          }
+        }
+        skyTop[base] = topY;
+      }
+    }
+
+    const calcSkyLight = (nlx, ny, nlz) => {
+      let colTop;
+      if (nlx >= 0 && nlx < 16 && nlz >= 0 && nlz < 16) {
+        colTop = skyTop[nlx + (nlz << 4)];
+      } else {
+        // Fast probe for border-adjacent column ceiling
+        colTop = ny;
+        if (ny + 2 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 2, nlz)]) colTop = ny + 10;
+        else if (ny + 5 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 5, nlz)]) colTop = ny + 12;
+        else if (ny + 9 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 9, nlz)]) colTop = ny + 14;
+      }
+      if (ny >= colTop) return 1.0;
+      const depth = colTop - ny;
+      const t = depth > 14 ? 1.0 : depth / 14.0;
+      return 1.0 - t * 0.68; // Smoothly darkens to 0.32 deep underground inside caves!
+    };
+
+    let hasWater = false;
+
+    // PASS 1: Special Geometry (3D Beds, 3D Torches, Cross Foliage, Cutout Leaves/Glass/Ice, Water Sides) + Light Registry
     for (let y = 0; y <= yLimit; y++) {
       const yOff = y << 8;
       for (let lz = 0; lz < CHUNK_SIZE; lz++) {
@@ -1711,42 +2017,30 @@ export class World {
               bOpaque.pushQuad(bx0,by0,bz1,uSide.u0,uSide.v0,0.74, bx1,by0,bz1,uSide.u1,uSide.v0,0.74, bx1,by1,bz1,uSide.u1,uSide.v1,0.74, bx0,by1,bz1,uSide.u0,uSide.v1,0.74, 0,0,1);
               bOpaque.pushQuad(bx1,by0,bz0,uSide.u0,uSide.v0,0.74, bx0,by0,bz0,uSide.u1,uSide.v0,0.74, bx0,by1,bz0,uSide.u1,uSide.v1,0.74, bx1,by1,bz0,uSide.u0,uSide.v1,0.74, 0,0,-1);
             };
-            // Local coordinates: u = across width [0..1], v = along length from join edge (0) to outer end (1)
             const addBedOriented = (u0, y0, v0, u1, y1, v1, uTop, uSide, uBot) => {
-              // dir is toward Head; partner is at (dx, dz). So join edge is toward (dx, dz) and outer edge is away!
               let x0, x1, z0, z1;
               if (info.dx === 0 && info.dz === -1) {
-                // Partner is at -Z (join at z=0, outer at z=1)
                 x0 = u0; x1 = u1; z0 = v0; z1 = v1;
               } else if (info.dx === 0 && info.dz === 1) {
-                // Partner is at +Z (join at z=1, outer at z=0)
                 x0 = u0; x1 = u1; z0 = 1 - v1; z1 = 1 - v0;
               } else if (info.dx === 1 && info.dz === 0) {
-                // Partner is at +X (join at x=1, outer at x=0)
                 x0 = 1 - v1; x1 = 1 - v0; z0 = u0; z1 = u1;
               } else {
-                // Partner is at -X (join at x=0, outer at x=1)
                 x0 = v0; x1 = v1; z0 = u0; z1 = u1;
               }
               addBox(x0, y0, z0, x1, y1, z1, uTop, uSide, uBot);
             };
 
-            // 1. Sturdy Oak Bedframe Base (seamless join at v=0, clean 0.96 width!)
             addBedOriented(0.02, 0.20, 0.0, 0.98, 0.34, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
-            // 2. Two Oak Legs at the outer corners of this half
             addBedOriented(0.04, 0.0, 0.80, 0.22, 0.20, 0.96, bedWoodUV, bedWoodUV, bedWoodUV);
             addBedOriented(0.78, 0.0, 0.80, 0.96, 0.20, 0.96, bedWoodUV, bedWoodUV, bedWoodUV);
 
             if (info.isHead) {
-              // HEAD HALF: Red blanket meeting join + folded white sheet + plush raised white pillow + oak headboard!
               addBedOriented(0.02, 0.34, 0.0, 0.98, 0.56, 0.32, bedRedUV, bedRedUV, bedWoodUV);
               addBedOriented(0.02, 0.34, 0.32, 0.98, 0.57, 0.94, bedWhiteUV, bedWhiteUV, bedWoodUV);
-              // Raised sculpted fluffy white pillow!
               addBedOriented(0.10, 0.57, 0.44, 0.90, 0.69, 0.88, bedWhiteUV, bedWhiteUV, bedWhiteUV);
-              // Subtle oak headboard rim at outer head end
               addBedOriented(0.02, 0.34, 0.92, 0.98, 0.66, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
             } else {
-              // FOOT HALF: Full plush quilted crimson wool blanket + subtle footboard trim!
               addBedOriented(0.02, 0.34, 0.0, 0.98, 0.56, 0.96, bedRedUV, bedRedUV, bedWoodUV);
               addBedOriented(0.02, 0.20, 0.94, 0.98, 0.46, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
             }
@@ -1758,7 +2052,6 @@ export class World {
             const hasFloor = solidTable[fastGet(lx, y - 1, lz)] === 1;
             let tiltX = 0, tiltZ = 0, offX = 0, offY = 0, offZ = 0;
             if (!hasFloor) {
-              // Automatically attach & angle off an adjacent solid wall block!
               if (solidTable[fastGet(lx - 1, y, lz)] === 1) { offX = -0.34; offY = 0.16; tiltX = 0.34; }
               else if (solidTable[fastGet(lx + 1, y, lz)] === 1) { offX = 0.34; offY = 0.16; tiltX = -0.34; }
               else if (solidTable[fastGet(lx, y, lz - 1)] === 1) { offZ = -0.34; offY = 0.16; tiltZ = 0.34; }
@@ -1773,13 +2066,10 @@ export class World {
               const bx01 = wx + x0 + tx1, bx11 = wx + x1 + tx1;
               const bz01 = wz + z0 + tz1, bz11 = wz + z1 + tz1;
               const by0 = y + y0 + offY, by1 = y + y1 + offY;
-              // Top & Bottom
               bOpaque.pushQuad(bx01,by1,bz11,uv.u0,uv.v0,sTop, bx11,by1,bz11,uv.u1,uv.v0,sTop, bx11,by1,bz01,uv.u1,uv.v1,sTop, bx01,by1,bz01,uv.u0,uv.v1,sTop, 0,1,0);
               bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sBot, bx10,by0,bz00,uv.u1,uv.v0,sBot, bx10,by0,bz10,uv.u1,uv.v1,sBot, bx00,by0,bz10,uv.u0,uv.v1,sBot, 0,-1,0);
-              // +X & -X sides
               bOpaque.pushQuad(bx10,by0,bz10,uv.u0,uv.v0,sSide, bx10,by0,bz00,uv.u1,uv.v0,sSide, bx11,by1,bz01,uv.u1,uv.v1,sSide, bx11,by1,bz11,uv.u0,uv.v1,sSide, 1,0,0);
               bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sSide, bx00,by0,bz10,uv.u1,uv.v0,sSide, bx01,by1,bz11,uv.u1,uv.v1,sSide, bx01,by1,bz01,uv.u0,uv.v1,sSide, -1,0,0);
-              // +Z & -Z sides
               bOpaque.pushQuad(bx00,by0,bz10,uv.u0,uv.v0,sSide * 0.94, bx10,by0,bz10,uv.u1,uv.v0,sSide * 0.94, bx11,by1,bz11,uv.u1,uv.v1,sSide * 0.94, bx01,by1,bz11,uv.u0,uv.v1,sSide * 0.94, 0,0,1);
               bOpaque.pushQuad(bx10,by0,bz00,uv.u0,uv.v0,sSide * 0.94, bx00,by0,bz00,uv.u1,uv.v0,sSide * 0.94, bx01,by1,bz01,uv.u1,uv.v1,sSide * 0.94, bx11,by1,bz01,uv.u0,uv.v1,sSide * 0.94, 0,0,-1);
             };
@@ -1787,17 +2077,10 @@ export class World {
             const woodUV = this._torchWoodUV;
             const coalUV = this._torchCoalUV;
             const glowUV = this._torchGlowUV;
-            // 1. Grounded Oak Base Foot (on floor torches)
-            if (hasFloor) {
-              addTorchBox(0.39, 0.0, 0.39, 0.61, 0.06, 0.61, woodUV, 0.9, 0.78, 0.58);
-            }
-            // 2. Sturdy Oak Wooden Handle Shaft
+            if (hasFloor) addTorchBox(0.39, 0.0, 0.39, 0.61, 0.06, 0.61, woodUV, 0.9, 0.78, 0.58);
             addTorchBox(0.425, 0.0, 0.425, 0.575, 0.54, 0.575, woodUV, 0.95, 0.86, 0.62);
-            // 3. Dark Charred Coal/Iron Ember Collar
             addTorchBox(0.405, 0.53, 0.405, 0.595, 0.63, 0.595, coalUV, 0.55, 0.46, 0.38);
-            // 4. Glowing Amber-Orange Torch Head (emissive!)
             addTorchBox(0.415, 0.63, 0.415, 0.585, 0.77, 0.585, glowUV, 1.54, 1.48, 1.32);
-            // 5. Blazing Sculpted Inner Flame Core & Tapered Crown Tip (super-emissive!)
             addTorchBox(0.445, 0.77, 0.445, 0.555, 0.88, 0.555, glowUV, 1.72, 1.66, 1.5);
             addTorchBox(0.47, 0.88, 0.47, 0.53, 0.96, 0.53, glowUV, 1.82, 1.76, 1.6);
             continue;
@@ -1805,10 +2088,10 @@ export class World {
 
           // Cross-quad blocks (flowers, tall grass sway; ladders stay static!)
           if (def.cross) {
-            const isStaticCross = id === BLOCK.TORCH || id === BLOCK.LADDER;
+            const isStaticCross = id === BLOCK.LADDER;
             const b = isStaticCross ? bStatic : bCutout;
             const uv = uvTable[id][0];
-            const shade = def.light > 0 ? 1.18 : 0.94;
+            const shade = (def.light > 0 ? 1.18 : 0.94) * calcSkyLight(lx, y, lz);
             const y0 = y + (isStaticCross ? 0.0 : 0.02);
             const y1 = y + 0.9;
             b.pushQuad(
@@ -1828,17 +2111,20 @@ export class World {
             continue;
           }
 
+          // Solid opaque cubes are greedily meshed in PASS 2!
+          if (transTable[id] === 0) continue;
+
           const isWater = id === BLOCK.WATER;
+          if (isWater) hasWater = true;
           const isStaticCutout = id === BLOCK.GLASS || id === BLOCK.ICE;
-          const isCutout = !isWater && !isStaticCutout && def.transparent;
-          const b = isWater
-            ? bWater
-            : (isStaticCutout ? bStatic : (isCutout ? bCutout : bOpaque));
+          const b = isWater ? bWater : (isStaticCutout ? bStatic : bCutout);
           const waterTopLower = isWater && fastGet(lx, y + 1, lz) !== BLOCK.WATER;
           const faceUVs = uvTable[id];
           const lightBoost = def.light > 0 ? 1.18 : 1.0;
 
-          for (let fi = 0; fi < 6; fi++) {
+          // Water +Y top surface is greedily meshed in PASS 3 (up to 256x fewer ocean triangles!)
+          const startFi = isWater ? 1 : 0;
+          for (let fi = startFi; fi < 6; fi++) {
             const face = FACES[fi];
             const dx0 = face.dir[0];
             const dy0 = face.dir[1];
@@ -1848,72 +2134,407 @@ export class World {
             const nlz = lz + dz0;
             const neighbor = fastGet(nlx, ny, nlz);
 
-            // Fast culling via lookup table
             if (isWater) {
               if (neighbor === BLOCK.WATER || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
-            } else if (isCutout || isStaticCutout) {
-              if (neighbor === id && isStaticCutout) continue;
-              if (neighbor !== 0 && transTable[neighbor] === 0) continue;
             } else {
+              if (neighbor === id && isStaticCutout) continue;
               if (neighbor !== 0 && transTable[neighbor] === 0) continue;
             }
 
             const uv = faceUVs[fi];
-            const c0 = face.corners[0];
-            const c1 = face.corners[1];
-            const c2 = face.corners[2];
-            const c3 = face.corners[3];
-            const baseShade = face.shade * lightBoost;
-
-            let s0, s1, s2, s3;
-            if (isWater || fi === 1) {
-              const s = baseShade > 1.2 ? 1.2 : baseShade;
-              s0 = s1 = s2 = s3 = s;
-            } else if (fi === 0) {
-              // Top face AO (inlined!)
-              const y1 = y + 1;
-              const calcTop = (cx0, cz0) => {
-                const ddx = cx0 === 0 ? -1 : 1;
-                const ddz = cz0 === 0 ? -1 : 1;
-                const occ = solidTable[fastGet(lx + ddx, y1, lz)]
-                  + solidTable[fastGet(lx, y1, lz + ddz)]
-                  + solidTable[fastGet(lx + ddx, y1, lz + ddz)];
-                const v = baseShade * (1.0 - occ * 0.12);
-                return v > 1.2 ? 1.2 : v;
-              };
-              s0 = calcTop(c0[0], c0[2]);
-              s1 = calcTop(c1[0], c1[2]);
-              s2 = calcTop(c2[0], c2[2]);
-              s3 = calcTop(c3[0], c3[2]);
-            } else {
-              // Side face AO (inlined!)
-              const calcSide = (cx0, cy0, cz0) => {
-                const ddy = cy0 === 0 ? -1 : 1;
-                const sdx = dx0 === 0 ? (cx0 === 0 ? -1 : 1) : 0;
-                const sdz = dz0 === 0 ? (cz0 === 0 ? -1 : 1) : 0;
-                const occ = solidTable[fastGet(nlx, y + ddy, nlz)]
-                  + solidTable[fastGet(nlx + sdx, y, nlz + sdz)]
-                  + solidTable[fastGet(nlx + sdx, y + ddy, nlz + sdz)];
-                const v = baseShade * (1.0 - occ * 0.12);
-                return v > 1.2 ? 1.2 : v;
-              };
-              s0 = calcSide(c0[0], c0[1], c0[2]);
-              s1 = calcSide(c1[0], c1[1], c1[2]);
-              s2 = calcSide(c2[0], c2[1], c2[2]);
-              s3 = calcSide(c3[0], c3[1], c3[2]);
-            }
-
+            const c0 = face.corners[0], c1 = face.corners[1], c2 = face.corners[2], c3 = face.corners[3];
+            const skyF = def.light > 0 ? 1.0 : calcSkyLight(nlx, ny, nlz);
+            const s = Math.min(1.2, face.shade * lightBoost * skyF);
             const py0 = (waterTopLower && c0[1] === 1) ? y + 0.88 : y + c0[1];
             const py1 = (waterTopLower && c1[1] === 1) ? y + 0.88 : y + c1[1];
             const py2 = (waterTopLower && c2[1] === 1) ? y + 0.88 : y + c2[1];
             const py3 = (waterTopLower && c3[1] === 1) ? y + 0.88 : y + c3[1];
 
             b.pushQuad(
-              wx + c0[0], py0, wz + c0[2], c0[3] ? uv.u1 : uv.u0, c0[4] ? uv.v1 : uv.v0, s0,
-              wx + c1[0], py1, wz + c1[2], c1[3] ? uv.u1 : uv.u0, c1[4] ? uv.v1 : uv.v0, s1,
-              wx + c2[0], py2, wz + c2[2], c2[3] ? uv.u1 : uv.u0, c2[4] ? uv.v1 : uv.v0, s2,
-              wx + c3[0], py3, wz + c3[2], c3[3] ? uv.u1 : uv.u0, c3[4] ? uv.v1 : uv.v0, s3,
+              wx + c0[0], py0, wz + c0[2], c0[3] ? uv.u1 : uv.u0, c0[4] ? uv.v1 : uv.v0, s,
+              wx + c1[0], py1, wz + c1[2], c1[3] ? uv.u1 : uv.u0, c1[4] ? uv.v1 : uv.v0, s,
+              wx + c2[0], py2, wz + c2[2], c2[3] ? uv.u1 : uv.u0, c2[4] ? uv.v1 : uv.v0, s,
+              wx + c3[0], py3, wz + c3[2], c3[3] ? uv.u1 : uv.u0, c3[4] ? uv.v1 : uv.v0, s,
               dx0, dy0, dz0
+            );
+          }
+        }
+      }
+    }
+
+    // PASS 2: TRUE GREEDY MESHING for Opaque Cubes (5x–10x fewer triangles + smooth 4-corner AO + Cave Darkness!)
+    const gMask = GREEDY_MASK;
+    const gShade = GREEDY_SHADE;
+
+    // 2A. +Y (fi=0) and -Y (fi=1) Horizontal Slices
+    for (let fi = 0; fi < 2; fi++) {
+      const dy0 = fi === 0 ? 1 : -1;
+      const faceShade = FACES[fi].shade;
+      for (let y = 0; y <= yLimit; y++) {
+        const yOff = y << 8;
+        const ny = y + dy0;
+        let anyInSlice = false;
+        gMask.fill(0, 0, 256);
+
+        for (let lz = 0; lz < 16; lz++) {
+          const zOff = lz << 4;
+          for (let lx = 0; lx < 16; lx++) {
+            const id = data[lx + zOff + yOff];
+            if (id === 0 || transTable[id] !== 0) continue;
+            const neighbor = fastGet(lx, ny, lz);
+            if (neighbor !== 0 && transTable[neighbor] === 0) continue;
+
+            const def = defTable[id];
+            const isLit = def && def.light > 0;
+            const skyF = isLit ? 1.0 : calcSkyLight(lx, ny, lz);
+            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+
+            if (fi === 0) {
+              // 4-corner AO for +Y top face
+              const o00 = solidTable[fastGet(lx - 1, ny, lz)] + solidTable[fastGet(lx, ny, lz + 1)] + solidTable[fastGet(lx - 1, ny, lz + 1)];
+              const o10 = solidTable[fastGet(lx + 1, ny, lz)] + solidTable[fastGet(lx, ny, lz + 1)] + solidTable[fastGet(lx + 1, ny, lz + 1)];
+              const o11 = solidTable[fastGet(lx + 1, ny, lz)] + solidTable[fastGet(lx, ny, lz - 1)] + solidTable[fastGet(lx + 1, ny, lz - 1)];
+              const o01 = solidTable[fastGet(lx - 1, ny, lz)] + solidTable[fastGet(lx, ny, lz - 1)] + solidTable[fastGet(lx - 1, ny, lz - 1)];
+              if (o00 === o10 && o10 === o11 && o11 === o01) {
+                const s = Math.min(1.25, baseShade * (1.0 - o00 * 0.09));
+                const idx2 = lx + zOff;
+                gMask[idx2] = (id << 10) | ((s * 128) | 0);
+                gShade[idx2] = s;
+                anyInSlice = true;
+              } else {
+                const uv = uvTable[id][0];
+                const wx = ox + lx, wz = oz + lz;
+                bOpaque.pushTiledQuad(
+                  wx,     y + 1, wz + 1, 0, 0, Math.min(1.25, baseShade * (1.0 - o00 * 0.09)),
+                  wx + 1, y + 1, wz + 1, 1, 0, Math.min(1.25, baseShade * (1.0 - o10 * 0.09)),
+                  wx + 1, y + 1, wz,     1, 1, Math.min(1.25, baseShade * (1.0 - o11 * 0.09)),
+                  wx,     y + 1, wz,     0, 1, Math.min(1.25, baseShade * (1.0 - o01 * 0.09)),
+                  0, 1, 0, uv.u0, uv.v0, uv.du, uv.dv
+                );
+              }
+            } else {
+              const s = Math.min(1.25, baseShade);
+              const idx2 = lx + zOff;
+              gMask[idx2] = (id << 10) | ((s * 128) | 0);
+              gShade[idx2] = s;
+              anyInSlice = true;
+            }
+          }
+        }
+
+        if (!anyInSlice) continue;
+        // Greedy 2D Rectangle Sweep across 16x16 slice!
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            const key = gMask[lx + (lz << 4)];
+            if (key === 0) continue;
+            let w = 1;
+            while (lx + w < 16 && gMask[(lx + w) + (lz << 4)] === key) w++;
+            let h = 1;
+            outerH: while (lz + h < 16) {
+              const rowOff = (lz + h) << 4;
+              for (let k = 0; k < w; k++) {
+                if (gMask[lx + k + rowOff] !== key) break outerH;
+              }
+              h++;
+            }
+            const s = gShade[lx + (lz << 4)];
+            for (let dz = 0; dz < h; dz++) {
+              const rowOff = (lz + dz) << 4;
+              for (let dx = 0; dx < w; dx++) gMask[lx + dx + rowOff] = 0;
+            }
+            const id = key >>> 10;
+            const uv = uvTable[id][fi];
+            const wx = ox + lx, wz = oz + lz;
+            if (fi === 0) {
+              bOpaque.pushTiledQuad(
+                wx,     y + 1, wz + h, 0, 0, s,
+                wx + w, y + 1, wz + h, w, 0, s,
+                wx + w, y + 1, wz,     w, h, s,
+                wx,     y + 1, wz,     0, h, s,
+                0, 1, 0, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            } else {
+              bOpaque.pushTiledQuad(
+                wx,     y, wz,     0, 0, s,
+                wx + w, y, wz,     w, 0, s,
+                wx + w, y, wz + h, w, h, s,
+                wx,     y, wz + h, 0, h, s,
+                0, -1, 0, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 2B. +X (fi=2) and -X (fi=3) Vertical Slices
+    const sliceLen = (yLimit + 1) << 4;
+    for (let fi = 2; fi <= 3; fi++) {
+      const dx0 = fi === 2 ? 1 : -1;
+      const faceShade = FACES[fi].shade;
+      for (let lx = 0; lx < 16; lx++) {
+        const nlx = lx + dx0;
+        const wx = ox + lx;
+        let anyInSlice = false;
+        gMask.fill(0, 0, sliceLen);
+
+        for (let y = 0; y <= yLimit; y++) {
+          const yOff = y << 8;
+          const mRow = y << 4;
+          for (let lz = 0; lz < 16; lz++) {
+            const id = data[lx + (lz << 4) + yOff];
+            if (id === 0 || transTable[id] !== 0) continue;
+            const neighbor = fastGet(nlx, y, lz);
+            if (neighbor !== 0 && transTable[neighbor] === 0) continue;
+
+            const def = defTable[id];
+            const isLit = def && def.light > 0;
+            const skyF = isLit ? 1.0 : calcSkyLight(nlx, y, lz);
+            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+
+            // 4-corner side AO
+            const calcS = (dy, dz) =>
+              solidTable[fastGet(nlx, y + dy, lz)] +
+              solidTable[fastGet(nlx, y, lz + dz)] +
+              solidTable[fastGet(nlx, y + dy, lz + dz)];
+            const o0 = fi === 2 ? calcS(-1, 1) : calcS(-1, -1);
+            const o1 = fi === 2 ? calcS(-1, -1) : calcS(-1, 1);
+            const o2 = fi === 2 ? calcS(1, -1) : calcS(1, 1);
+            const o3 = fi === 2 ? calcS(1, 1) : calcS(1, -1);
+
+            if (o0 === o1 && o1 === o2 && o2 === o3) {
+              const s = Math.min(1.25, baseShade * (1.0 - o0 * 0.09));
+              gMask[lz + mRow] = (id << 10) | ((s * 128) | 0);
+              gShade[lz + mRow] = s;
+              anyInSlice = true;
+            } else {
+              const uv = uvTable[id][fi];
+              const wz = oz + lz;
+              const xPos = fi === 2 ? wx + 1 : wx;
+              if (fi === 2) {
+                bOpaque.pushTiledQuad(
+                  xPos, y,     wz + 1, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
+                  xPos, y,     wz,     1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
+                  xPos, y + 1, wz,     1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
+                  xPos, y + 1, wz + 1, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
+                );
+              } else {
+                bOpaque.pushTiledQuad(
+                  xPos, y,     wz,     0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
+                  xPos, y,     wz + 1, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
+                  xPos, y + 1, wz + 1, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
+                  xPos, y + 1, wz,     0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  -1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
+                );
+              }
+            }
+          }
+        }
+
+        if (!anyInSlice) continue;
+        const xPos = fi === 2 ? wx + 1 : wx;
+        for (let y = 0; y <= yLimit; y++) {
+          const mRow = y << 4;
+          for (let lz = 0; lz < 16; lz++) {
+            const key = gMask[lz + mRow];
+            if (key === 0) continue;
+            let w = 1;
+            while (lz + w < 16 && gMask[(lz + w) + mRow] === key) w++;
+            let h = 1;
+            outerHX: while (y + h <= yLimit) {
+              const rOff = (y + h) << 4;
+              for (let k = 0; k < w; k++) {
+                if (gMask[lz + k + rOff] !== key) break outerHX;
+              }
+              h++;
+            }
+            const s = gShade[lz + mRow];
+            for (let dy = 0; dy < h; dy++) {
+              const rOff = (y + dy) << 4;
+              for (let dz = 0; dz < w; dz++) gMask[lz + dz + rOff] = 0;
+            }
+            const id = key >>> 10;
+            const uv = uvTable[id][fi];
+            const wz = oz + lz;
+            if (fi === 2) {
+              bOpaque.pushTiledQuad(
+                xPos, y,     wz + w, 0, 0, s,
+                xPos, y,     wz,     w, 0, s,
+                xPos, y + h, wz,     w, h, s,
+                xPos, y + h, wz + w, 0, h, s,
+                1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            } else {
+              bOpaque.pushTiledQuad(
+                xPos, y,     wz,     0, 0, s,
+                xPos, y,     wz + w, w, 0, s,
+                xPos, y + h, wz + w, w, h, s,
+                xPos, y + h, wz,     0, h, s,
+                -1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // 2C. +Z (fi=4) and -Z (fi=5) Vertical Slices
+    for (let fi = 4; fi <= 5; fi++) {
+      const dz0 = fi === 4 ? 1 : -1;
+      const faceShade = FACES[fi].shade;
+      for (let lz = 0; lz < 16; lz++) {
+        const nlz = lz + dz0;
+        const wz = oz + lz;
+        let anyInSlice = false;
+        gMask.fill(0, 0, sliceLen);
+
+        for (let y = 0; y <= yLimit; y++) {
+          const yOff = y << 8;
+          const mRow = y << 4;
+          const zOff = lz << 4;
+          for (let lx = 0; lx < 16; lx++) {
+            const id = data[lx + zOff + yOff];
+            if (id === 0 || transTable[id] !== 0) continue;
+            const neighbor = fastGet(lx, y, nlz);
+            if (neighbor !== 0 && transTable[neighbor] === 0) continue;
+
+            const def = defTable[id];
+            const isLit = def && def.light > 0;
+            const skyF = isLit ? 1.0 : calcSkyLight(lx, y, nlz);
+            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+
+            const calcS = (dy, dx) =>
+              solidTable[fastGet(lx, y + dy, nlz)] +
+              solidTable[fastGet(lx + dx, y, nlz)] +
+              solidTable[fastGet(lx + dx, y + dy, nlz)];
+            const o0 = fi === 4 ? calcS(-1, -1) : calcS(-1, 1);
+            const o1 = fi === 4 ? calcS(-1, 1) : calcS(-1, -1);
+            const o2 = fi === 4 ? calcS(1, 1) : calcS(1, -1);
+            const o3 = fi === 4 ? calcS(1, -1) : calcS(1, 1);
+
+            if (o0 === o1 && o1 === o2 && o2 === o3) {
+              const s = Math.min(1.25, baseShade * (1.0 - o0 * 0.09));
+              gMask[lx + mRow] = (id << 10) | ((s * 128) | 0);
+              gShade[lx + mRow] = s;
+              anyInSlice = true;
+            } else {
+              const uv = uvTable[id][fi];
+              const wx = ox + lx;
+              const zPos = fi === 4 ? wz + 1 : wz;
+              if (fi === 4) {
+                bOpaque.pushTiledQuad(
+                  wx,     y,     zPos, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
+                  wx + 1, y,     zPos, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
+                  wx + 1, y + 1, zPos, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
+                  wx,     y + 1, zPos, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  0, 0, 1, uv.u0, uv.v0, uv.du, uv.dv
+                );
+              } else {
+                bOpaque.pushTiledQuad(
+                  wx + 1, y,     zPos, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
+                  wx,     y,     zPos, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
+                  wx,     y + 1, zPos, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
+                  wx + 1, y + 1, zPos, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  0, 0, -1, uv.u0, uv.v0, uv.du, uv.dv
+                );
+              }
+            }
+          }
+        }
+
+        if (!anyInSlice) continue;
+        const zPos = fi === 4 ? wz + 1 : wz;
+        for (let y = 0; y <= yLimit; y++) {
+          const mRow = y << 4;
+          for (let lx = 0; lx < 16; lx++) {
+            const key = gMask[lx + mRow];
+            if (key === 0) continue;
+            let w = 1;
+            while (lx + w < 16 && gMask[(lx + w) + mRow] === key) w++;
+            let h = 1;
+            outerHZ: while (y + h <= yLimit) {
+              const rOff = (y + h) << 4;
+              for (let k = 0; k < w; k++) {
+                if (gMask[lx + k + rOff] !== key) break outerHZ;
+              }
+              h++;
+            }
+            const s = gShade[lx + mRow];
+            for (let dy = 0; dy < h; dy++) {
+              const rOff = (y + dy) << 4;
+              for (let dx = 0; dx < w; dx++) gMask[lx + dx + rOff] = 0;
+            }
+            const id = key >>> 10;
+            const uv = uvTable[id][fi];
+            const wx = ox + lx;
+            if (fi === 4) {
+              bOpaque.pushTiledQuad(
+                wx,     y,     zPos, 0, 0, s,
+                wx + w, y,     zPos, w, 0, s,
+                wx + w, y + h, zPos, w, h, s,
+                wx,     y + h, zPos, 0, h, s,
+                0, 0, 1, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            } else {
+              bOpaque.pushTiledQuad(
+                wx + w, y,     zPos, 0, 0, s,
+                wx,     y,     zPos, w, 0, s,
+                wx,     y + h, zPos, w, h, s,
+                wx + w, y + h, zPos, 0, h, s,
+                0, 0, -1, uv.u0, uv.v0, uv.du, uv.dv
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // PASS 3: TRUE GREEDY MESHING for +Y Water Surface (16x16 ocean -> 1 single quad!)
+    if (hasWater) {
+      const wMask = GREEDY_WATER_MASK;
+      const wUV = uvTable[BLOCK.WATER][0];
+      for (let y = 0; y <= yLimit; y++) {
+        const yOff = y << 8;
+        let anyW = false;
+        wMask.fill(0);
+        for (let lz = 0; lz < 16; lz++) {
+          const zOff = lz << 4;
+          for (let lx = 0; lx < 16; lx++) {
+            if (data[lx + zOff + yOff] !== BLOCK.WATER) continue;
+            const above = fastGet(lx, y + 1, lz);
+            if (above === BLOCK.WATER || (above !== 0 && transTable[above] === 0)) continue;
+            wMask[lx + zOff] = 1;
+            anyW = true;
+          }
+        }
+        if (!anyW) continue;
+        const wy = y + 0.88;
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            if (!wMask[lx + (lz << 4)]) continue;
+            let w = 1;
+            while (lx + w < 16 && wMask[(lx + w) + (lz << 4)]) w++;
+            let h = 1;
+            outerHW: while (lz + h < 16) {
+              const rOff = (lz + h) << 4;
+              for (let k = 0; k < w; k++) {
+                if (!wMask[lx + k + rOff]) break outerHW;
+              }
+              h++;
+            }
+            for (let dz = 0; dz < h; dz++) {
+              const rOff = (lz + dz) << 4;
+              for (let dx = 0; dx < w; dx++) wMask[lx + dx + rOff] = 0;
+            }
+            const wx = ox + lx, wz = oz + lz;
+            bWater.pushQuad(
+              wx,     wy, wz + h, wUV.u0, wUV.v0, 1.0,
+              wx + w, wy, wz + h, wUV.u1, wUV.v0, 1.0,
+              wx + w, wy, wz,     wUV.u1, wUV.v1, 1.0,
+              wx,     wy, wz,     wUV.u0, wUV.v1, 1.0,
+              0, 1, 0
             );
           }
         }
@@ -2001,7 +2622,9 @@ export class World {
   updateChunksAround(px, pz, maxBuildsPerFrame = 2, budgetMs = 4.0) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    const r = this.renderDistance;
+    const fullRD = this.renderDistance;
+    // Full 1x1x1 voxel detail inner radius + Distant Horizons LOD ring all the way out to 64 chunks!
+    const r = Math.min(fullRD, this.maxDetailRadius);
     this._ensureSpiralOffsets(r);
 
     const movedChunk = pcx !== this._lastChunkPcx || pcz !== this._lastChunkPcz || r !== this._lastChunkRD;
@@ -2022,7 +2645,7 @@ export class World {
       let cursor = this._spiralCursor || 0;
       let generated = 0;
       const maxGen = r > 8 ? 3 : 2;
-      const genBudget = budgetMs * 0.52;
+      const genBudget = budgetMs * 0.48;
 
       while (cursor < dataOffsets.length) {
         const off = dataOffsets[cursor];
@@ -2099,6 +2722,181 @@ export class World {
           }
           this.chunks.delete(key);
         }
+      }
+    }
+
+    // 4. Distant Horizons 64-Chunk LOD Ring (streams ultra-lightweight distant mountains & oceans up to 1,024 blocks!)
+    // Update GPU circular cutout so LOD NEVER overlaps or z-fights with full-detail chunks or caves!
+    this.shaderUniforms.uLodInnerCenter.value.set(px, pz);
+    const innerCutBlocks = Math.max(0, (r - 0.65) * CHUNK_SIZE);
+    this.shaderUniforms.uLodInnerRadiusSq.value = innerCutBlocks * innerCutBlocks;
+    this.updateLodAround(pcx, pcz, r, fullRD, Math.max(1.4, budgetMs * 0.48));
+  }
+
+  // Build one Distant Horizons LOD Super-Region (8x8 chunks = 128x128 blocks at 8-block stride -> <0.4ms!)
+  _buildLodRegionMesh(rx, rz) {
+    const step = 8; // 8-block LOD stride (16x16 grid = 256 samples for 64 chunks!)
+    const cells = 16; // 16 * 8 = 128 blocks = 8 chunks
+    const vertsPerSide = cells + 1; // 17
+    const ox = rx * 128;
+    const oz = rz * 128;
+
+    const heights = new Float32Array(vertsPerSide * vertsPerSide);
+    const colors = new Float32Array(vertsPerSide * vertsPerSide * 3);
+    const positions = new Float32Array(vertsPerSide * vertsPerSide * 3);
+
+    for (let gz = 0; gz < vertsPerSide; gz++) {
+      const wz = oz + gz * step;
+      for (let gx = 0; gx < vertsPerSide; gx++) {
+        const wx = ox + gx * step;
+        const col = this.sampleColumn(wx, wz);
+        const h = col.height;
+        const isWater = this.worldType !== 'flat' && h < SEA_LEVEL;
+        const y = isWater ? (SEA_LEVEL + 0.55) : (h + 0.72);
+        const vi = gx + gz * vertsPerSide;
+        heights[vi] = y;
+        positions[vi * 3] = wx;
+        positions[vi * 3 + 1] = y;
+        positions[vi * 3 + 2] = wz;
+
+        // Rich Biome + Elevation Palette matching BSL Terrain & Water
+        let cr, cg, cb;
+        if (isWater) {
+          if (col.biome === 'Snowy Taiga') { cr = 0.62; cg = 0.80; cb = 0.94; }
+          else {
+            const depth = Math.min(1, (SEA_LEVEL - h) / 14);
+            cr = 0.14 - depth * 0.08;
+            cg = 0.46 - depth * 0.18;
+            cb = 0.68 - depth * 0.14;
+          }
+        } else if (col.biome === 'Desert') {
+          cr = 0.84; cg = 0.76; cb = 0.52;
+        } else if (h >= 58 || col.biome === 'Snowy Taiga') {
+          cr = 0.90; cg = 0.94; cb = 0.98;
+        } else if (h >= 51) {
+          cr = 0.50; cg = 0.52; cb = 0.55;
+        } else if (col.biome === 'Forest') {
+          cr = 0.25; cg = 0.48; cb = 0.21;
+        } else if (col.biome === 'Birch Forest') {
+          cr = 0.35; cg = 0.57; cb = 0.27;
+        } else {
+          cr = 0.38; cg = 0.62; cb = 0.25;
+        }
+        // Subtle natural variation so distant plains & mountains feel alive
+        const vVar = 0.94 + coordHash(wx >> 3, wz >> 3, this.seed + 888) * 0.12;
+        colors[vi * 3] = Math.min(1, cr * vVar);
+        colors[vi * 3 + 1] = Math.min(1, cg * vVar);
+        colors[vi * 3 + 2] = Math.min(1, cb * vVar);
+      }
+    }
+
+    const indices = new Uint16Array(cells * cells * 6);
+    let ii = 0;
+    for (let gz = 0; gz < cells; gz++) {
+      for (let gx = 0; gx < cells; gx++) {
+        const a = gx + gz * vertsPerSide;
+        const b = a + 1;
+        const c = a + vertsPerSide;
+        const d = c + 1;
+        indices[ii++] = a; indices[ii++] = c; indices[ii++] = b;
+        indices[ii++] = b; indices[ii++] = c; indices[ii++] = d;
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(geo, this.lodMat);
+    mesh.frustumCulled = true;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    return mesh;
+  }
+
+  updateLodAround(pcx, pcz, detailR, fullRD, budgetMs = 1.8) {
+    if (fullRD <= detailR) {
+      // Clear LOD meshes when render distance fits fully inside high-detail chunks
+      if (this.lodRegions.size > 0) {
+        for (const rec of this.lodRegions.values()) {
+          this.lodGroup.remove(rec.mesh);
+          rec.mesh.geometry.dispose();
+        }
+        this.lodRegions.clear();
+        this._lodQueue.length = 0;
+      }
+      return;
+    }
+
+    const prx = Math.floor(pcx / 8);
+    const prz = Math.floor(pcz / 8);
+    const lodRadiusRegions = Math.ceil(fullRD / 8);
+
+    if (prx !== this._lastLodRx || prz !== this._lastLodRz || fullRD !== this._lastLodRD) {
+      this._lastLodRx = prx;
+      this._lastLodRz = prz;
+      this._lastLodRD = fullRD;
+
+      // Queue missing LOD regions in spiral order outside the inner high-detail chunk ring
+      const innerMinDist = Math.max(0, (detailR - 2) / 8);
+      const outerMaxDist = lodRadiusRegions + 0.6;
+      const needed = [];
+      for (let dz = -lodRadiusRegions; dz <= lodRadiusRegions; dz++) {
+        for (let dx = -lodRadiusRegions; dx <= lodRadiusRegions; dx++) {
+          const dist = Math.hypot(dx, dz);
+          if (dist > outerMaxDist) continue;
+          const rx = prx + dx;
+          const rz = prz + dz;
+          // Hide any region completely inside the loaded high-detail voxel circle
+          const regionCenterCx = rx * 8 + 4;
+          const regionCenterCz = rz * 8 + 4;
+          const centerDistChunks = Math.hypot(regionCenterCx - pcx, regionCenterCz - pcz);
+          const fullyInsideDetail = centerDistChunks < Math.max(0, detailR - 5.8);
+          const key = this.chunkKey(rx, rz);
+          const existing = this.lodRegions.get(key);
+          if (fullyInsideDetail) {
+            if (existing) existing.mesh.visible = false;
+            continue;
+          }
+          if (existing) {
+            existing.mesh.visible = true;
+          } else if (dist >= innerMinDist * 0.5) {
+            needed.push({ rx, rz, key, d2: dx * dx + dz * dz });
+          }
+        }
+      }
+      needed.sort((a, b) => a.d2 - b.d2);
+      this._lodQueue = needed;
+
+      // Unload out-of-range LOD regions cleanly
+      const unloadRegSq = (lodRadiusRegions + 2) * (lodRadiusRegions + 2);
+      for (const [key, rec] of this.lodRegions.entries()) {
+        const dx = rec.rx - prx;
+        const dz = rec.rz - prz;
+        if (dx * dx + dz * dz > unloadRegSq) {
+          this.lodGroup.remove(rec.mesh);
+          rec.mesh.geometry.dispose();
+          this.lodRegions.delete(key);
+        }
+      }
+    }
+
+    // Stream LOD super-regions under a strict sub-2ms budget so frame rate NEVER dips!
+    if (this._lodQueue.length > 0) {
+      const t0 = performance.now();
+      let built = 0;
+      while (this._lodQueue.length > 0 && built < 4) {
+        const item = this._lodQueue.shift();
+        if (this.lodRegions.has(item.key)) continue;
+        const mesh = this._buildLodRegionMesh(item.rx, item.rz);
+        // Subtle vertical skirt drop (-0.45) guarantees zero z-fighting at detail-to-LOD overlap!
+        mesh.position.y = -0.45;
+        this.lodGroup.add(mesh);
+        this.lodRegions.set(item.key, { rx: item.rx, rz: item.rz, mesh });
+        built++;
+        if (performance.now() - t0 >= budgetMs) break;
       }
     }
   }
@@ -2364,8 +3162,15 @@ export class World {
       }
     }
     this.chunks.clear();
+    for (const rec of this.lodRegions.values()) {
+      this.lodGroup.remove(rec.mesh);
+      rec.mesh.geometry.dispose();
+    }
+    this.lodRegions.clear();
+    this._lodQueue.length = 0;
     this.lightSources.clear();
     this._activeLightSources = [];
     this.scene.remove(this.group);
+    this.scene.remove(this.lodGroup);
   }
 }

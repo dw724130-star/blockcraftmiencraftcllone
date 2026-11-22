@@ -45,8 +45,8 @@ export class SkySystem {
     this.sunLight.shadow.camera.right = d;
     this.sunLight.shadow.camera.top = d;
     this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0008;
-    this.sunLight.shadow.normalBias = 0.04;
+    this.sunLight.shadow.bias = -0.0012;
+    this.sunLight.shadow.normalBias = 0.075;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
@@ -77,8 +77,8 @@ export class SkySystem {
       uCloudCover: { value: 1.0 }
     };
 
-    // Volumetric Atmospheric Sky Dome (BSL / Complementary / Bliss Shader Style)
-    const domeGeo = new THREE.SphereGeometry(420, 32, 24);
+    // Volumetric Atmospheric Sky Dome (BSL / Complementary / Bliss Shader Style — 1600 radius for 64-chunk vistas!)
+    const domeGeo = new THREE.SphereGeometry(1600, 32, 24);
     const domeMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       side: THREE.BackSide,
@@ -171,10 +171,10 @@ export class SkySystem {
           float sunDisc = smoothstep(0.9982, 0.9994, sunDot) * 2.4;
           skyCol += uSunColor * (sunHaloWide + sunHaloTight + sunDisc) * sunVisible;
 
-          // Subtle diagonal sunbeam rays near horizon during golden hour
+          // Subtle diagonal BSL volumetric sunbeam shafts near sun & golden hour!
           float rayAngle = atan(dir.y - sunDir.y, dir.x - sunDir.x);
-          float rays = 0.5 + 0.5 * sin(rayAngle * 7.0 + uTime * 0.15) * cos(rayAngle * 4.0 - uTime * 0.1);
-          skyCol += uSunColor * pow(sunDot, 12.0) * rays * 0.18 * (0.35 + 0.65 * uSunsetFactor) * sunVisible;
+          float rays = 0.5 + 0.5 * sin(rayAngle * 8.0 + uTime * 0.14) * cos(rayAngle * 5.0 - uTime * 0.09);
+          skyCol += uSunColor * pow(sunDot, 9.0) * rays * 0.28 * (0.45 + 0.65 * uSunsetFactor) * sunVisible;
 
           // 3. Soft Glowing Moon + Halo at Night
           float moonVisible = smoothstep(-0.08, 0.1, moonDir.y) * clearAmt * (1.0 - uDayFactor * 0.85);
@@ -182,8 +182,14 @@ export class SkySystem {
           float moonHalo = pow(moonDot, 36.0) * 0.28;
           skyCol += vec3(0.78, 0.88, 1.0) * (moonDisc + moonHalo) * moonVisible;
 
-          // 4. Procedural Volumetric-Style Puffy Clouds (Optimized 4-tap ALU for 60 FPS iPad!)
-          if (dir.y > 0.012 && uCloudCover > 0.01) {
+          // 4. Dual-Layer BSL Clouds: High Wispy Cirrus + Puffy Volumetric Cumulus with Silver Lining!
+          if (dir.y > 0.01 && uCloudCover > 0.01) {
+            // High-altitude wispy cirrus streaks
+            vec2 cirrusUV = (dir.xz / (dir.y + 0.24)) * 0.55 + vec2(uTime * 0.004, -uTime * 0.002);
+            float cirrus = smoothstep(0.58, 0.86, fbmCloudFast(cirrusUV * vec2(1.8, 0.65)));
+            vec3 cirrusCol = mix(uCloudLitColor, uSunColor, 0.25 + 0.5 * uSunsetFactor);
+            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.02, 0.28, dir.y) * 0.32 * (1.0 - uRainFactor * 0.7) * uCloudCover);
+
             float projY = dir.y + 0.11;
             vec2 cloudUV = (dir.xz / projY) * 0.42;
             vec2 drift = vec2(uTime * 0.0085, uTime * 0.0032);
@@ -192,25 +198,25 @@ export class SkySystem {
             float n2 = noise2D(cloudUV * 2.4 - drift * 0.65 + vec2(4.2, 9.1));
             float rawDensity = n1 * 0.74 + n2 * 0.26;
 
-            float thresh = mix(0.49, 0.36, uRainFactor);
-            float cloudAlpha = smoothstep(thresh, thresh + 0.22, rawDensity);
+            float thresh = mix(0.48, 0.35, uRainFactor);
+            float cloudAlpha = smoothstep(thresh, thresh + 0.21, rawDensity);
 
-            // Fast single-tap directional volumetric self-shadowing
+            // Fast directional volumetric self-shadowing + warm sunset under-glow
             float selfLight = 0.65;
             if (cloudAlpha > 0.01) {
-              vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.075;
+              vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.082;
               float nSun = noise2D((cloudUV + sunStep) * 1.15 + drift) * 0.68 + n2 * 0.32;
-              selfLight = clamp((rawDensity - nSun) * 3.1 + 0.58, 0.0, 1.0);
+              selfLight = clamp((rawDensity - nSun) * 3.4 + 0.58, 0.0, 1.0);
             }
 
-            // Warm sunlit rim + silver lining around sun
-            float silverLining = pow(sunDot, 9.0) * (1.0 - cloudAlpha * 0.45) * sunVisible;
+            // Warm sunlit rim + glowing BSL silver lining around sun
+            float silverLining = pow(sunDot, 8.0) * (1.0 - cloudAlpha * 0.42) * sunVisible;
             vec3 cCol = mix(uCloudShadowColor, uCloudLitColor, selfLight);
-            cCol += uSunColor * (0.45 + 0.55 * uSunsetFactor) * silverLining * 0.9;
+            cCol += uSunColor * (0.55 + 0.65 * uSunsetFactor) * silverLining * 1.05;
 
             // Fade clouds smoothly into distant atmospheric horizon haze
-            float horizonFade = smoothstep(0.012, 0.19, dir.y);
-            float finalAlpha = cloudAlpha * horizonFade * 0.92 * uCloudCover;
+            float horizonFade = smoothstep(0.012, 0.18, dir.y);
+            float finalAlpha = cloudAlpha * horizonFade * 0.94 * uCloudCover;
             skyCol = mix(skyCol, cCol, finalAlpha);
           }
 
@@ -238,7 +244,7 @@ export class SkySystem {
     for (let i = 0; i < 360; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(Math.random() * 0.88 + 0.08);
-      const r = 340;
+      const r = 1420;
       starPts.push(
         r * Math.sin(phi) * Math.cos(theta),
         r * Math.cos(phi),
@@ -250,7 +256,7 @@ export class SkySystem {
     this.starMat = new THREE.PointsMaterial({
       color: 0xeaf4ff,
       map: starTex,
-      size: 4.2,
+      size: 16.5,
       transparent: true,
       opacity: 0,
       depthWrite: false,
@@ -333,8 +339,8 @@ export class SkySystem {
   }
 
   setRenderDistance(chunks) {
-    const far = Math.max(54, chunks * 16 - 2);
-    this.fog.near = far * 0.48;
+    const far = Math.max(68, chunks * 16 - 4);
+    this.fog.near = far * 0.42;
     this.fog.far = far;
   }
 
@@ -457,14 +463,17 @@ export class SkySystem {
     this.sunLight.target.position.set(snapX, snapY, snapZ);
     this.sunLight.target.updateMatrixWorld();
 
-    this._hemiSky.copy(midCol).lerp(tmp.setHex(0xdcf0ff), 0.35);
-    this._hemiGround.setHex(0x212926).lerp(tmp.setHex(0x63704d), dayFactor).lerp(tmp.setHex(0x7a5646), clearSunset * 0.55);
+    this._hemiSky.copy(midCol).lerp(tmp.setHex(0xe8f6ff), 0.45);
+    // Luminous BSL bounced ground light so shadows & shaded vertical faces stay crisp & airy (never crushed black!)
+    this._hemiGround.setHex(0x283238).lerp(tmp.setHex(0xa8ba9e), dayFactor).lerp(tmp.setHex(0xb88b76), clearSunset * 0.5);
     this.hemiLight.color.copy(this._hemiSky);
     this.hemiLight.groundColor.copy(this._hemiGround);
-    this.hemiLight.intensity = (0.34 + dayFactor * 0.58) * rainDim;
+    this.hemiLight.intensity = (0.42 + dayFactor * 0.86) * rainDim;
 
-    this.fillLight.color.copy(midCol);
-    this.fillLight.intensity = (0.1 + dayFactor * 0.18) * rainDim;
+    // Opposite-side sky bounce fill light illuminates shaded +Z/-X faces cleanly!
+    this.fillLight.color.copy(midCol).lerp(tmp.setHex(0xd8ecff), 0.5);
+    this.fillLight.position.set(-lightDir.x * 50, 34, 42);
+    this.fillLight.intensity = (0.14 + dayFactor * 0.36) * rainDim;
 
     // Stars twinkle gently at night
     this.starMat.opacity = Math.max(0, 1.0 - dayFactor * 2.4) * (1.0 - rainFactor * 0.9) * 0.92;

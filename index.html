@@ -13,23 +13,23 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="css/style.css?v=17" />
+  <link rel="stylesheet" href="css/style.css?v=19" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=17",
-        "./js/recipes.js": "./js/recipes.js?v=17",
-        "./js/world.js": "./js/world.js?v=17",
-        "./js/mobs.js": "./js/mobs.js?v=17",
-        "./js/player.js": "./js/player.js?v=17",
-        "./js/effects.js": "./js/effects.js?v=17",
-        "./js/audio.js": "./js/audio.js?v=17",
-        "./js/ui.js": "./js/ui.js?v=17",
-        "./js/controls.js": "./js/controls.js?v=17",
-        "./js/sky.js": "./js/sky.js?v=17",
-        "./js/panorama.js": "./js/panorama.js?v=17",
-        "./js/storage.js": "./js/storage.js?v=17"
+        "./js/blocks.js": "./js/blocks.js?v=19",
+        "./js/recipes.js": "./js/recipes.js?v=19",
+        "./js/world.js": "./js/world.js?v=19",
+        "./js/mobs.js": "./js/mobs.js?v=19",
+        "./js/player.js": "./js/player.js?v=19",
+        "./js/effects.js": "./js/effects.js?v=19",
+        "./js/audio.js": "./js/audio.js?v=19",
+        "./js/ui.js": "./js/ui.js?v=19",
+        "./js/controls.js": "./js/controls.js?v=19",
+        "./js/sky.js": "./js/sky.js?v=19",
+        "./js/panorama.js": "./js/panorama.js?v=19",
+        "./js/storage.js": "./js/storage.js?v=19"
       }
     }
   </script>
@@ -274,7 +274,7 @@
           </div>
           <div class="setting-row">
             <label>Render Distance: <strong id="title-val-render-dist">6</strong> chunks</label>
-            <input type="range" id="title-set-render-dist" min="2" max="16" step="1" value="6" />
+            <input type="range" id="title-set-render-dist" min="2" max="64" step="1" value="6" />
           </div>
           <div class="setting-row keybinds-section">
             <div class="keybinds-header">
@@ -660,7 +660,7 @@
         <div class="settings-list">
           <div class="setting-row">
             <label>Render Distance: <strong id="val-render-dist">6</strong> chunks</label>
-            <input type="range" id="set-render-dist" min="2" max="16" step="1" value="6" />
+            <input type="range" id="set-render-dist" min="2" max="64" step="1" value="6" />
           </div>
           <div class="setting-row">
             <label>Touch Sensitivity: <strong id="val-sensitivity">1.0</strong></label>
@@ -820,6 +820,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=17"></script>
+  <script type="module" src="js/main.js?v=19"></script>
 </body>
 </html>

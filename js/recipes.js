@@ -36,79 +36,31 @@ export const FUEL_VALUES = {
 // For matching grids AND quick-craft, every recipe also computes a flat `cost: { itemKey: count }`.
 
 const RAW_RECIPES = [
-  // Basic 2x2 Wood, Stone & Building
+  // Authentic Minecraft 2x2 Basics & Building Blocks
   { out: 'oak_planks', count: 4, ingredients: { oak_log: 1 } },
   { out: 'birch_planks', count: 4, ingredients: { birch_log: 1 } },
   { out: 'spruce_planks', count: 4, ingredients: { spruce_log: 1 } },
-  { out: 'oak_log', count: 1, pattern: ['PP', 'PP'], map: { P: 'oak_planks' } },
-  { out: 'birch_log', count: 1, pattern: ['PP', 'PP'], map: { P: 'birch_planks' } },
-  { out: 'spruce_log', count: 1, pattern: ['PP', 'PP'], map: { P: 'spruce_planks' } },
-  { out: 'birch_log', count: 1, ingredients: { oak_log: 1, bone: 1 } },
-  { out: 'spruce_log', count: 1, ingredients: { oak_log: 1, coal: 1 } },
   { out: 'stick', count: 4, pattern: ['P', 'P'], map: { P: 'any_planks' } },
   { out: 'crafting_table', count: 1, pattern: ['PP', 'PP'], map: { P: 'any_planks' } },
   { out: 'torch', count: 4, pattern: ['C', 'S'], map: { C: 'coal', S: 'stick' } },
   { out: 'sandstone', count: 1, pattern: ['SS', 'SS'], map: { S: 'sand' } },
-  { out: 'sand', count: 4, ingredients: { sandstone: 1 } },
-  { out: 'sand', count: 2, ingredients: { gravel: 1, cobblestone: 1 } },
-  { out: 'gravel', count: 2, ingredients: { cobblestone: 2 } },
-  { out: 'cobblestone', count: 2, pattern: ['GG', 'GG'], map: { G: 'gravel' } },
-  { out: 'cobblestone', count: 1, ingredients: { stone: 1 } },
-  { out: 'stone', count: 2, ingredients: { cobblestone: 2, coal: 1 } },
   { out: 'stone_bricks', count: 4, pattern: ['SS', 'SS'], map: { S: 'stone' } },
-  { out: 'bricks', count: 4, pattern: ['DC', 'CD'], map: { D: 'dirt', C: 'cobblestone' } },
-  { out: 'glass', count: 4, ingredients: { sand: 4, coal: 1 } },
 
-  // Natural Terrain, Foliage & Flowers (100% Block Coverage!)
-  { out: 'dirt', count: 2, ingredients: { gravel: 1, sand: 1 } },
-  { out: 'grass', count: 1, ingredients: { dirt: 1, tall_grass: 1 } },
-  { out: 'farmland', count: 1, ingredients: { dirt: 1, stick: 1 } },
-  { out: 'tall_grass', count: 2, ingredients: { wheat: 1 } },
-  { out: 'flower_red', count: 2, ingredients: { tall_grass: 1, apple: 1 } },
-  { out: 'flower_yellow', count: 2, ingredients: { tall_grass: 1, wheat: 1 } },
-  { out: 'oak_leaves', count: 4, pattern: ['GG', 'GS'], map: { G: 'tall_grass', S: 'stick' } },
-  { out: 'birch_leaves', count: 4, ingredients: { oak_leaves: 4, bone: 1 } },
-  { out: 'spruce_leaves', count: 4, ingredients: { oak_leaves: 4, coal: 1 } },
-  { out: 'cactus', count: 1, pattern: ['G', 'S'], map: { G: 'tall_grass', S: 'sand' } },
-  { out: 'snow', count: 4, pattern: ['WB', 'BW'], map: { W: 'wool_white', B: 'bone' } },
-  { out: 'ice', count: 2, pattern: ['SS', 'SS'], map: { S: 'snow' } },
-  { out: 'water', count: 2, ingredients: { ice: 1, torch: 1 } },
-
-  // Utility & Decoration (3x3)
+  // Authentic Minecraft 3x3 Utility, Food & Redstone/Explosives
   { out: 'furnace', count: 1, table: true, pattern: ['CCC', 'C C', 'CCC'], map: { C: 'cobblestone' } },
   { out: 'chest', count: 1, table: true, pattern: ['PPP', 'P P', 'PPP'], map: { P: 'any_planks' } },
   { out: 'ladder', count: 3, table: true, pattern: ['S S', 'SSS', 'S S'], map: { S: 'stick' } },
   { out: 'bed', count: 1, table: true, pattern: ['WWW', 'PPP'], map: { W: 'any_wool', P: 'any_planks' } },
   { out: 'tnt', count: 1, table: true, pattern: ['GSG', 'SGS', 'GSG'], map: { G: 'gunpowder', S: 'sand' } },
   { out: 'bread', count: 1, table: true, pattern: ['WWW'], map: { W: 'wheat' } },
-  { out: 'bookshelf', count: 1, table: true, pattern: ['PPP', 'LLL', 'PPP'], map: { P: 'any_planks', L: 'oak_planks' } },
-  { out: 'glowstone', count: 2, table: true, pattern: [' T ', 'TGL', ' T '], map: { T: 'torch', G: 'glass', L: 'gold_ingot' } },
-  { out: 'glowstone', count: 1, pattern: ['TT', 'TT'], map: { T: 'torch' } },
-  { out: 'obsidian', count: 2, table: true, pattern: ['CCC', 'CWC', 'CCC'], map: { C: 'cobblestone', W: 'water' } },
-  { out: 'bedrock', count: 1, table: true, pattern: ['ODO', 'DID', 'ODO'], map: { O: 'obsidian', D: 'diamond_block', I: 'iron_block' } },
 
-  // Ore Blocks (for builders & decoration!)
-  { out: 'coal_ore', count: 1, ingredients: { stone: 1, coal: 1 } },
-  { out: 'iron_ore', count: 1, ingredients: { stone: 1, iron_ingot: 1 } },
-  { out: 'gold_ore', count: 1, ingredients: { stone: 1, gold_ingot: 1 } },
-  { out: 'diamond_ore', count: 1, ingredients: { stone: 1, diamond: 1 } },
-
-  // Storage blocks
+  // Authentic Minecraft Metal & Gem Storage Blocks (9 <-> 1)
   { out: 'iron_block', count: 1, table: true, pattern: ['III', 'III', 'III'], map: { I: 'iron_ingot' } },
   { out: 'gold_block', count: 1, table: true, pattern: ['GGG', 'GGG', 'GGG'], map: { G: 'gold_ingot' } },
   { out: 'diamond_block', count: 1, table: true, pattern: ['DDD', 'DDD', 'DDD'], map: { D: 'diamond' } },
   { out: 'iron_ingot', count: 9, ingredients: { iron_block: 1 } },
   { out: 'gold_ingot', count: 9, ingredients: { gold_block: 1 } },
-  { out: 'diamond', count: 9, ingredients: { diamond_block: 1 } },
-
-  // All 5 Wool Colors!
-  { out: 'wool_white', count: 1, pattern: ['FF', 'FF'], map: { F: 'feather' } },
-  { out: 'wool_red', count: 1, ingredients: { wool_white: 1, flower_red: 1 } },
-  { out: 'wool_yellow', count: 1, ingredients: { wool_white: 1, flower_yellow: 1 } },
-  { out: 'wool_green', count: 1, ingredients: { wool_white: 1, cactus: 1 } },
-  { out: 'wool_green', count: 1, ingredients: { wool_white: 1, tall_grass: 1 } },
-  { out: 'wool_blue', count: 1, ingredients: { wool_white: 1, ice: 1 } },
-  { out: 'wool_blue', count: 1, ingredients: { wool_white: 1, water: 1 } }
+  { out: 'diamond', count: 9, ingredients: { diamond_block: 1 } }
 ];
 
 // Tools & Weapons
