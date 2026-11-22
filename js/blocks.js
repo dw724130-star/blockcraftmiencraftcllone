@@ -149,7 +149,7 @@ regBlock(BLOCK.TALL_GRASS, 'tall_grass', { name: 'Tall Grass', solid: false, tra
 regBlock(BLOCK.FLOWER_RED, 'flower_red', { name: 'Poppy', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', faces: { all: 'flower_red' } });
 regBlock(BLOCK.FLOWER_YELLOW, 'flower_yellow', { name: 'Dandelion', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', faces: { all: 'flower_yellow' } });
 
-regBlock(BLOCK.BED, 'bed', { name: 'Red Bed', hardness: 0.6, sound: 'wood', interactive: 'bed', faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED, 'bed', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
 regBlock(BLOCK.STONE_BRICKS, 'stone_bricks', { name: 'Stone Bricks', hardness: 2.3, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'stone_bricks' } });
 regBlock(BLOCK.IRON_BLOCK, 'iron_block', { name: 'Block of Iron', hardness: 3.8, tool: 'pickaxe', minTier: 2, sound: 'stone', faces: { all: 'iron_block' } });
 regBlock(BLOCK.GOLD_BLOCK, 'gold_block', { name: 'Block of Gold', hardness: 3.4, tool: 'pickaxe', minTier: 3, sound: 'stone', faces: { all: 'gold_block' } });

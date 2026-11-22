@@ -12,7 +12,7 @@ import { Player } from './player.js';
 import { EntityManager } from './mobs.js';
 import { ControlManager } from './controls.js';
 import { UIManager } from './ui.js';
-import { loadSettings, saveSettings, listWorlds, loadWorld, saveWorld, deleteWorld } from './storage.js';
+import { loadSettings, saveSettings, listWorlds, loadWorld, saveWorld, deleteWorld, DEFAULT_KEYBINDS } from './storage.js';
 
 class BlockCraftGame {
   constructor() {
@@ -88,6 +88,7 @@ class BlockCraftGame {
   applySettings() {
     this.sound.enabled = this.settings.sound;
     this.controls.sensitivity = this.settings.sensitivity;
+    this.controls.setKeybinds(this.settings.keybinds);
     this.controls.setControlStyle(this.settings.controlStyle);
     this.controls.setShowTouch(this.settings.showTouch);
 
@@ -119,9 +120,52 @@ class BlockCraftGame {
     if (this.effects) {
       this.effects.setEnabled(this.settings.biomeEffects !== false);
     }
+    if (this.ui && this.ui.syncCheatUI) {
+      this.ui.syncCheatUI(this.areCheatsAllowed());
+    }
+  }
+
+  areCheatsAllowed() {
+    if (this.worldMeta && typeof this.worldMeta.allowCheats === 'boolean') {
+      return this.worldMeta.allowCheats;
+    }
+    return Boolean(this.settings.allowCheats);
+  }
+
+  setAllowCheats(allowed) {
+    const flag = Boolean(allowed);
+    this.settings.allowCheats = flag;
+    if (this.worldMeta) this.worldMeta.allowCheats = flag;
+    saveSettings(this.settings);
+    if (this.ui) {
+      this.ui.syncCheatUI(flag);
+      this.ui.toast(flag ? 'Cheats Enabled' : 'Cheats Disabled');
+    }
+  }
+
+  updateKeybind(action, code) {
+    if (!this.settings.keybinds) this.settings.keybinds = { ...DEFAULT_KEYBINDS };
+    this.settings.keybinds[action] = code;
+    saveSettings(this.settings);
+    this.controls.setKeybinds(this.settings.keybinds);
+    if (this.ui) this.ui.renderKeybindsUI(this.settings.keybinds);
+  }
+
+  resetKeybinds() {
+    this.settings.keybinds = { ...DEFAULT_KEYBINDS };
+    saveSettings(this.settings);
+    this.controls.setKeybinds(this.settings.keybinds);
+    if (this.ui) {
+      this.ui.renderKeybindsUI(this.settings.keybinds);
+      this.ui.toast('Keybinds reset to defaults');
+    }
   }
 
   updateSetting(key, val) {
+    if (key === 'allowCheats') {
+      this.setAllowCheats(val);
+      return;
+    }
     this.settings[key] = val;
     saveSettings(this.settings);
     this.applySettings();
@@ -150,10 +194,10 @@ class BlockCraftGame {
     this.player = null;
   }
 
-  async startNewWorld({ name, mode, worldType, seed }) {
+  async startNewWorld({ name, mode, worldType, seed, allowCheats = false }) {
     this.sound.unlock();
     const id = 'w_' + Date.now();
-    this.worldMeta = { id, name, mode, worldType, seed };
+    this.worldMeta = { id, name, mode, worldType, seed, allowCheats: Boolean(allowCheats) };
     this.initGameSession(this.worldMeta, null);
     await this.saveCurrentWorld(false);
   }
@@ -170,7 +214,8 @@ class BlockCraftGame {
       name: data.name,
       mode: data.mode || 'survival',
       worldType: data.worldType || 'infinite',
-      seed: data.seed
+      seed: data.seed,
+      allowCheats: data.allowCheats !== undefined ? Boolean(data.allowCheats) : Boolean(this.settings.allowCheats)
     };
     this.initGameSession(this.worldMeta, data);
   }
@@ -282,11 +327,15 @@ class BlockCraftGame {
     this.controls.enabled = true;
     this._cachedBiomeBx = 1e9;
     this._cachedBiomeBz = 1e9;
+    this.settings.allowCheats = Boolean(meta.allowCheats);
+    this.ui.syncSettingsUI(this.settings);
+    this.ui.syncCheatUI(this.areCheatsAllowed());
     this.ui.showTitleScreen(false);
     this.ui.updateHotbar();
     this.ui.updateStats(true);
+    this.ui.updateEffectsHUD(this.player.statusEffects);
     this.ui.updateActionButtons(false, false);
-    this.ui.addChatMessage(`Welcome to ${meta.name}! (${meta.mode.toUpperCase()})`);
+    this.ui.addChatMessage(`Welcome to ${meta.name}! (${meta.mode.toUpperCase()}${meta.allowCheats ? ' • Cheats ON' : ''})`);
   }
 
   async saveCurrentWorld(showToast = false) {
@@ -297,6 +346,7 @@ class BlockCraftGame {
       mode: this.player.mode,
       worldType: this.worldMeta.worldType,
       seed: this.worldMeta.seed,
+      allowCheats: Boolean(this.worldMeta.allowCheats),
       time: this.sky.time,
       dayCount: this.sky.dayCount,
       player: {
@@ -333,8 +383,12 @@ class BlockCraftGame {
     await this.refreshWorldList();
   }
 
-  setGameMode(mode) {
+  setGameMode(mode, bypassCheatCheck = false) {
     if (!this.player) return;
+    if (!bypassCheatCheck && !this.areCheatsAllowed()) {
+      this.ui.toast('Cheats are disabled! Enable Allow Cheats in Settings.');
+      return false;
+    }
     this.player.mode = mode;
     if (mode === 'survival') this.player.flying = false;
     else {
@@ -343,6 +397,7 @@ class BlockCraftGame {
     }
     this.ui.updateStats();
     this.ui.toast(`Switched to ${mode.toUpperCase()} mode`);
+    return true;
   }
 
   toggleCamera() {
@@ -438,13 +493,17 @@ class BlockCraftGame {
             return;
           }
           if (bdef.interactive === 'bed') {
-            this.player.spawnPos.set(x + 0.5, y + 1.2, z + 0.5);
-            if (this.sky.isNight()) {
-              this.sky.time = 0.28;
+            this.player.spawnPos.set(x + 0.5, y + 1.15, z + 0.5);
+            const isEveningOrNight = this.sky.isNight() || this.sky.time < 0.255 || this.sky.time > 0.72;
+            if (isEveningOrNight) {
+              this.sky.time = 0.275;
               this.sky.dayCount++;
+              this.player.hp = this.player.maxHp;
+              this.ui.updateStats();
+              if (this.ui.playSleepTransition) this.ui.playSleepTransition();
               this.ui.toast('Slept until morning • Respawn set!');
             } else {
-              this.ui.toast('Respawn point set!');
+              this.ui.toast('Respawn point set! (Sleep at dusk or night)');
             }
             return;
           }
@@ -507,10 +566,23 @@ class BlockCraftGame {
   handleChatCommand(text) {
     if (!text.startsWith('/')) {
       this.ui.addChatMessage(`Player: ${text}`);
-      return;
+      return true;
     }
     const parts = text.slice(1).trim().split(/\s+/);
-    const cmd = parts[0].toLowerCase();
+    const cmd = (parts[0] || '').toLowerCase();
+
+    if (cmd === 'help') {
+      const status = this.areCheatsAllowed() ? 'ON' : 'OFF (enable in Settings)';
+      this.ui.addChatMessage(`Cheats: ${status} | /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set <day|sunrise|noon|sunset|night>, /weather <clear|rain>, /gamemode <c|s>, /heal, /tp x y z`);
+      return true;
+    }
+
+    const CHEAT_CMDS = new Set(['time', 'gamemode', 'gm', 'weather', 'heal', 'give', 'tp', 'effect']);
+    if (CHEAT_CMDS.has(cmd) && !this.areCheatsAllowed()) {
+      this.ui.addChatMessage('Cheats are disabled! Enable "Allow Cheats" in Settings to use commands.');
+      this.ui.toast('Cheats disabled — enable in Settings');
+      return false;
+    }
 
     if (cmd === 'time' && parts[1] === 'set') {
       const v = parts[2]?.toLowerCase();
@@ -519,22 +591,36 @@ class BlockCraftGame {
       else if (v === 'noon') this.sky.time = 0.5;
       else if (v === 'sunset' || v === 'golden' || v === 'dusk') this.sky.time = 0.738;
       else if (v === 'night' || v === 'midnight') this.sky.time = 0.02;
+      else if (v && !Number.isNaN(parseFloat(v))) {
+        const num = parseFloat(v);
+        this.sky.time = num > 1 ? ((num % 24000) / 24000) : Math.max(0, Math.min(0.999, num));
+      } else {
+        this.ui.addChatMessage('Usage: /time set sunrise|day|noon|sunset|night');
+        return false;
+      }
       this.ui.addChatMessage(`Set time to ${v}`);
+      return true;
     } else if (cmd === 'gamemode' || cmd === 'gm') {
       const m = parts[1]?.toLowerCase();
-      if (m === 'creative' || m === 'c' || m === '1') this.setGameMode('creative');
-      else if (m === 'survival' || m === 's' || m === '0') this.setGameMode('survival');
+      if (m === 'creative' || m === 'c' || m === '1') this.setGameMode('creative', true);
+      else if (m === 'survival' || m === 's' || m === '0') this.setGameMode('survival', true);
+      else this.ui.addChatMessage('Usage: /gamemode creative|survival');
+      return true;
     } else if (cmd === 'weather') {
       const w = parts[1]?.toLowerCase();
       if (w === 'rain' || w === 'clear') {
         this.sky.weather = w;
         this.ui.addChatMessage(`Weather set to ${w}`);
+      } else {
+        this.ui.addChatMessage('Usage: /weather clear|rain');
       }
+      return true;
     } else if (cmd === 'heal') {
       this.player.hp = this.player.maxHp;
       this.player.hunger = this.player.maxHunger;
       this.ui.updateStats();
       this.ui.addChatMessage('Healed to full health & hunger');
+      return true;
     } else if (cmd === 'give' && parts[1]) {
       const item = parts[1].toLowerCase();
       const count = Math.max(1, Math.min(64, parseInt(parts[2] || '1', 10) || 1));
@@ -545,6 +631,33 @@ class BlockCraftGame {
       } else {
         this.ui.addChatMessage(`Unknown item: ${item}`);
       }
+      return true;
+    } else if (cmd === 'effect' && parts[1]) {
+      const raw = parts[1].toLowerCase();
+      const aliases = {
+        speed: 'speed', swiftness: 'speed',
+        jump: 'jump', jumpboost: 'jump', jump_boost: 'jump',
+        regen: 'regen', regeneration: 'regen',
+        nightvision: 'nightvision', night_vision: 'nightvision', nv: 'nightvision'
+      };
+      if (raw === 'clear') {
+        this.player.clearEffects();
+        this.ui.updateEffectsHUD(this.player.statusEffects);
+        this.ui.addChatMessage('Cleared all active effects');
+        return true;
+      }
+      const eff = aliases[raw];
+      if (!eff) {
+        this.ui.addChatMessage('Usage: /effect speed|jump|regen|nightvision|clear [seconds]');
+        return false;
+      }
+      const sec = Math.max(5, Math.min(600, parseInt(parts[2] || '60', 10) || 60));
+      this.player.applyEffect(eff, sec);
+      this.ui.updateEffectsHUD(this.player.statusEffects);
+      const labels = { speed: 'Speed', jump: 'Jump Boost', regen: 'Regeneration', nightvision: 'Night Vision' };
+      this.ui.addChatMessage(`Applied ${labels[eff]} for ${sec}s`);
+      this.ui.toast(`${labels[eff]} (${sec}s)`);
+      return true;
     } else if (cmd === 'tp' && parts.length >= 4) {
       const x = parseFloat(parts[1]);
       const y = parseFloat(parts[2]);
@@ -554,8 +667,10 @@ class BlockCraftGame {
         this.player.vel.set(0, 0, 0);
         this.ui.addChatMessage(`Teleported to ${x}, ${y}, ${z}`);
       }
+      return true;
     } else {
-      this.ui.addChatMessage('Commands: /time set day|night, /gamemode creative|survival, /weather rain|clear, /give <item> <n>, /tp x y z, /heal');
+      this.ui.addChatMessage('Commands: /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set day|night, /gamemode creative|survival, /weather rain|clear, /tp x y z, /heal');
+      return false;
     }
   }
 
@@ -760,6 +875,11 @@ class BlockCraftGame {
       const curBiome = this._cachedBiome;
 
       this.sky.update(dt, this.player.pos, curBiome);
+      // Night Vision potion/cheat effect brightens night & caves cleanly
+      if (this.player.statusEffects.nightvision > 0) {
+        this.sky.hemiLight.intensity = Math.max(this.sky.hemiLight.intensity, 1.38);
+        this.sky.fillLight.intensity = Math.max(this.sky.fillLight.intensity, 0.52);
+      }
       this.world.updateShaders(dt, this.sky);
       if (this.effects) {
         this.effects.update(dt, this.player.pos, curBiome, this.sky.isNight());
@@ -767,6 +887,7 @@ class BlockCraftGame {
       this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods);
 
       this.ui.updateTopHUD(this.player, curBiome, this.sky, this.currentFps);
+      this.ui.updateEffectsHUD(this.player.statusEffects);
       this.minimapTimer += dt;
       if (this.minimapTimer >= 0.16) {
         this.minimapTimer = 0;

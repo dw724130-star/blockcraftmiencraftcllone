@@ -544,190 +544,425 @@ export class World {
 
   getBiomeAt(wx, wz) {
     if (this.worldType === 'flat') return 'Plains';
-    const temp = this.biomeNoise.fbm2D(wx * 0.0038, wz * 0.0038, 3);
-    const moist = this.moistureNoise.fbm2D(wx * 0.0038, wz * 0.0038, 3);
-    const mount = this.heightNoise.fbm2D(wx * 0.0055 + 50, wz * 0.0055 - 50, 3);
-    if (mount > 0.20) return 'Mountains';
-    if (temp > 0.14 && moist < 0.04) return 'Desert';
-    if (temp < -0.13) return 'Snowy Taiga';
-    if (moist > 0.12) return temp > 0.0 ? 'Forest' : 'Birch Forest';
+    const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
+    const moist = this.moistureNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
+    const mount = this.heightNoise.fbm2D(wx * 0.0038 + 50, wz * 0.0038 - 50, 3);
+    if (mount > 0.16) return 'Mountains';
+    if (temp > 0.15 && moist < 0.03) return 'Desert';
+    if (temp < -0.14) return 'Snowy Taiga';
+    if (moist > 0.11) return temp > 0.0 ? 'Forest' : 'Birch Forest';
     return 'Plains';
   }
 
-  getTerrainHeight(wx, wz, biome) {
+  // Realistic Continuous Domain-Warped Terrain & Alpine Mountains (ZERO abrupt cliff seams!)
+  getTerrainHeight(wx, wz, biome = null) {
     if (this.worldType === 'flat') return 36;
-    const cont = this.heightNoise.fbm2D(wx * 0.006, wz * 0.006, 4);
-    const hills = this.heightNoise.fbm2D(wx * 0.018, wz * 0.018, 3);
-    const detail = this.heightNoise.noise2D(wx * 0.055, wz * 0.055) * 2.2;
 
-    // Scenic rivers carved where river noise crosses 0
-    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.007 + 200, wz * 0.007 - 150, 3));
-    const riverCarve = riverRaw < 0.045 ? (1 - riverRaw / 0.045) * 11 : 0;
+    // 1. Continental elevation + smooth gentle rolling hills
+    const cont = this.heightNoise.fbm2D(wx * 0.0042, wz * 0.0042, 4);
+    const hills = this.heightNoise.fbm2D(wx * 0.015, wz * 0.015, 3);
+    const micro = this.heightNoise.noise2D(wx * 0.048, wz * 0.048) * 1.4;
 
-    let h = SEA_LEVEL + 5 + cont * 16 + hills * 8 + detail - riverCarve;
+    // 2. Smooth continuous Mountain Massif Weight (seamless foothills -> high alpine peaks!)
+    const mountField = this.heightNoise.fbm2D(wx * 0.0038 + 50, wz * 0.0038 - 50, 3);
+    const mRaw = Math.max(0, Math.min(1, (mountField - 0.02) / 0.34));
+    const mSmooth = mRaw * mRaw * (3 - 2 * mRaw); // smoothstep
 
-    if (biome === 'Mountains') {
-      // Dramatic ridged multifractal alpine peaks!
-      const ridge1 = 1.0 - Math.abs(this.heightNoise.noise2D(wx * 0.014, wz * 0.014) * 2.1);
-      const ridge2 = 1.0 - Math.abs(this.heightNoise.noise2D(wx * 0.032 + 17, wz * 0.032 - 23) * 2.1);
-      const peak = Math.pow(Math.max(0, ridge1), 2.1) * 38 + Math.pow(Math.max(0, ridge2), 2.0) * 12;
-      h = SEA_LEVEL + 10 + cont * 10 + peak + detail - riverCarve * 0.4;
-    } else if (biome === 'Desert') {
-      h = SEA_LEVEL + 4 + cont * 9 + hills * 4 + detail * 0.5 - riverCarve * 0.7;
-    } else if (biome === 'Plains') {
-      h = SEA_LEVEL + 5 + cont * 8 + hills * 3.5 + detail * 0.35 - riverCarve;
+    // Domain warp bends mountain ridgelines into realistic sweeping alpine ranges & valleys!
+    let alpineBoost = 0;
+    if (mSmooth > 0.001) {
+      const warpX = this.biomeNoise.fbm2D(wx * 0.009 + 11, wz * 0.009 - 19, 2) * 28;
+      const warpZ = this.moistureNoise.fbm2D(wx * 0.009 - 27, wz * 0.009 + 33, 2) * 28;
+      const rx = wx + warpX;
+      const rz = wz + warpZ;
+
+      // 3-octave eroded ridged multifractal (broad massif + sharp sweeping ridges + rocky crags)
+      const r1 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.0085, rz * 0.0085) * 1.85);
+      const r2 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.019 + 41, rz * 0.019 - 17) * 1.85);
+      const r3 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.042 - 13, rz * 0.042 + 29) * 1.85);
+
+      const ridgeA = Math.pow(Math.max(0, r1), 1.75);
+      const ridgeB = Math.pow(Math.max(0, r2), 2.0) * (0.35 + 0.65 * ridgeA); // erosion weighting!
+      const ridgeC = Math.pow(Math.max(0, r3), 2.2) * (0.25 + 0.75 * ridgeB);
+
+      const foothill = mSmooth * 10.5;
+      const massif = (mSmooth * mSmooth) * (ridgeA * 34.0 + ridgeB * 14.0 + ridgeC * 4.5);
+      alpineBoost = foothill + massif;
     }
-    return Math.max(8, Math.min(CHUNK_HEIGHT - 8, Math.floor(h)));
+
+    // 3. Smooth meandering scenic rivers (less carving deep inside alpine peaks)
+    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.0058 + 200, wz * 0.0058 - 150, 3));
+    const riverT = riverRaw < 0.048 ? (1 - riverRaw / 0.048) : 0;
+    const riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 10.5 * (1 - mSmooth * 0.72);
+
+    // 4. Gentle Plains/Desert flattening blended smoothly by climate noise
+    const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
+    const flatBlend = Math.max(0, Math.min(1, 1 - mSmooth * 1.8));
+    const hillAmp = (temp > 0.14 ? 4.2 : 6.0) * flatBlend + 3.0 * mSmooth;
+
+    const baseH = SEA_LEVEL + 4.5 + cont * 13.5 + hills * hillAmp + micro + alpineBoost - riverCarve;
+    return Math.max(8, Math.min(CHUNK_HEIGHT - 8, Math.floor(baseH)));
+  }
+
+  isVillageCenter(vcx, vcz) {
+    if (this.worldType === 'flat') return false;
+    // Guaranteed grand 3x3 starter village near spawn centered at chunk (2, 1)!
+    if (vcx === 2 && vcz === 1) return true;
+    // Spaced 11x11 chunk grid so huge 3x3 villages never collide
+    if (((vcx % 11) + 11) % 11 !== 4 || ((vcz % 11) + 11) % 11 !== 4) return false;
+    return coordHash(vcx * 13, vcz * 17, this.seed + 555) > 0.25;
+  }
+
+  // Returns { vcx, vcz, dx, dz, baseY, biome } if chunk (cx, cz) belongs to any 3x3 village!
+  getVillageForChunk(cx, cz) {
+    if (this.worldType === 'flat') return null;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const vcx = cx - dx;
+        const vcz = cz - dz;
+        if (this.isVillageCenter(vcx, vcz)) {
+          const centerWx = vcx * CHUNK_SIZE + 8;
+          const centerWz = vcz * CHUNK_SIZE + 8;
+          const biome = this.getBiomeAt(centerWx, centerWz);
+          const baseY = this.getTerrainHeight(centerWx, centerWz, biome);
+          if (baseY <= SEA_LEVEL + 1 || baseY > 56 || biome === 'Mountains') return null;
+          return { vcx, vcz, dx, dz, baseY, biome };
+        }
+      }
+    }
+    return null;
   }
 
   isVillageChunk(cx, cz) {
-    if (this.worldType === 'flat') return false;
-    // Guaranteed scenic starter village near spawn at chunk (2, 1) if land is above sea level
-    if (cx === 2 && cz === 1) return true;
-    // Otherwise spaced grid of 7x7 chunks with deterministic hash
-    if (((cx % 7) + 7) % 7 !== 3 || ((cz % 7) + 7) % 7 !== 3) return false;
-    return coordHash(cx * 13, cz * 17, this.seed + 555) > 0.32;
+    return !!this.getVillageForChunk(cx, cz);
   }
 
-  buildVillageInChunk(cx, cz, ox, oz, heights, biomes, setLocal, getLocal) {
-    const centerH = heights[8 + 8 * CHUNK_SIZE];
-    const biome = biomes[8 + 8 * CHUNK_SIZE];
-    if (centerH <= SEA_LEVEL + 1 || centerH > 62) return;
-    if (biome === 'Mountains') return;
-
+  // HUGE 3x3-Chunk (48x48 block!) Multi-District Living Village with Real Beds & Architecture!
+  buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, vInfo) {
+    const { vcx, vcz, dx: vdx, dz: vdz, baseY, biome } = vInfo;
     const isDesert = biome === 'Desert';
     const isSnow = biome === 'Snowy Taiga';
-    const wallBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_PLANKS : BLOCK.OAK_PLANKS);
-    const logBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : BLOCK.OAK_LOG);
-    const roofBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : BLOCK.COBBLESTONE);
+    const isBirch = biome === 'Birch Forest';
+
+    const wallBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_PLANKS : (isBirch ? BLOCK.BIRCH_PLANKS : BLOCK.OAK_PLANKS));
+    const logBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : (isBirch ? BLOCK.BIRCH_LOG : BLOCK.OAK_LOG));
+    const roofBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : BLOCK.BRICKS);
+    const trimBlk = isDesert ? BLOCK.SANDSTONE : BLOCK.STONE_BRICKS;
     const pathBlk = isDesert ? BLOCK.SANDSTONE : BLOCK.GRAVEL;
+    const groundBlk = isDesert ? BLOCK.SAND : (isSnow ? BLOCK.SNOW : BLOCK.GRASS);
+    const fillBlk = isDesert ? BLOCK.SAND : BLOCK.DIRT;
 
-    // Flatten village plaza (3..13)
-    const baseY = centerH;
-    for (let lz = 1; lz < 15; lz++) {
-      for (let lx = 1; lx < 15; lx++) {
+    // 1. Terrace this district smoothly to shared village baseY (feathered on outer village rim!)
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const outerEdge =
+          (vdx === -1 && lx === 0) || (vdx === 1 && lx === 15) ||
+          (vdz === -1 && lz === 0) || (vdz === 1 && lz === 15);
         const curH = heights[lx + lz * CHUNK_SIZE];
-        if (curH < baseY) {
-          for (let y = curH; y <= baseY; y++) setLocal(lx, y, lz, isDesert ? BLOCK.SAND : BLOCK.DIRT);
+        const targetY = outerEdge ? Math.round((curH + baseY) * 0.5) : baseY;
+        if (curH < targetY) {
+          for (let y = Math.max(1, curH); y < targetY; y++) setLocal(lx, y, lz, y === targetY - 1 ? fillBlk : BLOCK.COBBLESTONE);
+        } else if (curH > targetY) {
+          for (let y = targetY + 1; y <= Math.min(CHUNK_HEIGHT - 2, curH + 10); y++) setLocal(lx, y, lz, BLOCK.AIR);
+        }
+        setLocal(lx, targetY, lz, groundBlk);
+        heights[lx + lz * CHUNK_SIZE] = targetY;
+      }
+    }
+
+    // 2. Wide 3-block Village Avenues connecting all 9 districts!
+    const layRoad = (x0, z0, x1, z1) => {
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) {
+          const isEdge = (x === x0 || x === x1 || z === z0 || z === z1);
+          const blk = isEdge && coordHash(ox + x, oz + z, this.seed + 31) > 0.55 ? BLOCK.COBBLESTONE : pathBlk;
+          setLocal(x, baseY, z, blk);
+        }
+      }
+    };
+    if (vdz === 0) layRoad(0, 6, 15, 8);
+    if (vdx === 0) layRoad(6, 0, 8, 15);
+    if (vdx !== 0 && vdz !== 0) {
+      // Corner district connector lanes toward main roads
+      if (vdx === -1) layRoad(7, 6, 15, 8);
+      if (vdx === 1) layRoad(0, 6, 8, 8);
+      if (vdz === -1) layRoad(6, 7, 8, 15);
+      if (vdz === 1) layRoad(6, 0, 8, 8);
+    }
+
+    const addLootChest = (lx, ly, lz, tier = 'house') => {
+      setLocal(lx, ly, lz, BLOCK.CHEST);
+      const wKey = `${ox + lx},${ly},${oz + lz}`;
+      if (!this.chests.has(wKey)) {
+        const loot = new Array(27).fill(null);
+        const r = Math.floor(coordHash(ox + lx, oz + lz, this.seed + 19) * 4);
+        if (tier === 'forge') {
+          loot[0] = { id: 'iron_ingot', count: 4 + r };
+          loot[1] = { id: 'coal', count: 8 + r * 2 };
+          loot[2] = { id: 'iron_pickaxe', count: 1, durability: 251 };
+          loot[3] = { id: 'emerald', count: 3 + r };
+          loot[4] = { id: 'steak', count: 4 };
+        } else if (tier === 'library') {
+          loot[0] = { id: 'emerald', count: 4 + r };
+          loot[1] = { id: 'bookshelf', count: 3 };
+          loot[2] = { id: 'glowstone', count: 4 };
+          loot[3] = { id: 'bread', count: 5 };
+          loot[4] = { id: 'torch', count: 12 };
         } else {
-          for (let y = baseY + 1; y <= Math.min(CHUNK_HEIGHT - 2, curH + 8); y++) setLocal(lx, y, lz, BLOCK.AIR);
-        }
-        setLocal(lx, baseY, lz, isDesert ? BLOCK.SAND : (isSnow ? BLOCK.SNOW : BLOCK.GRASS));
-        heights[lx + lz * CHUNK_SIZE] = baseY;
-      }
-    }
-
-    // Cross paths
-    for (let i = 1; i < 15; i++) {
-      setLocal(i, baseY, 7, pathBlk);
-      setLocal(i, baseY, 8, pathBlk);
-      setLocal(7, baseY, i, pathBlk);
-      setLocal(8, baseY, i, pathBlk);
-    }
-
-    // Helper: build a cozy villager house with doorway, windows, roof, torch & loot chest
-    const buildHouse = (x0, z0, w, d, h, withChest) => {
-      for (let dz = 0; dz < d; dz++) {
-        for (let dx = 0; dx < w; dx++) {
-          setLocal(x0 + dx, baseY, z0 + dz, BLOCK.COBBLESTONE);
-          for (let dy = 1; dy <= h; dy++) {
-            const isEdgeX = dx === 0 || dx === w - 1;
-            const isEdgeZ = dz === 0 || dz === d - 1;
-            if (isEdgeX && isEdgeZ) {
-              setLocal(x0 + dx, baseY + dy, z0 + dz, logBlk);
-            } else if (isEdgeX || isEdgeZ) {
-              const isWindow = dy === 2 && ((dx === Math.floor(w / 2)) || (dz === Math.floor(d / 2)));
-              setLocal(x0 + dx, baseY + dy, z0 + dz, isWindow ? BLOCK.GLASS : wallBlk);
-            } else {
-              setLocal(x0 + dx, baseY + dy, z0 + dz, BLOCK.AIR);
-            }
-          }
-          // Roof
-          setLocal(x0 + dx, baseY + h + 1, z0 + dz, roofBlk);
-        }
-      }
-      // Pitched second roof layer
-      for (let dz = 1; dz < d - 1; dz++) {
-        for (let dx = 1; dx < w - 1; dx++) {
-          setLocal(x0 + dx, baseY + h + 2, z0 + dz, wallBlk);
-        }
-      }
-      // Doorway facing center road
-      const doorX = x0 + Math.floor(w / 2);
-      const doorZ = z0 < 7 ? z0 + d - 1 : z0;
-      setLocal(doorX, baseY + 1, doorZ, BLOCK.AIR);
-      setLocal(doorX, baseY + 2, doorZ, BLOCK.AIR);
-
-      // Interior torch + crafting table or chest
-      setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
-      if (withChest) {
-        const cxLoc = x0 + w - 2;
-        const czLoc = z0 + 1;
-        setLocal(cxLoc, baseY + 1, czLoc, BLOCK.CHEST);
-        const worldKey = `${ox + cxLoc},${baseY + 1},${oz + czLoc}`;
-        if (!this.chests.has(worldKey)) {
-          const loot = new Array(27).fill(null);
-          loot[0] = { id: 'emerald', count: 3 + Math.floor(coordHash(ox, oz, 1) * 4) };
+          loot[0] = { id: 'emerald', count: 2 + r };
           loot[1] = { id: 'bread', count: 4 };
           loot[2] = { id: 'apple', count: 3 };
-          loot[3] = { id: 'coal', count: 6 };
-          loot[4] = { id: 'iron_ingot', count: 2 };
-          this.chests.set(worldKey, loot);
+          loot[3] = { id: 'oak_planks', count: 12 };
+          loot[4] = { id: 'bed', count: 1 };
         }
-      } else {
-        setLocal(x0 + w - 2, baseY + 1, z0 + 1, BLOCK.CRAFTING_TABLE);
+        this.chests.set(wKey, loot);
       }
     };
 
-    // Two houses + Well + Farm Plot
-    buildHouse(1, 1, 5, 5, 3, true);
-    buildHouse(10, 10, 5, 5, 3, false);
+    const addLamp = (lx, lz) => {
+      setLocal(lx, baseY + 1, lz, BLOCK.COBBLESTONE);
+      setLocal(lx, baseY + 2, lz, logBlk);
+      setLocal(lx, baseY + 3, lz, logBlk);
+      setLocal(lx, baseY + 4, lz, BLOCK.GLOWSTONE);
+    };
 
-    // Village Well (top-right quadrant)
-    for (let dz = 0; dz < 4; dz++) {
-      for (let dx = 0; dx < 4; dx++) {
-        const edge = dx === 0 || dx === 3 || dz === 0 || dz === 3;
-        setLocal(10 + dx, baseY + 1, 2 + dz, edge ? BLOCK.COBBLESTONE : BLOCK.WATER);
-        setLocal(10 + dx, baseY, 2 + dz, edge ? BLOCK.COBBLESTONE : BLOCK.WATER);
-      }
-    }
-    for (const [px, pz] of [[10, 2], [13, 2], [10, 5], [13, 5]]) {
-      setLocal(px, baseY + 2, pz, logBlk);
-      setLocal(px, baseY + 3, pz, logBlk);
-    }
-    for (let dz = 0; dz < 4; dz++) {
-      for (let dx = 0; dx < 4; dx++) {
-        setLocal(10 + dx, baseY + 4, 2 + dz, roofBlk);
-      }
-    }
+    // Detailed Gable-Roofed Village House Helper with Overhanging Eaves, Beds, Chimney & Flowers!
+    const buildDetailedHouse = (x0, z0, w, d, h, opts = {}) => {
+      const { doorSide = 'south', beds = 1, chestTier = null, furnace = false, library = false, chimney = true, twoStory = false } = opts;
+      const totalH = twoStory ? h + 3 : h;
 
-    // Farm Plot (bottom-left quadrant)
-    for (let dz = 0; dz < 4; dz++) {
-      for (let dx = 0; dx < 5; dx++) {
-        if (dx === 2) {
-          setLocal(1 + dx, baseY, 10 + dz, BLOCK.WATER);
-        } else {
-          setLocal(1 + dx, baseY, 10 + dz, BLOCK.FARMLAND);
-          setLocal(1 + dx, baseY + 1, 10 + dz, BLOCK.TALL_GRASS);
+      // Foundation + walls + interior floor
+      for (let dz = 0; dz < d; dz++) {
+        for (let dx = 0; dx < w; dx++) {
+          setLocal(x0 + dx, baseY, z0 + dz, (dx === 0 || dx === w - 1 || dz === 0 || dz === d - 1) ? trimBlk : wallBlk);
+          for (let dy = 1; dy <= totalH; dy++) {
+            const edgeX = dx === 0 || dx === w - 1;
+            const edgeZ = dz === 0 || dz === d - 1;
+            if (edgeX && edgeZ) {
+              setLocal(x0 + dx, baseY + dy, z0 + dz, logBlk);
+            } else if (edgeX || edgeZ) {
+              const isFloorBeam = twoStory && dy === h + 1;
+              const isWin = (dy === 2 || (twoStory && dy === h + 3)) &&
+                ((edgeZ && dx > 1 && dx < w - 2 && dx % 2 === 1) || (edgeX && dz > 1 && dz < d - 2 && dz % 2 === 1));
+              setLocal(x0 + dx, baseY + dy, z0 + dz, isFloorBeam ? logBlk : (isWin ? BLOCK.GLASS : (dy === 1 ? BLOCK.COBBLESTONE : wallBlk)));
+            } else {
+              const midFloor = twoStory && dy === h + 1 && !(dx === 1 && dz === 1);
+              setLocal(x0 + dx, baseY + dy, z0 + dz, midFloor ? wallBlk : BLOCK.AIR);
+            }
+          }
+        }
+      }
+
+      // Overhanging Pitched Gable Roof!
+      const roofSteps = Math.ceil(Math.min(w, d) / 2);
+      for (let step = 0; step <= roofSteps; step++) {
+        const ry = baseY + totalH + 1 + step;
+        const zStart = z0 - 1 + step;
+        const zEnd = z0 + d - step;
+        if (zStart > zEnd) break;
+        for (let x = x0 - 1; x <= x0 + w; x++) {
+          if (x < 0 || x > 15) continue;
+          if (zStart >= 0 && zStart <= 15) setLocal(x, ry, zStart, (x === x0 - 1 || x === x0 + w) ? logBlk : roofBlk);
+          if (zEnd >= 0 && zEnd <= 15) setLocal(x, ry, zEnd, (x === x0 - 1 || x === x0 + w) ? logBlk : roofBlk);
+        }
+        // Fill gable wall triangles on east & west ends
+        for (let z = Math.max(z0, zStart + 1); z <= Math.min(z0 + d - 1, zEnd - 1); z++) {
+          setLocal(x0, ry, z, wallBlk);
+          setLocal(x0 + w - 1, ry, z, wallBlk);
+        }
+      }
+
+      // Stone Chimney
+      if (chimney && x0 + w - 2 >= 1 && x0 + w - 2 <= 14) {
+        for (let dy = 1; dy <= totalH + roofSteps + 2; dy++) {
+          setLocal(x0 + w - 2, baseY + dy, z0 + 1, BLOCK.COBBLESTONE);
+        }
+      }
+
+      // Doorway + Cobble Porch Step
+      const midX = x0 + Math.floor(w / 2);
+      const midZ = z0 + Math.floor(d / 2);
+      if (doorSide === 'south') {
+        setLocal(midX, baseY + 1, z0 + d - 1, BLOCK.AIR); setLocal(midX, baseY + 2, z0 + d - 1, BLOCK.AIR);
+        setLocal(midX, baseY, z0 + d, BLOCK.COBBLESTONE);
+      } else if (doorSide === 'north') {
+        setLocal(midX, baseY + 1, z0, BLOCK.AIR); setLocal(midX, baseY + 2, z0, BLOCK.AIR);
+        setLocal(midX, baseY, z0 - 1, BLOCK.COBBLESTONE);
+      } else if (doorSide === 'east') {
+        setLocal(x0 + w - 1, baseY + 1, midZ, BLOCK.AIR); setLocal(x0 + w - 1, baseY + 2, midZ, BLOCK.AIR);
+        setLocal(x0 + w, baseY, midZ, BLOCK.COBBLESTONE);
+      } else {
+        setLocal(x0, baseY + 1, midZ, BLOCK.AIR); setLocal(x0, baseY + 2, midZ, BLOCK.AIR);
+        setLocal(x0 - 1, baseY, midZ, BLOCK.COBBLESTONE);
+      }
+
+      // Interior Furnishings: Torches, REAL 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
+      setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
+      if (beds >= 1) setLocal(x0 + 1, baseY + 1, z0 + 1, BLOCK.BED);
+      if (beds >= 2 && w >= 6) setLocal(x0 + 2, baseY + 1, z0 + 1, BLOCK.BED);
+      if (twoStory) {
+        for (let ly = 1; ly <= h + 1; ly++) setLocal(x0 + 1, baseY + ly, z0 + d - 2, BLOCK.LADDER);
+        setLocal(x0 + 2, baseY + h + 2, z0 + 1, BLOCK.BED);
+        setLocal(x0 + 1, baseY + h + 3, z0 + 1, BLOCK.TORCH);
+      }
+      if (furnace) setLocal(x0 + w - 2, baseY + 1, z0 + d - 2, BLOCK.FURNACE);
+      else setLocal(x0 + w - 2, baseY + 1, z0 + d - 2, BLOCK.CRAFTING_TABLE);
+
+      if (library) {
+        for (let bx = x0 + 1; bx <= x0 + w - 2; bx++) {
+          setLocal(bx, baseY + 1, z0 + 1, BLOCK.BOOKSHELF);
+          setLocal(bx, baseY + 2, z0 + 1, BLOCK.BOOKSHELF);
+        }
+        setLocal(x0 + 1, baseY + 1, z0 + d - 2, BLOCK.BED);
+      }
+      if (chestTier) addLootChest(x0 + w - 2, baseY + 1, z0 + 2, chestTier);
+
+      // Cute flower bed outside front wall
+      if (z0 + d <= 14 && x0 + 1 <= 14) {
+        setLocal(x0 + 1, baseY + 1, z0 + d, BLOCK.FLOWER_RED);
+        if (x0 + w - 2 <= 14) setLocal(x0 + w - 2, baseY + 1, z0 + d, BLOCK.FLOWER_YELLOW);
+      }
+    };
+
+    // 3. Build Unique Architecture for Each of the 9 Districts!
+    if (vdx === 0 && vdz === 0) {
+      // --- CENTER DISTRICT: Grand Town Square, Ornate Stone Well, Bell/Clock Tower & Market Stalls! ---
+      for (let z = 2; z <= 13; z++) {
+        for (let x = 2; x <= 13; x++) {
+          setLocal(x, baseY, z, ((x + z) % 2 === 0) ? BLOCK.COBBLESTONE : BLOCK.GRAVEL);
+        }
+      }
+      // Ornate Well (center-left)
+      for (let dz = 0; dz < 4; dz++) {
+        for (let dx = 0; dx < 4; dx++) {
+          const edge = dx === 0 || dx === 3 || dz === 0 || dz === 3;
+          setLocal(2 + dx, baseY, 2 + dz, edge ? trimBlk : BLOCK.WATER);
+          setLocal(2 + dx, baseY + 1, 2 + dz, edge ? trimBlk : BLOCK.WATER);
+        }
+      }
+      for (const [px, pz] of [[2, 2], [5, 2], [2, 5], [5, 5]]) {
+        setLocal(px, baseY + 2, pz, logBlk);
+        setLocal(px, baseY + 3, pz, logBlk);
+      }
+      for (let dz = 0; dz < 4; dz++) {
+        for (let dx = 0; dx < 4; dx++) {
+          setLocal(2 + dx, baseY + 4, 2 + dz, roofBlk);
+        }
+      }
+      setLocal(3, baseY + 5, 3, BLOCK.GLOWSTONE);
+
+      // Iconic Village Bell/Clock Tower (top-right quadrant)
+      for (let dz = 0; dz < 5; dz++) {
+        for (let dx = 0; dx < 5; dx++) {
+          const edgeX = dx === 0 || dx === 4;
+          const edgeZ = dz === 0 || dz === 4;
+          for (let dy = 1; dy <= 10; dy++) {
+            if (edgeX && edgeZ) setLocal(10 + dx, baseY + dy, 1 + dz, logBlk);
+            else if (edgeX || edgeZ) {
+              const openBell = dy >= 7 && dy <= 9 && (dx === 2 || dz === 2);
+              const win = dy === 4 && (dx === 2 || dz === 2);
+              setLocal(10 + dx, baseY + dy, 1 + dz, openBell ? BLOCK.AIR : (win ? BLOCK.GLASS : (dy <= 3 ? trimBlk : wallBlk)));
+            } else {
+              setLocal(10 + dx, baseY + dy, 1 + dz, dy === 6 || dy === 10 ? wallBlk : BLOCK.AIR);
+            }
+          }
+          setLocal(10 + dx, baseY + 11, 1 + dz, roofBlk);
+        }
+      }
+      // Spire + Glowing Gold Bell!
+      for (let dz = 1; dz <= 3; dz++) for (let dx = 1; dx <= 3; dx++) setLocal(10 + dx, baseY + 12, 1 + dz, roofBlk);
+      setLocal(12, baseY + 13, 3, logBlk);
+      setLocal(12, baseY + 14, 3, BLOCK.GLOWSTONE);
+      setLocal(12, baseY + 8, 3, BLOCK.GOLD_BLOCK);
+      setLocal(12, baseY + 1, 5, BLOCK.AIR); setLocal(12, baseY + 2, 5, BLOCK.AIR);
+      setLocal(11, baseY + 1, 2, BLOCK.BED);
+
+      // Market Stalls with Colorful Wool Awnings (bottom quadrants!)
+      const buildStall = (sx, sz, woolA, woolB) => {
+        for (let i = 0; i < 4; i++) {
+          setLocal(sx + i, baseY + 1, sz, wallBlk);
+          setLocal(sx + i, baseY + 3, sz, i % 2 === 0 ? woolA : woolB);
+          setLocal(sx + i, baseY + 3, sz + 1, i % 2 === 0 ? woolA : woolB);
+        }
+        setLocal(sx, baseY + 2, sz, logBlk);
+        setLocal(sx + 3, baseY + 2, sz, logBlk);
+      };
+      buildStall(2, 11, BLOCK.WOOL_RED, BLOCK.WOOL_WHITE);
+      buildStall(10, 11, BLOCK.WOOL_BLUE, BLOCK.WOOL_YELLOW);
+      addLamp(6, 9); addLamp(9, 6);
+    } else if (vdx === 0 && vdz === -1) {
+      // --- NORTH DISTRICT: Blacksmith Forge + 2-Story Manor House! ---
+      buildDetailedHouse(1, 2, 6, 6, 3, { doorSide: 'south', beds: 1, chestTier: 'forge', furnace: true, chimney: true });
+      buildDetailedHouse(9, 2, 6, 7, 3, { doorSide: 'west', beds: 2, chestTier: 'house', twoStory: true });
+      addLamp(5, 11);
+    } else if (vdx === 0 && vdz === 1) {
+      // --- SOUTH DISTRICT: Twin Cozy Cottages with Beds & Gardens! ---
+      buildDetailedHouse(1, 3, 5, 6, 3, { doorSide: 'east', beds: 1, chestTier: 'house' });
+      buildDetailedHouse(10, 3, 5, 6, 3, { doorSide: 'west', beds: 2, furnace: true });
+      addLamp(5, 2); addLamp(9, 10);
+    } else if (vdx === 1 && vdz === 0) {
+      // --- EAST DISTRICT: Grand Village Library + Cozy Inn! ---
+      buildDetailedHouse(2, 1, 8, 5, 4, { doorSide: 'south', library: true, chestTier: 'library', chimney: false });
+      buildDetailedHouse(3, 10, 7, 5, 3, { doorSide: 'north', beds: 2, chestTier: 'house' });
+      addLamp(11, 5);
+    } else if (vdx === -1 && vdz === 0) {
+      // --- WEST DISTRICT: Large Irrigated Farmlands + Rustic Barn! ---
+      const buildFarmPlot = (fx, fz, fw, fd) => {
+        for (let dz = 0; dz < fd; dz++) {
+          for (let dx = 0; dx < fw; dx++) {
+            const border = dx === 0 || dx === fw - 1 || dz === 0 || dz === fd - 1;
+            if (border) {
+              setLocal(fx + dx, baseY, fz + dz, logBlk);
+            } else if (dx === Math.floor(fw / 2)) {
+              setLocal(fx + dx, baseY, fz + dz, BLOCK.WATER);
+            } else {
+              setLocal(fx + dx, baseY, fz + dz, BLOCK.FARMLAND);
+              setLocal(fx + dx, baseY + 1, fz + dz, BLOCK.TALL_GRASS);
+            }
+          }
+        }
+      };
+      buildFarmPlot(1, 1, 7, 5);
+      buildFarmPlot(9, 1, 6, 5);
+      buildDetailedHouse(2, 10, 7, 5, 3, { doorSide: 'north', beds: 1, chestTier: 'house', chimney: false });
+      addLamp(10, 10);
+    } else {
+      // --- CORNER DISTRICTS: Outer Cottages, Orchard & Flower Gardens! ---
+      const doorDir = vdz === -1 ? 'south' : 'north';
+      buildDetailedHouse(4, 4, 6, 6, 3, { doorSide: doorDir, beds: 1, chestTier: (vdx === 1 ? 'house' : null) });
+      addLamp(3, 11);
+      // Plant a scenic orchard oak tree in the corner yard
+      const tx = vdx === -1 ? 12 : 2;
+      const tz = vdz === -1 ? 12 : 2;
+      if (getLocal(tx, baseY + 1, tz) === BLOCK.AIR) {
+        for (let ty = 1; ty <= 4; ty++) setLocal(tx, baseY + ty, tz, BLOCK.OAK_LOG);
+        for (let dy = 3; dy <= 5; dy++) {
+          const rad = dy === 5 ? 1 : 2;
+          for (let ldz = -rad; ldz <= rad; ldz++) {
+            for (let ldx = -rad; ldx <= rad; ldx++) {
+              if (tx + ldx >= 1 && tx + ldx <= 14 && tz + ldz >= 1 && tz + ldz <= 14) {
+                if (getLocal(tx + ldx, baseY + dy, tz + ldz) === BLOCK.AIR) {
+                  setLocal(tx + ldx, baseY + dy, tz + ldz, BLOCK.OAK_LEAVES);
+                }
+              }
+            }
+          }
         }
       }
     }
 
-    // Street Lamp Post
-    setLocal(6, baseY + 1, 6, logBlk);
-    setLocal(6, baseY + 2, 6, logBlk);
-    setLocal(6, baseY + 3, 6, logBlk);
-    setLocal(6, baseY + 4, 6, BLOCK.GLOWSTONE);
-
-    const vKey = this.chunkKey(cx, cz);
-    if (!this.villageChunks.has(vKey)) {
-      this.villageChunks.set(vKey, {
-        x: ox + 8,
-        y: baseY + 1,
-        z: oz + 8,
-        biome,
-        spawned: false
-      });
+    // Register center village record for Villager/Golem spawning & Radar marker!
+    if (vdx === 0 && vdz === 0) {
+      const vKey = this.chunkKey(vcx, vcz);
+      if (!this.villageChunks.has(vKey)) {
+        this.villageChunks.set(vKey, {
+          x: ox + 8,
+          y: baseY + 1,
+          z: oz + 8,
+          biome,
+          spawned: false
+        });
+      }
     }
   }
 
@@ -753,15 +988,32 @@ export class World {
     const heights = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
     const biomes = new Array(CHUNK_SIZE * CHUNK_SIZE);
 
-    // 1. Base Terrain + Caves + Ores
+    // Precompute heightmap & biome map first so we can calculate real local terrain slope!
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const wx = ox + lx;
         const wz = oz + lz;
         const biome = this.getBiomeAt(wx, wz);
-        const h = this.getTerrainHeight(wx, wz, biome);
-        heights[lx + lz * CHUNK_SIZE] = h;
         biomes[lx + lz * CHUNK_SIZE] = biome;
+        heights[lx + lz * CHUNK_SIZE] = this.getTerrainHeight(wx, wz, biome);
+      }
+    }
+
+    // 1. Base Terrain + Realistic Slope-Aware Alpine Geology + Caves + Ores
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const wx = ox + lx;
+        const wz = oz + lz;
+        const idx2 = lx + lz * CHUNK_SIZE;
+        const biome = biomes[idx2];
+        const h = heights[idx2];
+
+        // Local terrain slope for realistic rocky cliffs & snow caps!
+        const hL = lx > 0 ? heights[idx2 - 1] : this.getTerrainHeight(wx - 1, wz);
+        const hR = lx < 15 ? heights[idx2 + 1] : this.getTerrainHeight(wx + 1, wz);
+        const hD = lz > 0 ? heights[idx2 - CHUNK_SIZE] : this.getTerrainHeight(wx, wz - 1);
+        const hU = lz < 15 ? heights[idx2 + CHUNK_SIZE] : this.getTerrainHeight(wx, wz + 1);
+        const slope = Math.max(Math.abs(h - hL), Math.abs(h - hR), Math.abs(h - hD), Math.abs(h - hU));
 
         for (let y = 0; y < CHUNK_HEIGHT; y++) {
           if (y === 0) {
@@ -781,22 +1033,26 @@ export class World {
 
             if (y === h) {
               if (h < SEA_LEVEL + 1 && this.worldType !== 'flat') {
-                setLocal(lx, y, lz, BLOCK.SAND);
+                setLocal(lx, y, lz, (slope >= 2 && biome === 'Mountains') ? BLOCK.GRAVEL : BLOCK.SAND);
               } else if (biome === 'Desert') {
                 setLocal(lx, y, lz, BLOCK.SAND);
-              } else if (biome === 'Snowy Taiga' || (biome === 'Mountains' && h > 58)) {
-                setLocal(lx, y, lz, BLOCK.SNOW);
-              } else if (biome === 'Mountains' && h > 50) {
+              } else if (slope >= 3 && h > SEA_LEVEL + 5) {
+                // Steep alpine cliff faces expose realistic bare stone!
                 setLocal(lx, y, lz, BLOCK.STONE);
+              } else if (h >= 58 || (biome === 'Snowy Taiga' && slope <= 2)) {
+                // Wind-swept snow caps on peaks & snowy taiga
+                setLocal(lx, y, lz, BLOCK.SNOW);
+              } else if (h >= 52 && slope >= 2) {
+                // Rocky scree transition below the snow line
+                setLocal(lx, y, lz, coordHash(wx, wz, this.seed + 41) > 0.65 ? BLOCK.GRAVEL : BLOCK.STONE);
               } else {
                 setLocal(lx, y, lz, BLOCK.GRASS);
               }
             } else if (y >= h - 3) {
               if (biome === 'Desert') setLocal(lx, y, lz, y >= h - 2 ? BLOCK.SAND : BLOCK.SANDSTONE);
-              else if (biome === 'Mountains' && h > 50) setLocal(lx, y, lz, BLOCK.STONE);
+              else if (slope >= 3 || h >= 54) setLocal(lx, y, lz, BLOCK.STONE);
               else setLocal(lx, y, lz, BLOCK.DIRT);
             } else {
-              // Stone + Ore Veins
               let blk = BLOCK.STONE;
               if (this.worldType !== 'flat') {
                 const ov = this.oreNoise.noise3D(wx * 0.16, y * 0.16, wz * 0.16);
@@ -818,16 +1074,17 @@ export class World {
       }
     }
 
-    // 2. Villages, Scenic Hilltop Watchtowers, OR Trees, Cacti, Lush Meadows & Wildflowers
+    // 2. Multi-Chunk Villages, Scenic Hilltop Watchtowers, OR Trees, Cacti, Lush Meadows & Wildflowers
+    const vInfo = this.getVillageForChunk(cx, cz);
     const isWatchtowerChunk =
       this.worldType !== 'flat' &&
-      !this.isVillageChunk(cx, cz) &&
+      !vInfo &&
       ((cx % 9) + 9) % 9 === 5 &&
       ((cz % 9) + 9) % 9 === 4 &&
       coordHash(cx * 31, cz * 29, this.seed + 777) > 0.45;
 
-    if (this.worldType !== 'flat' && this.isVillageChunk(cx, cz)) {
-      this.buildVillageInChunk(cx, cz, ox, oz, heights, biomes, setLocal, getLocal);
+    if (vInfo) {
+      this.buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, vInfo);
     } else if (isWatchtowerChunk) {
       const th = heights[8 + 8 * CHUNK_SIZE];
       const tb = biomes[8 + 8 * CHUNK_SIZE];
@@ -874,7 +1131,7 @@ export class World {
       }
     }
 
-    if (this.worldType !== 'flat' && !this.isVillageChunk(cx, cz)) {
+    if (this.worldType !== 'flat' && !vInfo) {
       for (let lz = 2; lz < CHUNK_SIZE - 2; lz++) {
         for (let lx = 2; lx < CHUNK_SIZE - 2; lx++) {
           const wx = ox + lx;
@@ -1105,6 +1362,44 @@ export class World {
           if (!def) continue;
 
           const wx = ox + lx;
+
+          // Custom Sculpted 3D Bed Geometry (4 oak legs + quilted red mattress + raised white pillow!)
+          if (id === BLOCK.BED) {
+            const b = buckets.opaque;
+            const topUV = this.textures.getUV('bed_top');
+            const sideUV = this.textures.getUV('bed_side');
+            const woodUV = this.textures.getUV('oak_planks');
+            const addBox = (x0, y0, z0, x1, y1, z1, uTop, uSide, uBot) => {
+              const boxFaces = [
+                { n: [0, 1, 0], sh: 1.0, uv: uTop, pts: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
+                { n: [0, -1, 0], sh: 0.58, uv: uBot, pts: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
+                { n: [1, 0, 0], sh: 0.84, uv: uSide, pts: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
+                { n: [-1, 0, 0], sh: 0.84, uv: uSide, pts: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
+                { n: [0, 0, 1], sh: 0.74, uv: uSide, pts: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
+                { n: [0, 0, -1], sh: 0.74, uv: uSide, pts: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] }
+              ];
+              for (const f of boxFaces) {
+                const baseIdx = b.pos.length / 3;
+                const u = f.uv;
+                for (let pi = 0; pi < 4; pi++) {
+                  const pt = f.pts[pi];
+                  b.pos.push(wx + pt[0], y + pt[1], wz + pt[2]);
+                  b.norm.push(f.n[0], f.n[1], f.n[2]);
+                  b.col.push(f.sh, f.sh, f.sh);
+                }
+                b.uv.push(u.u0, u.v0, u.u1, u.v0, u.u1, u.v1, u.u0, u.v1);
+                b.idx.push(baseIdx, baseIdx + 1, baseIdx + 2, baseIdx, baseIdx + 2, baseIdx + 3);
+              }
+            };
+            // Mattress + blanket
+            addBox(0.02, 0.22, 0.02, 0.98, 0.56, 0.98, topUV, sideUV, woodUV);
+            // 4 oak wooden legs
+            addBox(0.04, 0.0, 0.04, 0.22, 0.22, 0.22, woodUV, woodUV, woodUV);
+            addBox(0.78, 0.0, 0.04, 0.96, 0.22, 0.22, woodUV, woodUV, woodUV);
+            addBox(0.04, 0.0, 0.78, 0.22, 0.22, 0.96, woodUV, woodUV, woodUV);
+            addBox(0.78, 0.0, 0.78, 0.96, 0.22, 0.96, woodUV, woodUV, woodUV);
+            continue;
+          }
 
           // Cross-quad blocks (flowers, tall grass sway; torches & ladders stay static!)
           if (def.cross) {

@@ -47,6 +47,10 @@ export class Player {
     this.drownTimer = 0;
     this.stepDist = 0;
 
+    // Active Potion / Cheat Status Effects (seconds remaining)
+    this.statusEffects = { speed: 0, jump: 0, regen: 0, nightvision: 0 };
+    this._effectRegenTick = 0;
+
     // Mining state
     this.miningTarget = null; // "x,y,z"
     this.miningProgress = 0;
@@ -301,11 +305,24 @@ export class Player {
     }
   }
 
+  applyEffect(name, duration = 60) {
+    if (!(name in this.statusEffects)) return false;
+    this.statusEffects[name] = Math.max(0, duration);
+    if (this.onHudDirty) this.onHudDirty();
+    return true;
+  }
+
+  clearEffects() {
+    for (const k of Object.keys(this.statusEffects)) this.statusEffects[k] = 0;
+    if (this.onHudDirty) this.onHudDirty();
+  }
+
   respawn() {
     this.dead = false;
     this.hp = this.maxHp;
     this.hunger = this.maxHunger;
     this.air = this.maxAir;
+    this.clearEffects();
     this.vel.set(0, 0, 0);
     this.pos.copy(this.spawnPos);
     const sy = this.world.getSurfaceY(this.pos.x, this.pos.z);
@@ -336,6 +353,16 @@ export class Player {
     if (this.dead) return;
     const superMob = !!(mods && mods.isEnabled('super_mobility'));
     const moonGrav = !!(mods && mods.isEnabled('moon_gravity'));
+
+    // Tick active status effects
+    for (const k of Object.keys(this.statusEffects)) {
+      if (this.statusEffects[k] > 0) {
+        this.statusEffects[k] = Math.max(0, this.statusEffects[k] - dt);
+      }
+    }
+    const hasSpeed = this.statusEffects.speed > 0;
+    const hasJump = this.statusEffects.jump > 0;
+    const hasRegen = this.statusEffects.regen > 0;
 
     // Look
     this.yaw -= input.lookDeltaX;
@@ -371,6 +398,7 @@ export class Player {
     else if (this.sneaking) speed = 2.1;
     else if (this.sprinting) speed = superMob ? 8.6 : 6.5;
     else if (this.inWater) speed = 3.2;
+    if (hasSpeed && !this.flying) speed *= 1.55;
 
     const targetVx = moveX * speed;
     const targetVz = moveZ * speed;
@@ -395,7 +423,7 @@ export class Player {
       this.fallStartY = null;
     } else {
       const grav = moonGrav ? 9.5 : 25.0;
-      const jumpV = moonGrav ? 8.6 : (superMob ? 10.6 : 8.4);
+      const jumpV = (moonGrav ? 8.6 : (superMob ? 10.6 : 8.4)) * (hasJump ? 1.42 : 1.0);
       this.vel.y -= grav * dt;
       if (input.jump && this.onGround) {
         this.vel.y = jumpV;
@@ -438,7 +466,8 @@ export class Player {
           const drop = this.fallStartY - landedY;
           if (drop > 3.5) {
             const rawDmg = Math.floor(drop - 3);
-            this.takeDamage(superMob ? Math.max(1, Math.floor(rawDmg * 0.5)) : rawDmg, 'Fell from a high place');
+            const mult = (superMob ? 0.5 : 1.0) * (hasJump ? 0.5 : 1.0);
+            this.takeDamage(Math.max(1, Math.floor(rawDmg * mult)), 'Fell from a high place');
           }
         }
         this.fallStartY = null;
@@ -509,6 +538,16 @@ export class Player {
           if (this.onHudDirty) this.onHudDirty();
         }
       }
+
+      // Potion / Cheat Regeneration Effect
+      if (hasRegen && this.hp < this.maxHp) {
+        this._effectRegenTick += dt;
+        if (this._effectRegenTick >= 0.65) {
+          this._effectRegenTick = 0;
+          this.hp = Math.min(this.maxHp, this.hp + 1);
+          if (this.onHudDirty) this.onHudDirty();
+        }
+      }
     }
 
     // Update Camera (0 = 1st person, 1 = 3rd person back, 2 = 3rd person front)
@@ -565,7 +604,7 @@ export class Player {
          held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') || held.id.includes('venison') || held.id.includes('salmon') ? 0xe05555 : 0xc9b393)
       : 0xdba882;
 
-    const isBlockHeld = !!(held && held.isBlock && !held.cross);
+    const isBlockHeld = !!(held && held.isBlock && !held.cross && held.id !== 'bed');
     const isSpriteHeld = !!(held && !isBlockHeld);
     this.heldBlockMesh.visible = isBlockHeld;
     this.heldSpriteMesh.visible = isSpriteHeld;

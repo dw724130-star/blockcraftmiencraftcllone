@@ -5,6 +5,20 @@ const DB_VERSION = 1;
 const STORE_WORLDS = 'worlds';
 const SETTINGS_KEY = 'blockcraft_settings_v2';
 
+export const DEFAULT_KEYBINDS = {
+  forward: 'KeyW',
+  backward: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  jump: 'Space',
+  sneak: 'ShiftLeft',
+  sprint: 'ControlLeft',
+  inventory: 'KeyE',
+  chat: 'KeyT',
+  camera: 'KeyV',
+  pause: 'Escape'
+};
+
 export const DEFAULT_SETTINGS = {
   renderDistance: 6,
   sensitivity: 1.0,
@@ -15,16 +29,23 @@ export const DEFAULT_SETTINGS = {
   minecraftUI: true,   // Classic Minecraft pixel bevel UI theme (revertable)
   largeUI: true,       // Larger iPad-friendly UI scale (revertable)
   shaders: 'ultra',    // 'off' | 'enhanced' | 'ultra'
-  biomeEffects: true   // Biome ambient particles & atmosphere
+  biomeEffects: true,  // Biome ambient particles & atmosphere
+  allowCheats: false,  // Enable / disable cheat commands & creative shortcuts
+  keybinds: { ...DEFAULT_KEYBINDS }
 };
 
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (!raw) return { ...DEFAULT_SETTINGS, keybinds: { ...DEFAULT_KEYBINDS } };
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      keybinds: { ...DEFAULT_KEYBINDS, ...(parsed.keybinds || {}) }
+    };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...DEFAULT_SETTINGS, keybinds: { ...DEFAULT_KEYBINDS } };
   }
 }
 

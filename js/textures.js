@@ -38,6 +38,7 @@ export class TextureManager {
     this.tileMap = {}; // name -> { col, row, u0, v0, u1, v1 }
     this.itemIcons = {}; // itemKey -> dataURL
     this.itemTextures = {}; // itemKey -> THREE.CanvasTexture (for 3D pixel-art drops!)
+    this.extrudedGeoCache = {}; // itemKey -> 3D extruded pixel-art BufferGeometry
     this.blockDropGeoCache = {}; // "blockId:size" -> BufferGeometry
     this.mobCoatCache = {}; // key -> THREE.CanvasTexture
     this.hudIcons = {}; // name -> dataURL
@@ -353,12 +354,31 @@ export class TextureManager {
     });
 
     this.addTile('bed_top', (c, x, y) => {
-      px(c, x, y, 0, 0, '#f0f0f0', 16, 5);
-      px(c, x, y, 0, 5, '#c92e2e', 16, 11);
+      // Cozy quilted red blanket + crisp white pillow & folded sheet trim!
+      fillNoise(c, x, y, '#c92e2e', 10, 76);
+      // Shaded white pillow at head (y=0..4)
+      px(c, x, y, 0, 0, '#7c5329', 16, 1);
+      px(c, x, y, 1, 1, '#dce3eb', 14, 4);
+      px(c, x, y, 2, 1, '#ffffff', 12, 3);
+      px(c, x, y, 2, 4, '#b8c4d0', 12, 1);
+      // Folded white sheet collar (y=5..6)
+      px(c, x, y, 0, 5, '#edf2f7', 16, 2);
+      px(c, x, y, 0, 6, '#c2ccd6', 16, 1);
+      // Quilted crimson blanket shading & bottom wood rail
+      px(c, x, y, 0, 7, '#e04242', 16, 1);
+      for (let qy = 9; qy < 14; qy += 3) {
+        px(c, x, y, 1, qy, '#a31e1e', 14, 1);
+      }
+      px(c, x, y, 0, 15, '#7c5329', 16, 1);
     });
     this.addTile('bed_side', (c, x, y) => {
-      px(c, x, y, 0, 0, '#c92e2e', 16, 8);
-      px(c, x, y, 0, 8, '#8a5d32', 16, 8);
+      // Side trim: white sheet edge + red blanket drape + oak bedframe
+      px(c, x, y, 0, 0, '#f2f5f8', 5, 6);
+      px(c, x, y, 5, 0, '#c92e2e', 11, 7);
+      px(c, x, y, 5, 5, '#9e1c1c', 11, 2);
+      px(c, x, y, 0, 7, '#8f6032', 16, 5);
+      px(c, x, y, 0, 7, '#a87442', 16, 1);
+      px(c, x, y, 0, 11, '#5e3c1c', 16, 5);
     });
 
     this.addTile('stone_bricks', (c, x, y) => {
@@ -403,11 +423,11 @@ export class TextureManager {
 
     for (const [key, def] of Object.entries(ITEMS)) {
       ctx.clearRect(0, 0, 32, 32);
-      if (def.isBlock) {
+      if (def.isBlock && key !== 'bed') {
         const faceName = def.faces.side || def.faces.all || def.faces.top;
         const tile = this.getUV(faceName);
         ctx.drawImage(this.canvas, tile.ox, tile.oy, TILE_SIZE, TILE_SIZE, 2, 2, 28, 28);
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
         ctx.lineWidth = 2;
         ctx.strokeRect(2, 2, 28, 28);
       } else {
@@ -417,219 +437,267 @@ export class TextureManager {
     }
   }
 
+  // Strict 16x16 Integer Pixel-Art Grid (every item coherent, crisp 1px dark outline, rich shading!)
   drawPixelItem(c, key, def) {
-    const p = (x, y, col, w = 2, h = 2) => {
+    const p = (x, y, col, w = 1, h = 1) => {
       c.fillStyle = col;
-      c.fillRect(x * 2, y * 2, w * 2, h * 2);
+      c.fillRect(Math.round(x) * 2, Math.round(y) * 2, Math.round(w) * 2, Math.round(h) * 2);
     };
 
-    const tierColors = {
-      wooden: '#b5844c',
-      stone: '#9398a1',
-      iron: '#e2e6eb',
-      diamond: '#4de3e8',
-      leather: '#965d32'
+    const tierPal = {
+      wooden:  { out: '#2b1a0c', base: '#a6743c', hi: '#cfa063', lo: '#6e4920' },
+      stone:   { out: '#1e2024', base: '#8e949e', hi: '#c2c8d1', lo: '#5e636b' },
+      iron:    { out: '#181c22', base: '#d8dfe8', hi: '#ffffff', lo: '#8c96a6' },
+      diamond: { out: '#0b2c36', base: '#3be3eb', hi: '#b5fcff', lo: '#189ca8' },
+      leather: { out: '#261409', base: '#9e5d30', hi: '#c9824f', lo: '#6b3b1b' }
     };
 
     if (def.toolType) {
-      const mat = key.split('_')[0];
-      const col = tierColors[mat] || '#ccc';
-      // Diagonal stick handle
-      for (let i = 0; i < 9; i++) p(3 + i, 12 - i, '#7a5228', 1.2, 1.2);
+      const pal = tierPal[key.split('_')[0]] || tierPal.iron;
+      // Crisp 1px-outlined diagonal oak stick handle
+      const stickLen = def.toolType === 'sword' ? 4 : 9;
+      for (let i = 0; i < stickLen; i++) {
+        const sx = 2 + i, sy = 13 - i;
+        p(sx - 1, sy, '#29180a'); p(sx + 1, sy, '#29180a');
+        p(sx, sy - 1, '#29180a'); p(sx, sy + 1, '#29180a');
+      }
+      for (let i = 0; i < stickLen; i++) {
+        const sx = 2 + i, sy = 13 - i;
+        p(sx, sy, i % 2 === 0 ? '#9c6b36' : '#7d5225');
+      }
       if (def.toolType === 'pickaxe') {
-        p(6, 2, col, 7, 2);
-        p(12, 3, col, 2, 6);
-        p(11, 2, col, 2, 2);
+        p(4, 1, pal.out, 8, 4); p(10, 3, pal.out, 4, 4); p(11, 5, pal.out, 4, 6);
+        p(5, 2, pal.hi, 6, 1); p(6, 3, pal.base, 5, 1); p(11, 3, pal.hi, 2, 2);
+        p(12, 5, pal.base, 2, 5); p(13, 6, pal.lo, 1, 4); p(10, 4, pal.lo, 1, 1);
       } else if (def.toolType === 'axe') {
-        p(7, 2, col, 6, 4);
-        p(9, 6, col, 4, 3);
+        p(6, 1, pal.out, 7, 6); p(8, 6, pal.out, 5, 4);
+        p(7, 2, pal.hi, 5, 2); p(7, 4, pal.base, 5, 2);
+        p(9, 6, pal.base, 3, 2); p(10, 8, pal.lo, 2, 1); p(11, 3, pal.lo, 1, 4);
       } else if (def.toolType === 'shovel') {
-        p(10, 2, col, 4, 4);
+        p(9, 1, pal.out, 6, 6);
+        p(10, 2, pal.hi, 4, 2); p(10, 4, pal.base, 4, 2); p(13, 3, pal.lo, 1, 3);
       } else if (def.toolType === 'sword') {
-        for (let i = 0; i < 8; i++) p(6 + i, 9 - i, col, 2, 2);
-        p(4, 9, '#5e3d1e', 5, 1.5);
+        // Crossguard
+        p(2, 8, '#29180a', 5, 2); p(5, 10, '#29180a', 3, 4);
+        p(3, 9, pal.lo, 3, 1); p(6, 10, pal.lo, 1, 3); p(5, 9, pal.hi, 2, 2);
+        // Razor diagonal blade
+        for (let i = 0; i < 8; i++) {
+          p(6 + i, 8 - i, pal.out, 3, 3);
+        }
+        for (let i = 0; i < 8; i++) {
+          p(7 + i, 8 - i, pal.base, 1, 2);
+          p(7 + i, 8 - i, pal.hi, 1, 1);
+        }
+        p(13, 1, pal.out, 2, 2); p(13, 2, pal.hi, 1, 1);
       }
       return;
     }
 
     if (def.armorSlot !== undefined) {
-      const mat = key.split('_')[0];
-      const col = tierColors[mat] || '#ccc';
-      if (def.armorSlot === 0) { // helmet
-        p(4, 4, col, 8, 6);
-        p(6, 7, '#1a1e28', 4, 3);
-      } else if (def.armorSlot === 1) { // chestplate
-        p(3, 3, col, 10, 10);
-        p(6, 3, '#1a1e28', 4, 2);
-      } else if (def.armorSlot === 2) { // leggings
-        p(4, 3, col, 8, 4);
-        p(4, 7, col, 3, 6);
-        p(9, 7, col, 3, 6);
-      } else { // boots
-        p(3, 8, col, 4, 5);
-        p(9, 8, col, 4, 5);
+      const pal = tierPal[key.split('_')[0]] || tierPal.iron;
+      if (def.armorSlot === 0) { // Helmet
+        p(3, 3, pal.out, 10, 9);
+        p(4, 4, pal.base, 8, 7); p(5, 4, pal.hi, 6, 2);
+        p(4, 8, pal.lo, 2, 3); p(10, 8, pal.lo, 2, 3);
+        p(6, 7, pal.out, 4, 5); p(6, 8, '#1a1e28', 4, 4);
+      } else if (def.armorSlot === 1) { // Chestplate
+        p(1, 2, pal.out, 14, 5); p(3, 5, pal.out, 10, 9);
+        p(2, 3, pal.hi, 4, 3); p(10, 3, pal.base, 4, 3);
+        p(4, 5, pal.base, 8, 8); p(5, 5, pal.hi, 6, 2);
+        p(4, 10, pal.lo, 8, 3); p(6, 2, '#1a1e28', 4, 3);
+      } else if (def.armorSlot === 2) { // Leggings
+        p(3, 2, pal.out, 10, 5); p(3, 6, pal.out, 4, 8); p(9, 6, pal.out, 4, 8);
+        p(4, 3, pal.hi, 8, 2); p(4, 5, pal.base, 8, 2);
+        p(4, 7, pal.base, 2, 6); p(10, 7, pal.base, 2, 6);
+        p(5, 10, pal.lo, 1, 3); p(11, 10, pal.lo, 1, 3);
+      } else { // Boots
+        p(2, 6, pal.out, 5, 8); p(9, 6, pal.out, 5, 8);
+        p(3, 7, pal.hi, 3, 2); p(10, 7, pal.hi, 3, 2);
+        p(3, 9, pal.base, 3, 3); p(10, 9, pal.base, 3, 3);
+        p(2, 12, pal.lo, 4, 1); p(10, 12, pal.lo, 4, 1);
       }
       return;
     }
 
-    // Materials & food
+    // Strict 16x16 Pixel-Art Materials, Bed & Animal Foods
     switch (key) {
+      case 'bed':
+        // Iconic 16x16 Minecraft Red Bed item!
+        p(1, 5, '#24140a', 14, 8);
+        p(2, 4, '#24140a', 12, 1);
+        p(2, 12, '#24140a', 2, 2); p(12, 12, '#24140a', 2, 2);
+        // Oak frame & legs
+        p(2, 10, '#8f6032', 12, 2); p(2, 12, '#6b4520', 2, 2); p(12, 12, '#6b4520', 2, 2);
+        // White pillow
+        p(2, 5, '#ffffff', 4, 4); p(2, 8, '#cbd5e1', 4, 1);
+        // White folded sheet + crimson quilted blanket
+        p(6, 5, '#edf2f7', 2, 5);
+        p(8, 5, '#e03535', 6, 5); p(8, 5, '#ff6b6b', 6, 1); p(8, 9, '#a31c1c', 6, 1);
+        break;
       case 'stick':
-        for (let i = 0; i < 10; i++) p(3 + i, 12 - i, '#8f6232', 1.4, 1.4);
+        for (let i = 0; i < 10; i++) {
+          p(2 + i, 13 - i, '#29180a', 3, 3);
+        }
+        for (let i = 0; i < 10; i++) {
+          p(3 + i, 13 - i, i % 2 === 0 ? '#a8753e' : '#7d5225', 1, 2);
+        }
         break;
       case 'coal':
-        p(4, 4, '#24262b', 8, 8); p(6, 5, '#464a54', 3, 2);
+        p(4, 2, '#111216', 8, 12); p(2, 4, '#111216', 12, 8);
+        p(3, 5, '#252830', 10, 6); p(5, 3, '#2d313b', 6, 10);
+        p(5, 4, '#4c5261', 3, 3); p(6, 5, '#687082', 1, 1); p(8, 9, '#191b21', 3, 3);
         break;
       case 'raw_iron':
-        p(4, 4, '#c79b77', 8, 8); p(5, 5, '#e8c4a5', 4, 3);
+        p(3, 3, '#2b1e16', 10, 10); p(2, 5, '#2b1e16', 12, 6);
+        p(4, 4, '#b88b68', 8, 8); p(3, 6, '#cfa482', 10, 4);
+        p(5, 5, '#f0d2b8', 3, 2); p(8, 8, '#875f42', 3, 3); p(9, 5, '#d9e0e8', 2, 2);
         break;
       case 'iron_ingot':
-        p(3, 6, '#d9dfe6', 10, 5); p(4, 5, '#ffffff', 8, 2);
+        p(1, 5, '#1b1f26', 14, 7); p(3, 3, '#1b1f26', 10, 9);
+        p(2, 6, '#b8c2cf', 12, 5); p(4, 4, '#e6ecf2', 8, 4);
+        p(5, 4, '#ffffff', 6, 2); p(3, 9, '#7f8996', 10, 2);
         break;
       case 'gold_ingot':
-        p(3, 6, '#f5c731', 10, 5); p(4, 5, '#fff08a', 8, 2);
+        p(1, 5, '#362306', 14, 7); p(3, 3, '#362306', 10, 9);
+        p(2, 6, '#e6ae1e', 12, 5); p(4, 4, '#ffd94a', 8, 4);
+        p(5, 4, '#fff6a6', 6, 2); p(3, 9, '#b57c0c', 10, 2);
         break;
       case 'diamond':
-        p(6, 2, '#5cf2f7', 4, 12); p(3, 5, '#3cd5db', 10, 6); p(5, 4, '#b8fcff', 4, 3);
+        p(5, 1, '#092a33', 6, 14); p(3, 3, '#092a33', 10, 10); p(2, 5, '#092a33', 12, 6);
+        p(6, 2, '#4eeef5', 4, 12); p(4, 4, '#36d6de', 8, 8); p(3, 6, '#22b7c2', 10, 4);
+        p(5, 3, '#c7feff', 4, 3); p(5, 4, '#ffffff', 2, 2); p(8, 9, '#128996', 3, 3);
         break;
       case 'emerald':
-        p(5, 2, '#22d466', 6, 12); p(4, 4, '#17a84d', 8, 8); p(6, 4, '#8cffb3', 3, 4);
+        p(4, 1, '#0a2914', 8, 14); p(3, 3, '#0a2914', 10, 10);
+        p(5, 2, '#1ed460', 6, 12); p(4, 4, '#15ad4c', 8, 8);
+        p(6, 3, '#8cffb3', 3, 5); p(6, 3, '#dcffe8', 2, 2); p(8, 9, '#0d7834', 3, 4);
         break;
       case 'apple':
-        p(7, 1, '#5e391f', 2, 3);
-        p(9, 2, '#4ea632', 3, 2);
-        p(4, 4, '#240b0b', 8, 10); p(3, 5, '#240b0b', 10, 8);
-        p(4, 5, '#d92b2b', 8, 8); p(5, 4, '#e53935', 6, 10);
-        p(5, 6, '#ff8a80', 2, 2); p(6, 5, '#ffcdd2', 1, 1);
-        p(9, 10, '#a31b1b', 2, 2);
+        p(7, 1, '#261409', 2, 3); p(7, 1, '#754824', 1, 3);
+        p(9, 1, '#1d4714', 4, 3); p(9, 2, '#5cc73c', 3, 1);
+        p(4, 4, '#290909', 8, 11); p(2, 6, '#290909', 12, 7);
+        p(3, 6, '#d92626', 10, 7); p(5, 5, '#e83838', 6, 9);
+        p(4, 6, '#ff8a80', 2, 3); p(5, 6, '#ffd6d2', 1, 1); p(9, 10, '#9e1515', 3, 3);
         break;
       case 'bread':
-        p(2, 5, '#3b240c', 12, 7); p(3, 4, '#3b240c', 10, 9);
-        p(3, 6, '#c98a38', 10, 5); p(4, 5, '#e8b563', 8, 3);
-        p(5, 5, '#f5d28e', 2, 2); p(9, 5, '#f5d28e', 2, 2);
-        p(7, 6, '#8f5a1e', 1, 3); p(10, 6, '#8f5a1e', 1, 3);
+        p(1, 5, '#331d08', 14, 7); p(3, 3, '#331d08', 10, 9);
+        p(2, 6, '#c78834', 12, 5); p(4, 4, '#e6b25c', 8, 4);
+        p(5, 4, '#f7d594', 2, 2); p(9, 4, '#f7d594', 2, 2);
+        p(7, 5, '#8a5219', 1, 4); p(11, 6, '#8a5219', 1, 3); p(3, 10, '#965c1f', 10, 1);
         break;
       case 'raw_porkchop':
-        // Distinct pink porkchop with creamy fat trim & dark pixel outline
-        p(3, 4, '#3d1518', 10, 8); p(2, 5, '#3d1518', 12, 6);
-        p(3, 5, '#f7c8c8', 10, 6); p(4, 6, '#e67580', 8, 4);
-        p(5, 7, '#d15664', 5, 2); p(6, 6, '#ffdada', 3, 1);
-        p(10, 6, '#fff0e6', 2, 2);
+        p(2, 4, '#361015', 12, 8); p(4, 3, '#361015', 8, 10);
+        p(3, 5, '#fad4d4', 10, 6); p(5, 4, '#f29ca4', 6, 8);
+        p(4, 6, '#e06c7a', 8, 4); p(5, 7, '#c74c5b', 5, 2); p(6, 5, '#ffe8e8', 3, 1);
+        p(10, 6, '#fff5eb', 2, 2);
         break;
       case 'cooked_porkchop':
-        // Golden seared porkchop with grill marks
-        p(3, 4, '#2b160a', 10, 8); p(2, 5, '#2b160a', 12, 6);
-        p(3, 5, '#d49a6a', 10, 6); p(4, 6, '#a86432', 8, 4);
-        p(5, 6, '#7a421c', 1, 4); p(8, 6, '#7a421c', 1, 4); p(11, 6, '#e6be8a', 1, 3);
+        p(2, 4, '#241106', 12, 8); p(4, 3, '#241106', 8, 10);
+        p(3, 5, '#d99e6c', 10, 6); p(5, 4, '#b8723d', 6, 8);
+        p(4, 6, '#9c5a29', 8, 4); p(5, 5, '#6e3914', 1, 5); p(9, 5, '#6e3914', 1, 5);
+        p(11, 6, '#f0cc9c', 2, 2);
         break;
       case 'raw_beef':
-        // Deep ruby-red steak cut with white marbling
-        p(2, 4, '#2e0a0a', 12, 8); p(4, 3, '#2e0a0a', 8, 10);
-        p(3, 5, '#c92e36', 10, 6); p(5, 4, '#b3222b', 6, 8);
-        p(4, 6, '#f5d5d5', 3, 1); p(8, 8, '#f5d5d5', 3, 1); p(6, 5, '#e85860', 3, 2);
+        p(2, 3, '#29080a', 12, 10); p(1, 5, '#29080a', 14, 6);
+        p(3, 4, '#c72a34', 10, 8); p(2, 6, '#b01e29', 12, 4);
+        p(4, 5, '#f7dede', 4, 1); p(8, 8, '#f7dede', 4, 1); p(5, 6, '#eb5460', 3, 2);
+        p(9, 9, '#8c141d', 3, 2);
         break;
       case 'steak':
-        // Rich browned seared beefsteak with juicy center & char stripes
-        p(2, 4, '#1f0e07', 12, 8); p(4, 3, '#1f0e07', 8, 10);
-        p(3, 5, '#6b341c', 10, 6); p(5, 4, '#7d3e22', 6, 8);
-        p(4, 6, '#9c5634', 4, 2); p(9, 7, '#4a2110', 2, 3); p(6, 8, '#b56d45', 3, 1);
+        p(2, 3, '#1a0a04', 12, 10); p(1, 5, '#1a0a04', 14, 6);
+        p(3, 4, '#70351c', 10, 8); p(2, 6, '#5c2913', 12, 4);
+        p(4, 5, '#a65c36', 4, 2); p(6, 8, '#bd7248', 3, 1);
+        p(8, 5, '#3b180a', 1, 5); p(11, 6, '#3b180a', 1, 4);
         break;
       case 'raw_chicken':
-        // Pale pink drumstick silhouette with white bone handle!
-        p(2, 9, '#2e2520', 4, 4); p(3, 10, '#f7f3eb', 2, 2);
-        p(5, 7, '#2e2520', 3, 3); p(5, 8, '#ebe3d5', 2, 2);
-        p(6, 3, '#3b1d1d', 7, 7); p(7, 4, '#f2b8ad', 5, 5);
-        p(8, 5, '#ffd4cb', 2, 2); p(10, 7, '#d98f82', 2, 2);
+        p(1, 10, '#29201a', 5, 5); p(2, 11, '#f7f3eb', 3, 3); p(4, 9, '#29201a', 3, 3); p(4, 10, '#e8dfd1', 2, 2);
+        p(5, 2, '#361818', 9, 9); p(6, 3, '#f2b5a8', 7, 7);
+        p(7, 4, '#ffd9cf', 3, 2); p(10, 7, '#d48779', 3, 3);
         break;
       case 'cooked_chicken':
-        // Crispy golden-brown roasted drumstick!
-        p(2, 9, '#2e2520', 4, 4); p(3, 10, '#f7f3eb', 2, 2);
-        p(5, 7, '#2e2520', 3, 3); p(5, 8, '#ebe3d5', 2, 2);
-        p(6, 3, '#2e1608', 7, 7); p(7, 4, '#c77a2e', 5, 5);
-        p(8, 5, '#e8a854', 2, 2); p(10, 7, '#8f4c16', 2, 2);
+        p(1, 10, '#29201a', 5, 5); p(2, 11, '#f7f3eb', 3, 3); p(4, 9, '#29201a', 3, 3); p(4, 10, '#e8dfd1', 2, 2);
+        p(5, 2, '#291206', 9, 9); p(6, 3, '#c7772a', 7, 7);
+        p(7, 4, '#f0b25d', 3, 2); p(10, 7, '#874411', 3, 3);
         break;
       case 'raw_mutton':
-        // Lamb chop with visible white rib bone on top-right
-        p(3, 5, '#361115', 9, 8); p(4, 6, '#d94854', 7, 6);
-        p(5, 7, '#f28b94', 4, 3); p(9, 3, '#2e2924', 4, 5);
-        p(10, 4, '#f5f2eb', 2, 4); p(7, 9, '#fce8e8', 3, 1);
+        p(2, 5, '#300e13', 10, 9); p(3, 6, '#d94552', 8, 7);
+        p(4, 7, '#f58c96', 4, 3); p(9, 2, '#292420', 5, 6);
+        p(10, 3, '#f7f4ed', 3, 4); p(6, 10, '#fce8e8', 4, 1);
         break;
       case 'cooked_mutton':
-        // Roasted lamb chop with bone
-        p(3, 5, '#26120a', 9, 8); p(4, 6, '#874624', 7, 6);
-        p(5, 7, '#ad6238', 4, 3); p(9, 3, '#2e2924', 4, 5);
-        p(10, 4, '#f5f2eb', 2, 4); p(6, 9, '#5e2c14', 3, 1);
+        p(2, 5, '#210e06', 10, 9); p(3, 6, '#874422', 8, 7);
+        p(4, 7, '#b5673b', 4, 3); p(9, 2, '#292420', 5, 6);
+        p(10, 3, '#f7f4ed', 3, 4); p(5, 10, '#592811', 4, 1);
         break;
       case 'raw_venison':
-        // Lean dark-crimson venison loin cut
-        p(2, 5, '#26080c', 12, 7); p(4, 4, '#26080c', 8, 9);
-        p(3, 6, '#9e1c2c', 10, 5); p(5, 5, '#b82538', 6, 7);
-        p(5, 6, '#e05366', 4, 2); p(8, 9, '#f0d5d5', 3, 1);
+        p(2, 4, '#24070b', 12, 8); p(4, 3, '#24070b', 8, 10);
+        p(3, 5, '#9e1a2b', 10, 6); p(5, 4, '#bd263b', 6, 8);
+        p(5, 5, '#e8586c', 4, 2); p(8, 9, '#f2d8d8', 4, 1);
         break;
       case 'cooked_venison':
-        // Rich smoky mahogany roasted venison steak with herb flecks
-        p(2, 5, '#1c0c06', 12, 7); p(4, 4, '#1c0c06', 8, 9);
-        p(3, 6, '#5c2814', 10, 5); p(5, 5, '#73351d', 6, 7);
-        p(5, 6, '#9e5332', 4, 2); p(6, 8, '#5ea844', 1, 1); p(9, 6, '#5ea844', 1, 1);
+        p(2, 4, '#1a0a05', 12, 8); p(4, 3, '#1a0a05', 8, 10);
+        p(3, 5, '#5e2713', 10, 6); p(5, 4, '#78361c', 6, 8);
+        p(5, 5, '#a65734', 4, 2); p(6, 8, '#5ec244', 1, 1); p(10, 6, '#5ec244', 1, 1);
         break;
       case 'raw_rabbit':
-        // Small tender pinkish-tan rabbit haunch
-        p(4, 4, '#361b18', 8, 8); p(3, 7, '#361b18', 6, 5);
-        p(5, 5, '#e8a296', 6, 6); p(4, 8, '#f5c2b8', 4, 3);
-        p(9, 9, '#f7f3eb', 2, 2); p(6, 6, '#ffd6ce', 2, 2);
+        p(4, 3, '#331715', 9, 9); p(2, 7, '#331715', 7, 6);
+        p(5, 4, '#eba396', 7, 7); p(3, 8, '#f7c5bb', 5, 4);
+        p(10, 10, '#f7f4ed', 2, 2); p(6, 5, '#ffded6', 3, 2);
         break;
       case 'cooked_rabbit':
-        // Golden roasted rabbit haunch
-        p(4, 4, '#29150a', 8, 8); p(3, 7, '#29150a', 6, 5);
-        p(5, 5, '#b86b2e', 6, 6); p(4, 8, '#d48a46', 4, 3);
-        p(9, 9, '#f7f3eb', 2, 2); p(6, 6, '#e8aa64', 2, 2);
+        p(4, 3, '#261208', 9, 9); p(2, 7, '#261208', 7, 6);
+        p(5, 4, '#ba6b2b', 7, 7); p(3, 8, '#d98d48', 5, 4);
+        p(10, 10, '#f7f4ed', 2, 2); p(6, 5, '#f2b872', 3, 2);
         break;
       case 'raw_salmon':
-        // Whole pixel salmon with teal-silver back, coral belly, tail fin & eye!
-        p(1, 5, '#17292e', 3, 6); p(2, 6, '#486b73', 2, 4); // tail fin
-        p(3, 4, '#17292e', 11, 8);
-        p(4, 5, '#4b7a78', 9, 3); // teal-silver back
-        p(4, 8, '#e36f64', 9, 3); // salmon coral belly
-        p(6, 6, '#75a6a3', 5, 1); // scale sheen
-        p(11, 6, '#ffffff', 1, 1); p(12, 6, '#111111', 1, 1); // eye
+        p(1, 5, '#122429', 3, 6); p(2, 6, '#486b73', 2, 4);
+        p(3, 3, '#122429', 12, 10);
+        p(4, 4, '#3e6e6c', 10, 4); p(4, 8, '#e36e62', 10, 4);
+        p(6, 5, '#78adaa', 6, 1); p(6, 9, '#f79c92', 5, 1);
+        p(12, 5, '#ffffff', 1, 2); p(13, 6, '#111111', 1, 1);
         break;
       case 'cooked_salmon':
-        // Golden-glazed grilled salmon fillet with flaky orange lines!
-        p(1, 5, '#29140a', 3, 6); p(2, 6, '#7d4728', 2, 4);
-        p(3, 4, '#29140a', 11, 8);
-        p(4, 5, '#b85b30', 9, 3);
-        p(4, 8, '#e88b4f', 9, 3);
-        p(6, 6, '#ffd09c', 1, 4); p(9, 6, '#ffd09c', 1, 4);
-        p(11, 6, '#fff2d6', 1, 1);
+        p(1, 5, '#261208', 3, 6); p(2, 6, '#7d4728', 2, 4);
+        p(3, 3, '#261208', 12, 10);
+        p(4, 4, '#b85a2c', 10, 4); p(4, 8, '#eb8d4d', 10, 4);
+        p(6, 5, '#ffd4a3', 1, 6); p(9, 5, '#ffd4a3', 1, 6); p(12, 6, '#fff2d6', 1, 1);
         break;
       case 'gunpowder':
-        p(4, 5, '#2b2b2b', 8, 7); p(5, 6, '#555555', 6, 5); p(6, 6, '#8a8a8a', 3, 2);
+        p(4, 4, '#1c1d21', 8, 8); p(3, 6, '#1c1d21', 10, 5);
+        p(5, 5, '#4b4e57', 6, 6); p(4, 7, '#5c606b', 8, 3);
+        p(6, 5, '#8a909e', 2, 2); p(9, 8, '#30333b', 2, 2);
         break;
       case 'bone':
-        p(2, 10, '#363430', 4, 4); p(10, 2, '#363430', 4, 4);
-        p(3, 11, '#f2efe9', 2, 2); p(11, 3, '#f2efe9', 2, 2);
-        for (let i = 0; i < 7; i++) {
-          p(4 + i, 10 - i, '#e6e2d8', 2, 2);
-          p(5 + i, 10 - i, '#ffffff', 1, 1);
+        p(1, 10, '#2b2926', 5, 5); p(10, 1, '#2b2926', 5, 5);
+        for (let i = 0; i < 8; i++) p(3 + i, 10 - i, '#2b2926', 3, 3);
+        p(2, 11, '#f5f2eb', 3, 3); p(11, 2, '#f5f2eb', 3, 3);
+        for (let i = 0; i < 8; i++) {
+          p(4 + i, 11 - i, '#e6e1d5', 1, 2);
+          p(4 + i, 10 - i, '#ffffff', 1, 1);
         }
         break;
       case 'leather':
-        p(3, 3, '#331c0b', 10, 10); p(4, 4, '#9c5a2c', 8, 8);
-        p(5, 5, '#bd7440', 5, 5); p(6, 6, '#d48b55', 2, 2);
+        p(2, 2, '#2e1809', 12, 12);
+        p(3, 3, '#9e5b2c', 10, 10); p(4, 4, '#bd733e', 6, 6);
+        p(5, 5, '#d98f57', 3, 3); p(9, 9, '#733e1a', 3, 3);
         break;
       case 'feather':
-        for (let i = 0; i < 10; i++) p(3 + i, 12 - i, '#dfe6ed', 2, 2);
-        for (let i = 2; i < 9; i++) p(4 + i, 11 - i, '#ffffff', 2, 2);
-        p(3, 12, '#7d8590', 2, 2);
+        for (let i = 0; i < 10; i++) p(2 + i, 12 - i, '#2c333d', 3, 3);
+        for (let i = 1; i < 10; i++) {
+          p(3 + i, 12 - i, '#dce3eb', 2, 2);
+          p(4 + i, 11 - i, '#ffffff', 1, 1);
+        }
+        p(2, 13, '#6e7682', 2, 1);
         break;
       case 'wheat':
-        for (let i = 0; i < 9; i++) {
-          p(4 + i * 0.8, 12 - i, '#d9b13b', 2, 2);
-          p(5 + i * 0.8, 11 - i, '#f5dc78', 1, 1);
+        for (let i = 0; i < 10; i++) p(2 + i, 12 - i, '#42320b', 3, 3);
+        for (let i = 0; i < 10; i++) {
+          p(3 + i, 12 - i, i % 2 === 0 ? '#e6be42' : '#c99b24', 2, 1);
+          p(4 + i, 11 - i, '#fff099', 1, 1);
         }
         break;
       default:
-        p(4, 4, '#999', 8, 8);
+        p(3, 3, '#222', 10, 10); p(4, 4, '#999', 8, 8);
     }
   }
 
@@ -659,6 +727,83 @@ export class TextureManager {
     tex.generateMipmaps = false;
     this.itemTextures[itemKey] = tex;
     return tex;
+  }
+
+  // True 3D Voxel-Extruded Pixel-Art Geometry for Dropped Items, Foods, Tools & Beds!
+  createExtrudedItemGeometry(itemKey, size = 0.36) {
+    if (this.extrudedGeoCache[itemKey]) return this.extrudedGeoCache[itemKey];
+
+    const tex = this.getItemTexture(itemKey);
+    const imgCanvas = tex.image;
+    const ctx = imgCanvas.getContext('2d');
+    const imgData = ctx.getImageData(0, 0, 32, 32).data;
+
+    // Sample the 16x16 logical pixel grid (center of each 2x2 texel block)
+    const solid = new Uint8Array(256);
+    for (let py = 0; py < 16; py++) {
+      for (let px0 = 0; px0 < 16; px0++) {
+        const a = imgData[((py * 2) * 32 + (px0 * 2)) * 4 + 3];
+        if (a > 128) solid[py * 16 + px0] = 1;
+      }
+    }
+
+    const pos = [], norm = [], uv = [], idx = [];
+    const cell = size / 16;
+    const half = size * 0.5;
+    const halfD = cell * 0.65; // authentic chunky Minecraft 3D item slab thickness!
+
+    const pushQuad = (p0, p1, p2, p3, n, u0, v0, u1, v1) => {
+      const base = pos.length / 3;
+      pos.push(...p0, ...p1, ...p2, ...p3);
+      norm.push(...n, ...n, ...n, ...n);
+      uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+
+    // Front (+Z) and Back (-Z) full textured quads
+    pushQuad(
+      [-half, -half, halfD], [half, -half, halfD], [half, half, halfD], [-half, half, halfD],
+      [0, 0, 1], 0, 0, 1, 1
+    );
+    pushQuad(
+      [half, -half, -halfD], [-half, -half, -halfD], [-half, half, -halfD], [half, half, -halfD],
+      [0, 0, -1], 1, 0, 0, 1
+    );
+
+    // Extruded perimeter pixel side walls (only where a solid pixel borders transparency!)
+    const isSolid = (x, y) => (x >= 0 && x < 16 && y >= 0 && y < 16) ? solid[y * 16 + x] === 1 : false;
+    for (let py = 0; py < 16; py++) {
+      for (let px0 = 0; px0 < 16; px0++) {
+        if (!solid[py * 16 + px0]) continue;
+        const x0 = -half + px0 * cell;
+        const x1 = x0 + cell;
+        const y1 = half - py * cell;
+        const y0 = y1 - cell;
+        const u = (px0 + 0.5) / 16;
+        const v = 1 - (py + 0.5) / 16;
+
+        if (!isSolid(px0 - 1, py)) {
+          pushQuad([x0, y0, -halfD], [x0, y0, halfD], [x0, y1, halfD], [x0, y1, -halfD], [-1, 0, 0], u, v, u, v);
+        }
+        if (!isSolid(px0 + 1, py)) {
+          pushQuad([x1, y0, halfD], [x1, y0, -halfD], [x1, y1, -halfD], [x1, y1, halfD], [1, 0, 0], u, v, u, v);
+        }
+        if (!isSolid(px0, py - 1)) {
+          pushQuad([x0, y1, halfD], [x1, y1, halfD], [x1, y1, -halfD], [x0, y1, -halfD], [0, 1, 0], u, v, u, v);
+        }
+        if (!isSolid(px0, py + 1)) {
+          pushQuad([x0, y0, -halfD], [x1, y0, -halfD], [x1, y0, halfD], [x0, y0, halfD], [0, -1, 0], u, v, u, v);
+        }
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    this.extrudedGeoCache[itemKey] = geo;
+    return geo;
   }
 
   // Real 3D pixel-art mini-block geometry mapped to exact atlas top/side/bottom UVs!
@@ -830,17 +975,17 @@ export class TextureManager {
     return tex;
   }
 
-  // Crisp 16x16 Minecraft-Style Pixel-Art HUD Icons (Hearts, Food, Water Bubbles, Armor!)
+  // Unified Coherent 16x16 Pixel-Art HUD Icons (Hearts, Food, Water Bubbles, Armor — exact same 16x16 density as all UI!)
   buildHudIcons() {
-    const renderGrid = (rows, palette) => {
+    const render16 = (rows, palette) => {
       const c = document.createElement('canvas');
-      c.width = 18;
-      c.height = 18;
+      c.width = 32;
+      c.height = 32;
       const ctx = c.getContext('2d');
       ctx.imageSmoothingEnabled = false;
-      for (let y = 0; y < rows.length; y++) {
+      for (let y = 0; y < 16; y++) {
         const row = rows[y];
-        for (let x = 0; x < row.length; x++) {
+        for (let x = 0; x < 16; x++) {
           const col = palette[row[x]];
           if (col) {
             ctx.fillStyle = col;
@@ -851,226 +996,233 @@ export class TextureManager {
       return c.toDataURL();
     };
 
-    // 9x9 Classic Pixel Heart (scaled 2x to 18x18)
+    // 16x16 Crisp Minecraft Pixel Hearts (full / half / empty)
     const heartFull = [
-      '.OO...OO.',
-      'ORRO.ORRO',
-      'ORWROORRO',
-      'ORRRRRRRO',
-      'ORRRRRRRO',
-      '.ORRRRDO.',
-      '..ORRDO..',
-      '...ODO...',
-      '....O....'
+      '................',
+      '..OOOO....OOOO..',
+      '.ORRRRO..ORRRRO.',
+      'ORWWRRROORRRRRRO',
+      'ORWWRRRRRRRRRRRO',
+      'ORRRRRRRRRRRRRRO',
+      'ORRRRRRRRRRRRRDO',
+      'ORRRRRRRRRRRRDO.',
+      '.ORRRRRRRRRRDO..',
+      '..ORRRRRRRRDO...',
+      '...ORRRRRRDO....',
+      '....ORRRRDO.....',
+      '.....ORRDO......',
+      '......ODO.......',
+      '.......O........',
+      '................'
     ];
     const heartHalf = [
-      '.OO...OO.',
-      'ORRO.O..O',
-      'ORWROO..O',
-      'ORRRR...O',
-      'ORRRR...O',
-      '.ORRR..O.',
-      '..ORR.O..',
-      '...OD.O..',
-      '....O....'
+      '................',
+      '..OOOO....OOOO..',
+      '.ORRRRO..OBBBBO.',
+      'ORWWRRROOBBBBBBO',
+      'ORWWRRRRBBBBBBBO',
+      'ORRRRRRRBBBBBBBO',
+      'ORRRRRRRBBBBBBBO',
+      'ORRRRRRRBBBBBBO.',
+      '.ORRRRRRBBBBBO..',
+      '..ORRRRRBBBBO...',
+      '...ORRRRBBBO....',
+      '....ORRRBBBO....',
+      '.....ORRBBO.....',
+      '......OBO.......',
+      '.......O........',
+      '................'
     ];
     const heartEmpty = [
-      '.OO...OO.',
-      'O..O.O..O',
-      'O...O...O',
-      'O.......O',
-      'O.......O',
-      '.O.....O.',
-      '..O...O..',
-      '...O.O...',
-      '....O....'
+      '................',
+      '..OOOO....OOOO..',
+      '.OBBBBO..OBBBBO.',
+      'OBBBBBBOOBBBBBBO',
+      'OBBBBBBBBBBBBBBO',
+      'OBBBBBBBBBBBBBBO',
+      'OBBBBBBBBBBBBBBO',
+      'OBBBBBBBBBBBBBO.',
+      '.OBBBBBBBBBBBBO.',
+      '..OBBBBBBBBBBO..',
+      '...OBBBBBBBBO...',
+      '....OBBBBBBO....',
+      '.....OBBBBO.....',
+      '......OBBO......',
+      '.......OO.......',
+      '................'
     ];
     const heartPal = {
-      O: '#141414',
-      R: '#e02424',
+      O: '#140c0c',
+      R: '#e32626',
       D: '#9c1111',
-      W: '#ffbaba',
-      '.': null
+      W: '#ffc7c7',
+      B: '#2b1b1b'
     };
-    const heartEmptyPal = {
-      O: '#141414',
-      '.': null
-    };
-    // Fill interior of empty/half heart with dark container shade
-    const fillHeartBg = (rows, pal) => {
-      const c = document.createElement('canvas');
-      c.width = 18; c.height = 18;
-      const ctx = c.getContext('2d');
-      const mask = [
-        '.OO...OO.',
-        'OBBO.OBBO',
-        'OBBBOBBBO',
-        'OBBBBBBBO',
-        'OBBBBBBBO',
-        '.OBBBBBO.',
-        '..OBBBO..',
-        '...OBO...',
-        '....O....'
-      ];
-      for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
-          if (mask[y][x] === 'B') {
-            ctx.fillStyle = '#2d1c1c';
-            ctx.fillRect(x * 2, y * 2, 2, 2);
-          }
-          const col = pal[rows[y][x]];
-          if (col) {
-            ctx.fillStyle = col;
-            ctx.fillRect(x * 2, y * 2, 2, 2);
-          }
-        }
-      }
-      return c.toDataURL();
-    };
-    this.hudIcons.heart_full = fillHeartBg(heartFull, heartPal);
-    this.hudIcons.heart_half = fillHeartBg(heartHalf, heartPal);
-    this.hudIcons.heart_empty = fillHeartBg(heartEmpty, heartEmptyPal);
+    this.hudIcons.heart_full = render16(heartFull, heartPal);
+    this.hudIcons.heart_half = render16(heartHalf, heartPal);
+    this.hudIcons.heart_empty = render16(heartEmpty, heartPal);
 
-    // 9x9 Classic Pixel Meat Drumstick (Food / Hunger)
+    // 16x16 Crisp Pixel Roasted Meat Drumstick (Food / Hunger)
     const foodFull = [
-      '....OOOO.',
-      '...OLLLOO',
-      '..OLMMMLO',
-      '..OMMMMDO',
-      '..OMMMDDO',
-      '.OOBBDDO.',
-      'OWWBOOO..',
-      'OWWO.....',
-      '.OO......'
+      '................',
+      '.......OOOOOO...',
+      '.....OOLLLLLLO..',
+      '....OLLMMMMMMLO.',
+      '...OLMMMMMMMMDDO',
+      '...OMMMMMMMMDDO.',
+      '...OMMMMMMMMDDO.',
+      '...OMMMMMMMDDDO.',
+      '....OMMMDDDDDO..',
+      '...OOBBDDDDDO...',
+      '..OWWBOOODOO....',
+      '.OWWWBO.........',
+      '.OWWBO..........',
+      '..OOO...........',
+      '................',
+      '................'
     ];
     const foodHalf = [
-      '....OOOO.',
-      '...O....O',
-      '..O.....O',
-      '..O..MMDO',
-      '..O..MDDO',
-      '.OOBBDDO.',
-      'OWWBOOO..',
-      'OWWO.....',
-      '.OO......'
-    ];
+      '................',
+      '.......OOOOOO...',
+      '.....OOBBBBBBO..',
+      '....OBBBBBBBBBO.',
+      '...OBBBBBBBBBBO.',
+      '...OBBBBBMMMDD0.',
+      '...OBBBBMMMMDDO.',
+      '...OBBBBMMMDDDO.',
+      '....OBBBDDDDDO..',
+      '...OOBBDDDDDO...',
+      '..OWWBOOODOO....',
+      '.OWWWBO.........',
+      '.OWWBO..........',
+      '..OOO...........',
+      '................',
+      '................'
+    ].map((r) => r.replace('0', 'O'));
     const foodEmpty = [
-      '....OOOO.',
-      '...O....O',
-      '..O.....O',
-      '..O.....O',
-      '..O.....O',
-      '.OO....O.',
-      'O..OOOO..',
-      'O..O.....',
-      '.OO......'
+      '................',
+      '.......OOOOOO...',
+      '.....OOBBBBBBO..',
+      '....OBBBBBBBBBO.',
+      '...OBBBBBBBBBBBO',
+      '...OBBBBBBBBBBO.',
+      '...OBBBBBBBBBBO.',
+      '...OBBBBBBBBBBO.',
+      '....OBBBBBBBBO..',
+      '...OOBBBBBBBBO..',
+      '..OBBBOOOOOOO...',
+      '.OBBBBO.........',
+      '.OBBBO..........',
+      '..OOO...........',
+      '................',
+      '................'
     ];
     const foodPal = {
-      O: '#1e120a',
-      L: '#e8a254',
-      M: '#ba6c2c',
-      D: '#7d3e14',
-      B: '#d6ccb8',
+      O: '#1f1209',
+      L: '#f0ac59',
+      M: '#c46f2b',
+      D: '#7d3c11',
+      B: '#d9d0be',
       W: '#ffffff'
     };
-    const fillFoodBg = (rows, pal) => {
-      const c = document.createElement('canvas');
-      c.width = 18; c.height = 18;
-      const ctx = c.getContext('2d');
-      const mask = [
-        '....OOOO.',
-        '...OBBBBO',
-        '..OBBBBBO',
-        '..OBBBBBO',
-        '..OBBBBBO',
-        '.OOBBBBO.',
-        'OBBBOOO..',
-        'OBBO.....',
-        '.OO......'
-      ];
-      for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
-          if (mask[y][x] === 'B') {
-            ctx.fillStyle = '#2b2019';
-            ctx.fillRect(x * 2, y * 2, 2, 2);
-          }
-          const col = pal[rows[y][x]];
-          if (col) {
-            ctx.fillStyle = col;
-            ctx.fillRect(x * 2, y * 2, 2, 2);
-          }
-        }
-      }
-      return c.toDataURL();
-    };
-    this.hudIcons.food_full = fillFoodBg(foodFull, foodPal);
-    this.hudIcons.food_half = fillFoodBg(foodHalf, foodPal);
-    this.hudIcons.food_empty = fillFoodBg(foodEmpty, foodPal);
+    const foodEmptyPal = { O: '#1f1209', B: '#2b2019' };
+    this.hudIcons.food_full = render16(foodFull, foodPal);
+    this.hudIcons.food_half = render16(foodHalf, { ...foodPal, B: '#2b2019' });
+    this.hudIcons.food_empty = render16(foodEmpty, foodEmptyPal);
 
-    // 9x9 Pixel Water / Air Bubble
+    // 16x16 Glossy Pixel Water / Air Bubble
     const bubbleFull = [
-      '..OOOOO..',
-      '.OBWWWBO.',
-      'OBWLLLBBO',
-      'OBLBBBBBO',
-      'OBBBBBDBO',
-      'OBBBBDDDO',
-      'OBBBDDDDO',
-      '.ODDDDDO.',
-      '..OOOOO..'
-    ];
+      '................',
+      '.....OOOOOO.....',
+      '...OOBLLLLBOO...',
+      '..OBLWWWWWLLBO..',
+      '.OBLWWLLLLBBBBO.',
+      '.OBLWLLBBBBBBBO.',
+      'OBLLBBBBBBBBBBDO',
+      'OBLBBBBBBBBBBBDO',
+      'OBBBBBBBBBBBBBDO',
+      'OBBBBBBBBBBBBDD0',
+      '.OBBBBBBBBBBDD0.',
+      '.OBBBBBBBBBDD0..',
+      '..OBBBBBBBDD0...',
+      '...OODDDDD0O....',
+      '.....OOOOOO.....',
+      '................'
+    ].map((r) => r.replaceAll('0', 'O'));
     const bubblePop = [
-      '.O.....O.',
-      '..O...O..',
-      '....L....',
-      '.O.L.L.O.',
-      '..L...L..',
-      '.O.L.L.O.',
-      '....L....',
-      '..O...O..',
-      '.O.....O.'
+      '................',
+      '..O..........O..',
+      '...O........O...',
+      '.......LL.......',
+      '....O.L..L.O....',
+      '...L........L...',
+      '..O..........O..',
+      '.......WW.......',
+      '..O..........O..',
+      '...L........L...',
+      '....O.L..L.O....',
+      '.......LL.......',
+      '...O........O...',
+      '..O..........O..',
+      '................',
+      '................'
     ];
     const bubblePal = {
-      O: '#0d3d66',
+      O: '#0b355c',
       W: '#ffffff',
-      L: '#a6e4ff',
+      L: '#bae6fd',
       B: '#38bdf8',
-      D: '#1d7cb8'
+      D: '#1572b6'
     };
-    this.hudIcons.bubble_full = renderGrid(bubbleFull, bubblePal);
-    this.hudIcons.bubble_pop = renderGrid(bubblePop, bubblePal);
+    this.hudIcons.bubble_full = render16(bubbleFull, bubblePal);
+    this.hudIcons.bubble_pop = render16(bubblePop, bubblePal);
 
-    // 9x9 Pixel Armor Chestplate / Shield
+    // 16x16 Pixel Iron Armor Shield / Chestplate
     const armorFull = [
-      '.OO...OO.',
-      'OSSO.OSSO',
-      'OSWOOOWSO',
-      'OSWWWWWSO',
-      'OSWSSSWO.',
-      'OSSDDDSSO',
-      'OSDDDDDSO',
-      '.ODDDDDO.',
-      '..OOOOO..'
+      '................',
+      '..OOOO....OOOO..',
+      '.OSSSSO..OSSSSO.',
+      'OSSWWSSOOSSWWSSO',
+      'OSSWWWWWWWWWWSSO',
+      'OSSWWSSSSSSWWSSO',
+      '.OSSSSSSSSSSSSO.',
+      '.OSSSDDDDDDSSSO.',
+      '.OSSSDDDDDDSSSO.',
+      '..OSSDDDDDDSSO..',
+      '..OSSDDDDDDSSO..',
+      '...OSSDDDDSSO...',
+      '....OSDDDDDO....',
+      '.....ODDDDO.....',
+      '......OOOO......',
+      '................'
     ];
     const armorHalf = [
-      '.OO...OO.',
-      'OSSO.O..O',
-      'OSWOO...O',
-      'OSWW....O',
-      'OSWS....O',
-      'OSSD....O',
-      'OSDD....O',
-      '.ODD...O.',
-      '..OOOOO..'
+      '................',
+      '..OOOO....OOOO..',
+      '.OSSSSO..OBBBBO.',
+      'OSSWWSSOOBBBBBBO',
+      'OSSWWWWWWBBBBBBO',
+      'OSSWWSSSSBBBBBBO',
+      '.OSSSSSSSBBBBBO.',
+      '.OSSSDDDDBBBBBO.',
+      '.OSSSDDDDBBBBBO.',
+      '..OSSDDDDBBBBO..',
+      '..OSSDDDDBBBBO..',
+      '...OSSDDDBBBO...',
+      '....OSDDDBBO....',
+      '.....ODDDBO.....',
+      '......OOOO......',
+      '................'
     ];
     const armorPal = {
-      O: '#14171c',
+      O: '#14171f',
       W: '#ffffff',
-      S: '#c8d1db',
-      D: '#7d8896'
+      S: '#cfd7e3',
+      D: '#7d8899',
+      B: '#262b36'
     };
-    this.hudIcons.armor_full = renderGrid(armorFull, armorPal);
-    this.hudIcons.armor_half = renderGrid(armorHalf, armorPal);
+    this.hudIcons.armor_full = render16(armorFull, armorPal);
+    this.hudIcons.armor_half = render16(armorHalf, armorPal);
   }
 
   getUiIcon(name) {
@@ -1320,111 +1472,100 @@ export class TextureManager {
       p(9, 7, '#64748b', 2, 1);
     });
 
-    // 17. ARROWS (D-Pad + Crafting Arrow)
+    // 17. ARROWS (1px outlined crisp 16x16 D-Pad + Crafting Arrow)
     this.uiIcons.arrow_up = make((p) => {
-      for (let i = 0; i < 6; i++) p(7 - i, 3 + i, '#ffffff', 2 + i * 2, 1);
-      p(6, 9, '#cbd5e1', 4, 4);
+      for (let i = 0; i < 6; i++) p(6 - i, 2 + i, '#14171f', 4 + i * 2, 2);
+      p(5, 8, '#14171f', 6, 6);
+      for (let i = 0; i < 5; i++) p(7 - i, 3 + i, i < 2 ? '#ffffff' : '#dbeafe', 2 + i * 2, 1);
+      p(6, 8, '#cbd5e1', 4, 5); p(7, 8, '#ffffff', 2, 4);
     });
     this.uiIcons.arrow_down = make((p) => {
-      p(6, 3, '#cbd5e1', 4, 4);
-      for (let i = 0; i < 6; i++) p(2 + i, 7 + i, '#ffffff', 12 - i * 2, 1);
+      p(5, 2, '#14171f', 6, 6);
+      for (let i = 0; i < 6; i++) p(1 + i, 7 + i, '#14171f', 14 - i * 2, 2);
+      p(6, 3, '#cbd5e1', 4, 5); p(7, 3, '#ffffff', 2, 4);
+      for (let i = 0; i < 5; i++) p(2 + i, 8 + i, i > 2 ? '#ffffff' : '#dbeafe', 12 - i * 2, 1);
     });
     this.uiIcons.arrow_left = make((p) => {
-      for (let i = 0; i < 6; i++) p(3 + i, 7 - i, '#ffffff', 1, 2 + i * 2);
-      p(9, 6, '#cbd5e1', 4, 4);
+      for (let i = 0; i < 6; i++) p(2 + i, 6 - i, '#14171f', 2, 4 + i * 2);
+      p(8, 5, '#14171f', 6, 6);
+      for (let i = 0; i < 5; i++) p(3 + i, 7 - i, i < 2 ? '#ffffff' : '#dbeafe', 1, 2 + i * 2);
+      p(8, 6, '#cbd5e1', 5, 4); p(8, 7, '#ffffff', 4, 2);
     });
     this.uiIcons.arrow_right = make((p) => {
-      p(3, 6, '#cbd5e1', 4, 4);
-      for (let i = 0; i < 6; i++) p(7 + i, 2 + i, '#ffffff', 1, 12 - i * 2);
+      p(2, 5, '#14171f', 6, 6);
+      for (let i = 0; i < 6; i++) p(7 + i, 1 + i, '#14171f', 2, 14 - i * 2);
+      p(3, 6, '#cbd5e1', 5, 4); p(3, 7, '#ffffff', 4, 2);
+      for (let i = 0; i < 5; i++) p(8 + i, 2 + i, i > 2 ? '#ffffff' : '#dbeafe', 1, 12 - i * 2);
     });
     this.uiIcons.arrow_right_gold = make((p) => {
-      p(2, 5, '#2b1e05', 6, 6);
-      for (let i = 0; i < 6; i++) p(7 + i, 2 + i, '#2b1e05', 2, 12 - i * 2);
-      p(3, 6, '#ffd54f', 5, 4);
-      for (let i = 0; i < 5; i++) p(8 + i, 3 + i, '#ffe57f', 1, 10 - i * 2);
+      p(1, 5, '#2b1c04', 7, 6);
+      for (let i = 0; i < 6; i++) p(7 + i, 2 + i, '#2b1c04', 2, 12 - i * 2);
+      p(2, 6, '#f5b318', 6, 4); p(2, 6, '#ffe57f', 6, 1);
+      for (let i = 0; i < 5; i++) p(8 + i, 3 + i, i < 2 ? '#ffe57f' : '#ffd54f', 1, 10 - i * 2);
     });
 
-    // 18. FURNACE FLAME
+    // 18. FURNACE FLAME (outlined 16x16 fire)
     this.uiIcons.flame = make((p) => {
-      p(6, 1, '#ff5722', 4, 3);
-      p(4, 4, '#ff7043', 8, 5);
-      p(3, 8, '#f4511e', 10, 6);
-      p(5, 6, '#ffb300', 6, 7);
-      p(6, 9, '#fff176', 4, 4);
-      p(7, 11, '#ffffff', 2, 2);
+      p(6, 1, '#3b1206', 4, 3); p(4, 3, '#3b1206', 8, 5); p(2, 7, '#3b1206', 12, 8);
+      p(7, 2, '#ff5722', 2, 2); p(5, 4, '#ff7043', 6, 4); p(3, 8, '#f4511e', 10, 6);
+      p(5, 6, '#ffb300', 6, 7); p(6, 9, '#fff176', 4, 4); p(7, 11, '#ffffff', 2, 2);
     });
 
-    // 19. TIME & WEATHER PIXEL ICONS
+    // 19. TIME & WEATHER PIXEL ICONS (1px dark frame, crisp 16x16 scenes!)
     this.uiIcons.sunrise = make((p) => {
-      p(1, 10, '#2e4a7d', 14, 5);
-      p(1, 9, '#ff9e5e', 14, 2);
-      p(5, 5, '#ffd54f', 6, 5);
-      p(6, 4, '#fff176', 4, 4);
-      p(7, 2, '#ffe082', 2, 2);
-      p(3, 6, '#ffe082', 2, 1);
-      p(11, 6, '#ffe082', 2, 1);
+      p(1, 1, '#182033', 14, 14);
+      p(2, 2, '#5c78b8', 12, 5); p(2, 7, '#ff9e5e', 12, 3);
+      p(5, 6, '#ffd54f', 6, 4); p(6, 5, '#fff59d', 4, 3);
+      p(2, 10, '#2e4a7d', 12, 4); p(5, 11, '#ffcf80', 6, 1); p(6, 12, '#ffa66b', 4, 1);
     });
     this.uiIcons.sun = make((p) => {
-      p(5, 5, '#ffb300', 6, 6);
-      p(6, 6, '#fff176', 4, 4);
-      p(7, 1, '#ffd54f', 2, 3); p(7, 12, '#ffd54f', 2, 3);
-      p(1, 7, '#ffd54f', 3, 2); p(12, 7, '#ffd54f', 3, 2);
-      p(3, 3, '#ffd54f', 2, 2); p(11, 3, '#ffd54f', 2, 2);
-      p(3, 11, '#ffd54f', 2, 2); p(11, 11, '#ffd54f', 2, 2);
+      p(4, 4, '#472a04', 8, 8); p(7, 1, '#472a04', 2, 3); p(7, 12, '#472a04', 2, 3);
+      p(1, 7, '#472a04', 3, 2); p(12, 7, '#472a04', 3, 2);
+      p(5, 5, '#ffb300', 6, 6); p(6, 6, '#fff176', 4, 4); p(6, 6, '#ffffff', 2, 2);
+      p(7, 2, '#ffd54f', 2, 2); p(7, 12, '#ffd54f', 2, 2);
+      p(2, 7, '#ffd54f', 2, 2); p(12, 7, '#ffd54f', 2, 2);
+      p(3, 3, '#ffd54f', 1, 1); p(12, 3, '#ffd54f', 1, 1); p(3, 12, '#ffd54f', 1, 1); p(12, 12, '#ffd54f', 1, 1);
     });
     this.uiIcons.sunset = make((p) => {
-      p(1, 2, '#4a3d8c', 14, 4);
-      p(1, 6, '#d96b8a', 14, 3);
-      p(1, 9, '#ff9b54', 14, 2);
-      p(5, 7, '#ffe082', 6, 3);
-      p(1, 11, '#3b4f85', 14, 4);
-      p(4, 12, '#ffb574', 8, 1);
-      p(6, 13, '#ffd299', 4, 1);
+      p(1, 1, '#1a1630', 14, 14);
+      p(2, 2, '#4a3d8c', 12, 3); p(2, 5, '#d96b8a', 12, 3); p(2, 8, '#ff9b54', 12, 2);
+      p(5, 7, '#ffe082', 6, 3); p(6, 7, '#ffffff', 4, 2);
+      p(2, 10, '#3b4f85', 12, 4); p(4, 11, '#ffb574', 8, 1); p(6, 12, '#ffd299', 4, 1);
     });
     this.uiIcons.moon = make((p) => {
-      p(4, 2, '#cbd5e1', 7, 12);
-      p(3, 4, '#e2e8f0', 9, 8);
-      p(7, 4, '#1e293b', 6, 8);
-      p(8, 3, '#1e293b', 4, 10);
-      p(12, 3, '#fff59d', 1, 1);
-      p(13, 10, '#fff59d', 1, 1);
+      p(3, 1, '#0f172a', 9, 14); p(2, 3, '#0f172a', 11, 10);
+      p(4, 2, '#cbd5e1', 7, 12); p(3, 4, '#e2e8f0', 9, 8); p(4, 3, '#ffffff', 3, 4);
+      p(7, 4, '#0f172a', 6, 8); p(8, 3, '#0f172a', 5, 10);
+      p(12, 3, '#fff59d', 2, 2); p(13, 10, '#fff59d', 1, 1);
     });
     this.uiIcons.rain = make((p) => {
-      p(4, 2, '#94a3b8', 8, 5);
-      p(2, 4, '#cbd5e1', 12, 4);
-      p(4, 9, '#38bdf8', 1, 3);
-      p(7, 10, '#38bdf8', 1, 4);
-      p(10, 9, '#38bdf8', 1, 3);
-      p(12, 11, '#7dd3fc', 1, 3);
+      p(3, 1, '#1e293b', 10, 7); p(1, 3, '#1e293b', 14, 6);
+      p(4, 2, '#cbd5e1', 8, 5); p(2, 4, '#94a3b8', 12, 4); p(4, 3, '#ffffff', 6, 2);
+      p(3, 10, '#0284c7', 2, 4); p(4, 10, '#7dd3fc', 1, 3);
+      p(7, 11, '#0284c7', 2, 4); p(8, 11, '#7dd3fc', 1, 3);
+      p(11, 10, '#0284c7', 2, 4); p(12, 10, '#7dd3fc', 1, 3);
     });
 
-    // 20. COMMAND & MOD PIXEL ICONS
+    // 20. COMMAND & MOD PIXEL ICONS (1px dark outline, crisp 16x16)
     this.uiIcons.star = make((p) => {
-      p(7, 1, '#ffd54f', 2, 14);
-      p(1, 7, '#ffd54f', 14, 2);
-      p(4, 4, '#ffe57f', 8, 8);
-      p(6, 6, '#ffffff', 4, 4);
+      p(6, 1, '#472d04', 4, 14); p(1, 6, '#472d04', 14, 4); p(3, 3, '#472d04', 10, 10);
+      p(7, 2, '#ffd54f', 2, 12); p(2, 7, '#ffd54f', 12, 2);
+      p(4, 4, '#ffe57f', 8, 8); p(6, 6, '#ffffff', 4, 4);
     });
     this.uiIcons.map = make((p) => {
-      p(2, 2, '#241a0d', 12, 12);
-      p(3, 3, '#e8d7a8', 10, 10);
-      p(4, 4, '#5da135', 4, 4);
-      p(8, 7, '#38bdf8', 4, 4);
-      p(6, 6, '#e53935', 2, 2);
+      p(1, 1, '#241a0d', 14, 14);
+      p(2, 2, '#e8d7a8', 12, 12); p(3, 3, '#5da135', 5, 5);
+      p(8, 7, '#38bdf8', 5, 5); p(6, 6, '#e53935', 3, 3); p(7, 7, '#ffffff', 1, 1);
     });
     this.uiIcons.paw = make((p) => {
-      p(5, 8, '#3d2414', 6, 5);
-      p(6, 9, '#b87642', 4, 3);
-      p(3, 4, '#b87642', 2, 3);
-      p(6, 3, '#b87642', 2, 3);
-      p(9, 3, '#b87642', 2, 3);
-      p(11, 5, '#b87642', 2, 3);
+      p(4, 7, '#24140a', 8, 7); p(5, 8, '#b87642', 6, 5); p(6, 9, '#d99a62', 4, 2);
+      p(2, 3, '#24140a', 4, 5); p(3, 4, '#b87642', 2, 3);
+      p(6, 2, '#24140a', 4, 5); p(7, 3, '#b87642', 2, 3);
+      p(10, 3, '#24140a', 4, 5); p(11, 4, '#b87642', 2, 3);
     });
     this.uiIcons.wing = make((p) => {
-      p(2, 4, '#e2e8f0', 10, 3);
-      p(4, 7, '#cbd5e1', 9, 3);
-      p(6, 10, '#94a3b8', 6, 2);
-      p(3, 5, '#ffffff', 6, 1);
+      p(1, 3, '#1e293b', 12, 5); p(3, 6, '#1e293b', 11, 5); p(5, 9, '#1e293b', 8, 4);
+      p(2, 4, '#ffffff', 10, 3); p(4, 7, '#cbd5e1', 9, 3); p(6, 10, '#94a3b8', 6, 2);
     });
     this.uiIcons.axe = this.itemIcons.iron_axe || this.uiIcons.mine;
     this.uiIcons.pickaxe = this.itemIcons.diamond_pickaxe || this.uiIcons.mine;
@@ -1447,8 +1588,34 @@ export class TextureManager {
       p(9, 7, '#6b7280', 3, 6);
     });
     this.uiIcons.slot_boots = make((p) => {
-      p(3, 8, '#6b7280', 4, 5);
-      p(9, 8, '#6b7280', 4, 5);
+      p(2, 6, '#1e222b', 5, 8); p(9, 6, '#1e222b', 5, 8);
+      p(3, 7, '#6b7280', 3, 6); p(10, 7, '#6b7280', 3, 6);
     });
+
+    // 22. NEW 16x16 SETTINGS, KEYBINDS, CHEATS, POTION EFFECTS & BED ICONS!
+    this.uiIcons.keybind = make((p) => {
+      p(1, 3, '#14171f', 14, 10);
+      p(2, 4, '#64748b', 12, 8);
+      p(2, 4, '#94a3b8', 12, 1);
+      p(3, 6, '#f8fafc', 2, 2); p(6, 6, '#f8fafc', 2, 2); p(9, 6, '#f8fafc', 2, 2); p(12, 6, '#f8fafc', 1, 2);
+      p(4, 9, '#e2e8f0', 8, 2);
+    });
+    this.uiIcons.cheat = make((p) => {
+      // Golden command crown / key
+      p(2, 5, '#2b1b05', 12, 8);
+      p(2, 3, '#2b1b05', 3, 4); p(6, 2, '#2b1b05', 4, 5); p(11, 3, '#2b1b05', 3, 4);
+      p(3, 4, '#ffd54f', 1, 3); p(7, 3, '#fff176', 2, 4); p(12, 4, '#ffd54f', 1, 3);
+      p(3, 6, '#f5b318', 10, 6); p(4, 7, '#ffe57f', 8, 2);
+      p(5, 9, '#ef4444', 2, 2); p(9, 9, '#38bdf8', 2, 2);
+    });
+    this.uiIcons.potion = make((p) => {
+      // Glowing cyan/violet potion bottle (for /effect!)
+      p(6, 1, '#1e1626', 4, 3); p(7, 2, '#b8864b', 2, 2);
+      p(5, 4, '#1e1626', 6, 2); p(6, 4, '#e2e8f0', 4, 1);
+      p(3, 6, '#1e1626', 10, 8); p(4, 14, '#1e1626', 8, 1);
+      p(4, 7, '#a855f7', 8, 6); p(5, 8, '#d8b4fe', 3, 3);
+      p(5, 8, '#ffffff', 1, 2); p(8, 11, '#7e22ce', 3, 2);
+    });
+    this.uiIcons.bed = this.itemIcons.bed || this.uiIcons.place;
   }
 }

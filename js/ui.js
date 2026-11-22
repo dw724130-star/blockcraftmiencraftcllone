@@ -2,6 +2,45 @@ import { ITEMS } from './blocks.js';
 import { RECIPES, matchCraftingGrid, canCraftRecipe, quickCraftRecipe, SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
+import { DEFAULT_KEYBINDS } from './storage.js';
+
+const KEYBIND_ACTIONS = [
+  { id: 'forward', label: 'Move Forward' },
+  { id: 'backward', label: 'Move Backward' },
+  { id: 'left', label: 'Strafe Left' },
+  { id: 'right', label: 'Strafe Right' },
+  { id: 'jump', label: 'Jump / Fly Up' },
+  { id: 'sneak', label: 'Sneak / Fly Down' },
+  { id: 'sprint', label: 'Sprint' },
+  { id: 'inventory', label: 'Inventory' },
+  { id: 'chat', label: 'Chat / Commands' },
+  { id: 'camera', label: 'Switch Camera' },
+  { id: 'pause', label: 'Pause Menu' }
+];
+
+function formatKeyCode(code) {
+  if (!code) return '---';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  const map = {
+    Space: 'SPACE',
+    ShiftLeft: 'L-SHIFT',
+    ShiftRight: 'R-SHIFT',
+    ControlLeft: 'L-CTRL',
+    ControlRight: 'R-CTRL',
+    AltLeft: 'L-ALT',
+    AltRight: 'R-ALT',
+    Escape: 'ESC',
+    Tab: 'TAB',
+    Enter: 'ENTER',
+    Backspace: 'BKSP',
+    ArrowUp: 'UP',
+    ArrowDown: 'DOWN',
+    ArrowLeft: 'LEFT',
+    ArrowRight: 'RIGHT'
+  };
+  return map[code] || code.toUpperCase();
+}
 
 const SPLASH_TEXTS = [
   'BSL Shaders & Mirror Water!',
@@ -33,6 +72,8 @@ export class UIManager {
     this._lastTooltip = '';
     this._lastPlaceMode = null;
     this._lastBreakMode = null;
+    this._lastEffectsKey = '';
+    this.listeningKeybind = null;
     this._mmBgCanvas = null;
     this._mmLastPx = 1e9;
     this._mmLastPz = 1e9;
@@ -62,7 +103,8 @@ export class UIManager {
       xpFill: document.getElementById('xp-bar-fill'),
       xpLevel: document.getElementById('xp-level'),
       mmCanvas: document.getElementById('minimap-canvas'),
-      mmHint: document.getElementById('minimap-village-hint')
+      mmHint: document.getElementById('minimap-village-hint'),
+      effectsHud: document.getElementById('effects-hud')
     };
 
     this.bindStaticEvents();
@@ -74,6 +116,8 @@ export class UIManager {
     this.buildHotbarDOM();
     this.renderCreativeCatalog('');
     this.renderModsUI();
+    this.renderKeybindsUI(game.settings.keybinds);
+    this.syncCheatUI(game.areCheatsAllowed());
     const splash = document.getElementById('title-splash');
     if (splash) splash.textContent = SPLASH_TEXTS[Math.floor(Math.random() * SPLASH_TEXTS.length)];
   }
@@ -120,6 +164,10 @@ export class UIManager {
         const el = document.getElementById(`title-tab-${tab}`);
         if (el) el.classList.remove('hidden');
         if (tab === 'mods') this.renderModsUI();
+        if (tab === 'settings' && this.game) {
+          this.renderKeybindsUI(this.game.settings.keybinds);
+          this.syncCheatUI(this.game.areCheatsAllowed());
+        }
       });
     });
 
@@ -141,8 +189,7 @@ export class UIManager {
     document.getElementById('btn-toggle-mode').addEventListener('click', () => {
       if (this.game) {
         const next = this.game.player.mode === 'survival' ? 'creative' : 'survival';
-        this.game.setGameMode(next);
-        this.closeModals();
+        if (this.game.setGameMode(next)) this.closeModals();
       }
     });
     document.getElementById('btn-respawn-spawn').addEventListener('click', () => {
@@ -193,6 +240,39 @@ export class UIManager {
     document.getElementById('set-sound').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('sound', e.target.checked);
     });
+    document.getElementById('set-allow-cheats').addEventListener('change', (e) => {
+      if (this.game) this.game.setAllowCheats(e.target.checked);
+    });
+    document.getElementById('title-set-allow-cheats').addEventListener('change', (e) => {
+      const nw = document.getElementById('new-world-cheats');
+      if (nw) nw.checked = e.target.checked;
+      if (this.game) this.game.setAllowCheats(e.target.checked);
+    });
+    document.getElementById('btn-reset-keybinds').addEventListener('click', () => {
+      this.cancelKeybindListen();
+      if (this.game) this.game.resetKeybinds();
+    });
+    document.getElementById('btn-title-reset-keybinds').addEventListener('click', () => {
+      this.cancelKeybindListen();
+      if (this.game) this.game.resetKeybinds();
+    });
+
+    // Global capture listener for live Keybind rebinding
+    window.addEventListener('keydown', (e) => {
+      if (!this.listeningKeybind) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const action = this.listeningKeybind;
+      this.cancelKeybindListen();
+      if (e.code === 'Escape') {
+        if (this.game) this.renderKeybindsUI(this.game.settings.keybinds);
+        return;
+      }
+      if (this.game) {
+        this.game.updateKeybind(action, e.code);
+        this.toast(`Bound to ${formatKeyCode(e.code)}`);
+      }
+    }, true);
 
     // Chat & Quick commands
     const sendChat = () => {
@@ -219,9 +299,11 @@ export class UIManager {
     document.querySelectorAll('.pause-time-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (this.game) {
-          this.game.handleChatCommand(`/time set ${btn.dataset.time}`);
-          this.closeModals();
-          this.toast(`Time set to ${btn.dataset.time.toUpperCase()}`);
+          const ok = this.game.handleChatCommand(`/time set ${btn.dataset.time}`);
+          if (ok) {
+            this.closeModals();
+            this.toast(`Time set to ${btn.dataset.time.toUpperCase()}`);
+          }
         }
       });
     });
@@ -245,7 +327,8 @@ export class UIManager {
       const mode = document.getElementById('new-world-mode').value;
       const worldType = document.getElementById('new-world-type').value;
       const seed = document.getElementById('new-world-seed').value.trim() || String(Math.floor(Math.random() * 9999999));
-      if (this.game) this.game.startNewWorld({ name, mode, worldType, seed });
+      const allowCheats = Boolean(document.getElementById('new-world-cheats')?.checked);
+      if (this.game) this.game.startNewWorld({ name, mode, worldType, seed, allowCheats });
     });
   }
 
@@ -263,6 +346,74 @@ export class UIManager {
     document.getElementById('set-control-style').value = settings.controlStyle;
     document.getElementById('set-show-touch').checked = settings.showTouch;
     document.getElementById('set-sound').checked = settings.sound;
+    const cheatCb = document.getElementById('set-allow-cheats');
+    if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
+    this.renderKeybindsUI(settings.keybinds);
+  }
+
+  cancelKeybindListen() {
+    this.listeningKeybind = null;
+    if (this.game && this.game.controls) this.game.controls.rebinding = false;
+  }
+
+  renderKeybindsUI(keybinds) {
+    const kb = { ...DEFAULT_KEYBINDS, ...(keybinds || {}) };
+    for (const containerId of ['keybinds-list', 'title-keybinds-list']) {
+      const list = document.getElementById(containerId);
+      if (!list) continue;
+      list.innerHTML = '';
+      for (const act of KEYBIND_ACTIONS) {
+        const row = document.createElement('div');
+        row.className = 'keybind-row';
+        const lbl = document.createElement('span');
+        lbl.className = 'keybind-label';
+        lbl.textContent = act.label;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'keybind-btn';
+        const isListening = this.listeningKeybind === act.id;
+        if (isListening) btn.classList.add('listening');
+        btn.textContent = isListening ? 'Press key...' : formatKeyCode(kb[act.id]);
+        btn.addEventListener('click', () => {
+          if (this.listeningKeybind === act.id) {
+            this.cancelKeybindListen();
+            this.renderKeybindsUI(kb);
+            return;
+          }
+          this.listeningKeybind = act.id;
+          if (this.game && this.game.controls) this.game.controls.rebinding = true;
+          this.renderKeybindsUI(kb);
+        });
+        row.append(lbl, btn);
+        list.appendChild(row);
+      }
+    }
+  }
+
+  syncCheatUI(allowed) {
+    const flag = Boolean(allowed);
+    const cb = document.getElementById('set-allow-cheats');
+    if (cb) cb.checked = flag;
+    const tcb = document.getElementById('title-set-allow-cheats');
+    if (tcb) tcb.checked = flag;
+    const modeBtn = document.getElementById('btn-toggle-mode');
+    if (modeBtn) modeBtn.classList.toggle('cheat-locked', !flag);
+    const note = document.getElementById('pause-time-cheat-note');
+    if (note) note.textContent = flag ? '(Cheats ON)' : '(Requires Cheats)';
+    document.querySelectorAll('.pause-time-btn').forEach((b) => {
+      b.classList.toggle('cheat-locked', !flag);
+    });
+    document.querySelectorAll('.cmd-chip[data-cheat="true"]').forEach((c) => {
+      c.classList.toggle('cheat-locked', !flag);
+    });
+    const banner = document.getElementById('chat-cheats-banner');
+    const txt = document.getElementById('chat-cheats-text');
+    if (banner && txt) {
+      banner.classList.toggle('cheats-on', flag);
+      txt.textContent = flag
+        ? 'Cheats Enabled — /give, /effect, /time & /gamemode unlocked'
+        : 'Cheats Disabled — Enable "Allow Cheats" in Settings for /commands';
+    }
   }
 
   renderSavedWorlds(worlds) {
@@ -529,6 +680,44 @@ export class UIManager {
     document.getElementById('underwater-overlay').classList.toggle('hidden', !isUnder);
   }
 
+  playSleepTransition() {
+    const el = document.getElementById('sleep-overlay');
+    if (!el) return;
+    el.classList.remove('hidden', 'fade-out');
+    clearTimeout(this._sleepT1);
+    clearTimeout(this._sleepT2);
+    this._sleepT1 = setTimeout(() => el.classList.add('fade-out'), 850);
+    this._sleepT2 = setTimeout(() => {
+      el.classList.add('hidden');
+      el.classList.remove('fade-out');
+    }, 1450);
+  }
+
+  updateEffectsHUD(statusEffects) {
+    const el = this.dom.effectsHud;
+    if (!el || !statusEffects) return;
+    const names = { speed: 'Speed', jump: 'Jump Boost', regen: 'Regen', nightvision: 'Night Vision' };
+    const active = [];
+    for (const k of Object.keys(names)) {
+      const s = Math.ceil(statusEffects[k] || 0);
+      if (s > 0) active.push([k, names[k], s]);
+    }
+    const key = active.map((a) => `${a[0]}:${a[2]}`).join('|');
+    if (key === this._lastEffectsKey) return;
+    this._lastEffectsKey = key;
+
+    if (active.length === 0) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      return;
+    }
+    el.classList.remove('hidden');
+    const potionSrc = this.textures.getUiIcon('potion');
+    el.innerHTML = active
+      .map(([, label, sec]) => `<div class="effect-pill"><img class="px-ui-icon inline-px" src="${potionSrc}" alt="" /><span>${label} ${sec}s</span></div>`)
+      .join('');
+  }
+
   showDeathScreen(reason) {
     document.getElementById('death-reason').textContent = reason;
     document.getElementById('death-screen').classList.remove('hidden');
@@ -555,6 +744,7 @@ export class UIManager {
 
   // --- MODALS ---
   closeModals() {
+    this.cancelKeybindListen();
     if (this.activeModal === 'inventory-modal') {
       // Return items left in crafting grid to inventory
       for (let i = 0; i < 9; i++) {
@@ -595,10 +785,15 @@ export class UIManager {
       return;
     }
     this.openModal('pause-modal');
+    if (this.game) {
+      this.syncCheatUI(this.game.areCheatsAllowed());
+      this.renderKeybindsUI(this.game.settings.keybinds);
+    }
   }
 
   openChat() {
     this.openModal('chat-modal');
+    if (this.game) this.syncCheatUI(this.game.areCheatsAllowed());
     setTimeout(() => document.getElementById('chat-input').focus(), 40);
   }
 
@@ -791,7 +986,7 @@ export class UIManager {
       if (!outDef) continue;
 
       const costStr = Object.entries(r.cost)
-        .map(([k, n]) => `${n}× ${k === 'any_planks' ? 'Planks' : (ITEMS[k]?.name || k)}`)
+        .map(([k, n]) => `${n}× ${k === 'any_planks' ? 'Planks' : (k === 'any_wool' ? 'Wool' : (ITEMS[k]?.name || k))}`)
         .join(', ');
 
       const card = document.createElement('button');

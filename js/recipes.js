@@ -50,7 +50,7 @@ const RAW_RECIPES = [
   { out: 'furnace', count: 1, table: true, pattern: ['CCC', 'C C', 'CCC'], map: { C: 'cobblestone' } },
   { out: 'chest', count: 1, table: true, pattern: ['PPP', 'P P', 'PPP'], map: { P: 'any_planks' } },
   { out: 'ladder', count: 3, table: true, pattern: ['S S', 'SSS', 'S S'], map: { S: 'stick' } },
-  { out: 'bed', count: 1, table: true, pattern: ['WWW', 'PPP'], map: { W: 'wool_white', P: 'any_planks' } },
+  { out: 'bed', count: 1, table: true, pattern: ['WWW', 'PPP'], map: { W: 'any_wool', P: 'any_planks' } },
   { out: 'tnt', count: 1, table: true, pattern: ['GSG', 'SGS', 'GSG'], map: { G: 'gunpowder', S: 'sand' } },
   { out: 'bread', count: 1, table: true, pattern: ['WWW'], map: { W: 'wheat' } },
   { out: 'bookshelf', count: 1, table: true, pattern: ['PPP', 'WWW', 'PPP'], map: { P: 'any_planks', W: 'oak_planks' } },
@@ -102,10 +102,12 @@ for (const am of ARMOR_RECIPES) {
 }
 
 export const PLANK_TYPES = ['oak_planks', 'birch_planks', 'spruce_planks'];
+export const WOOL_TYPES = ['wool_white', 'wool_red', 'wool_blue', 'wool_green', 'wool_yellow'];
 
 export function matchesItemTag(itemId, req) {
   if (!itemId) return false;
   if (req === 'any_planks') return PLANK_TYPES.includes(itemId);
+  if (req === 'any_wool') return WOOL_TYPES.includes(itemId);
   return itemId === req;
 }
 

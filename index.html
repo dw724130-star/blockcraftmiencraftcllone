@@ -40,6 +40,12 @@
   <!-- Screen Effects -->
   <div id="underwater-overlay" class="screen-fx hidden"></div>
   <div id="damage-overlay" class="screen-fx hidden"></div>
+  <div id="sleep-overlay" class="screen-fx sleep-overlay hidden">
+    <div class="sleep-card">
+      <img class="px-ui-icon sleep-bed-px" data-px-icon="bed" alt="" />
+      <span>Sleeping until morning...</span>
+    </div>
+  </div>
 
   <!-- TITLE / WORLD SELECT SCREEN -->
   <div id="title-screen" class="overlay-screen">
@@ -57,6 +63,7 @@
       <div class="title-nav-tabs">
         <button class="mc-btn primary title-tab active" data-title-tab="play"><img class="px-ui-icon btn-px" data-px-icon="play" alt="" /> Play &amp; Worlds</button>
         <button class="mc-btn title-tab" data-title-tab="mods"><img class="px-ui-icon btn-px" data-px-icon="mods" alt="" /> Mods &amp; Add-Ons (<span id="title-mod-count">2</span>)</button>
+        <button class="mc-btn title-tab" data-title-tab="settings"><img class="px-ui-icon btn-px" data-px-icon="keybind" alt="" /> Settings &amp; Keys</button>
         <button class="mc-btn title-tab" data-title-tab="guide"><img class="px-ui-icon btn-px" data-px-icon="book" alt="" /> Controls &amp; Tips</button>
       </div>
 
@@ -88,6 +95,13 @@
               <label>Seed (optional)</label>
               <input type="text" id="new-world-seed" placeholder="Random seed..." maxlength="20" />
             </div>
+            <div class="form-row inline-check-row">
+              <label for="new-world-cheats" class="check-label-icon">
+                <img class="px-ui-icon inline-px" data-px-icon="cheat" alt="" />
+                Allow Cheats (/give, /effect, /time)
+              </label>
+              <input type="checkbox" id="new-world-cheats" />
+            </div>
             <button id="btn-create-world" class="mc-btn primary large">Create &amp; Play</button>
           </div>
 
@@ -103,6 +117,28 @@
       <div id="title-tab-mods" class="title-tab-view hidden">
         <div class="mods-intro">Toggle built-in Mods &amp; Add-Ons anytime (works in both Survival &amp; Creative):</div>
         <div id="title-mods-list" class="mods-grid"></div>
+      </div>
+
+      <div id="title-tab-settings" class="title-tab-view hidden">
+        <div class="title-settings-panel">
+          <div class="setting-row inline cheat-toggle-row">
+            <label for="title-set-allow-cheats" class="check-label-icon">
+              <img class="px-ui-icon inline-px" data-px-icon="cheat" alt="" />
+              Default Allow Cheats (/give, /effect, /time)
+            </label>
+            <input type="checkbox" id="title-set-allow-cheats" />
+          </div>
+          <div class="setting-row keybinds-section">
+            <div class="keybinds-header">
+              <label class="check-label-icon">
+                <img class="px-ui-icon inline-px" data-px-icon="keybind" alt="" />
+                Keyboard Keybinds (Click any key to rebind, ESC to cancel)
+              </label>
+              <button type="button" id="btn-title-reset-keybinds" class="mc-btn sm">Reset Defaults</button>
+            </div>
+            <div id="title-keybinds-list" class="keybinds-grid"></div>
+          </div>
+        </div>
       </div>
 
       <div id="title-tab-guide" class="title-tab-view hidden">
@@ -175,6 +211,9 @@
 
     <!-- Target Block Tooltip -->
     <div id="target-tooltip" class="hidden"></div>
+
+    <!-- Active Status Effects HUD -->
+    <div id="effects-hud" class="effects-hud hidden"></div>
 
     <!-- Toast Notifications & Chat Log -->
     <div id="chat-log"></div>
@@ -403,8 +442,15 @@
               <option value="off">Classic (Fastest)</option>
             </select>
           </div>
+          <div class="setting-row inline cheat-toggle-row">
+            <label for="set-allow-cheats" class="check-label-icon">
+              <img class="px-ui-icon inline-px" data-px-icon="cheat" alt="" />
+              Allow Cheats (/give, /effect, /time)
+            </label>
+            <input type="checkbox" id="set-allow-cheats" />
+          </div>
           <div class="setting-row">
-            <label>Quick Time of Day</label>
+            <label>Quick Time of Day <span id="pause-time-cheat-note" class="setting-subnote">(Requires Cheats)</span></label>
             <div class="quick-cmds">
               <button type="button" class="cmd-chip pause-time-btn" data-time="sunrise"><img class="px-ui-icon chip-px" data-px-icon="sunrise" alt="" /> Sunrise</button>
               <button type="button" class="cmd-chip pause-time-btn" data-time="day"><img class="px-ui-icon chip-px" data-px-icon="sun" alt="" /> Morning</button>
@@ -440,6 +486,16 @@
             <label>Sound Effects</label>
             <input type="checkbox" id="set-sound" checked />
           </div>
+          <div class="setting-row keybinds-section">
+            <div class="keybinds-header">
+              <label class="check-label-icon">
+                <img class="px-ui-icon inline-px" data-px-icon="keybind" alt="" />
+                Keyboard Keybinds
+              </label>
+              <button type="button" id="btn-reset-keybinds" class="mc-btn sm">Reset Defaults</button>
+            </div>
+            <div id="keybinds-list" class="keybinds-grid"></div>
+          </div>
         </div>
 
         <button id="btn-save-quit" class="mc-btn danger">Save &amp; Quit to Title</button>
@@ -455,22 +511,32 @@
         <button class="close-modal-btn" data-close="chat-modal"><img class="px-ui-icon close-px" data-px-icon="close" alt="Close" /></button>
       </div>
       <div class="chat-body">
+        <div id="chat-cheats-banner" class="chat-cheats-banner">
+          <img class="px-ui-icon inline-px" data-px-icon="cheat" alt="" />
+          <span id="chat-cheats-text">Cheats Disabled — Turn on Allow Cheats in Settings</span>
+        </div>
         <div class="quick-cmds">
-          <button class="cmd-chip" data-cmd="/time set sunrise"><img class="px-ui-icon chip-px" data-px-icon="sunrise" alt="" /> Sunrise</button>
-          <button class="cmd-chip" data-cmd="/time set day"><img class="px-ui-icon chip-px" data-px-icon="sun" alt="" /> Day</button>
-          <button class="cmd-chip" data-cmd="/time set sunset"><img class="px-ui-icon chip-px" data-px-icon="sunset" alt="" /> Golden Sunset</button>
-          <button class="cmd-chip" data-cmd="/time set night"><img class="px-ui-icon chip-px" data-px-icon="moon" alt="" /> Night</button>
-          <button class="cmd-chip" data-cmd="/gamemode creative"><img class="px-ui-icon chip-px" data-px-icon="star" alt="" /> Creative</button>
-          <button class="cmd-chip" data-cmd="/gamemode survival"><img class="px-ui-icon chip-px" data-px-icon="damage" alt="" /> Survival</button>
-          <button class="cmd-chip" data-cmd="/weather rain"><img class="px-ui-icon chip-px" data-px-icon="rain" alt="" /> Rain</button>
-          <button class="cmd-chip" data-cmd="/weather clear"><img class="px-ui-icon chip-px" data-px-icon="sun" alt="" /> Clear</button>
-          <button class="cmd-chip" data-cmd="/heal"><img class="px-ui-icon chip-px" data-px-icon="heart" alt="" /> Heal</button>
-          <button class="cmd-chip" data-cmd="/give torch 32"><img class="px-ui-icon chip-px" data-px-icon="torch" alt="" /> Torches</button>
-          <button class="cmd-chip" data-cmd="/give diamond_pickaxe 1"><img class="px-ui-icon chip-px" data-px-icon="pickaxe" alt="" /> Diamond Pick</button>
-          <button class="cmd-chip" data-cmd="/give tnt 16"><img class="px-ui-icon chip-px" data-px-icon="tnt" alt="" /> TNT x16</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/time set sunrise"><img class="px-ui-icon chip-px" data-px-icon="sunrise" alt="" /> Sunrise</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/time set day"><img class="px-ui-icon chip-px" data-px-icon="sun" alt="" /> Day</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/time set sunset"><img class="px-ui-icon chip-px" data-px-icon="sunset" alt="" /> Sunset</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/time set night"><img class="px-ui-icon chip-px" data-px-icon="moon" alt="" /> Night</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/gamemode creative"><img class="px-ui-icon chip-px" data-px-icon="star" alt="" /> Creative</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/gamemode survival"><img class="px-ui-icon chip-px" data-px-icon="damage" alt="" /> Survival</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/weather rain"><img class="px-ui-icon chip-px" data-px-icon="rain" alt="" /> Rain</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/weather clear"><img class="px-ui-icon chip-px" data-px-icon="sun" alt="" /> Clear</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/heal"><img class="px-ui-icon chip-px" data-px-icon="heart" alt="" /> Heal</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/effect speed 60"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Speed</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/effect jump 60"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Jump Boost</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/effect regen 60"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Regen</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/effect nightvision 90"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Night Vision</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/effect clear"><img class="px-ui-icon chip-px" data-px-icon="close" alt="" /> Clear FX</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/give bed 1"><img class="px-ui-icon chip-px" data-px-icon="bed" alt="" /> Red Bed</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/give torch 32"><img class="px-ui-icon chip-px" data-px-icon="torch" alt="" /> Torches</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/give diamond_pickaxe 1"><img class="px-ui-icon chip-px" data-px-icon="pickaxe" alt="" /> Diamond Pick</button>
+          <button class="cmd-chip" data-cheat="true" data-cmd="/give tnt 16"><img class="px-ui-icon chip-px" data-px-icon="tnt" alt="" /> TNT x16</button>
         </div>
         <div class="chat-input-row">
-          <input type="text" id="chat-input" placeholder="Type message or /command (e.g. /give torch 32)..." />
+          <input type="text" id="chat-input" placeholder="Type message or /give, /effect, /time..." />
           <button id="btn-send-chat" class="mc-btn primary">Send</button>
         </div>
       </div>

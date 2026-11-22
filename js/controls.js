@@ -1,12 +1,15 @@
 // Unified iPad Multi-Touch + Desktop Keyboard/Mouse Controls
+import { DEFAULT_KEYBINDS } from './storage.js';
 
 export class ControlManager {
   constructor(domCanvas, sound) {
     this.canvas = domCanvas;
     this.sound = sound;
     this.enabled = false; // true only during active gameplay (no modal open)
+    this.rebinding = false; // true while Settings keybind capture is listening
     this.sensitivity = 1.0;
     this.controlStyle = 'joystick'; // 'joystick' | 'dpad'
+    this.keybinds = { ...DEFAULT_KEYBINDS };
 
     this.input = {
       moveForward: 0,
@@ -50,6 +53,11 @@ export class ControlManager {
 
     this.bindTouchControls();
     this.bindKeyboardMouse();
+  }
+
+  setKeybinds(kb) {
+    this.keybinds = { ...DEFAULT_KEYBINDS, ...(kb || {}) };
+    this.keys.clear();
   }
 
   setControlStyle(style) {
@@ -321,34 +329,37 @@ export class ControlManager {
     let lastSpace = 0;
 
     window.addEventListener('keydown', (e) => {
+      if (this.rebinding) return;
+      const kb = this.keybinds;
+
       if (!this.enabled) {
-        if (e.code === 'Escape' && this.onOpenPause) this.onOpenPause();
+        if ((e.code === 'Escape' || e.code === kb.pause) && this.onOpenPause) this.onOpenPause();
         return;
       }
       if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
 
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.code === kb.jump && !e.repeat) {
         const now = performance.now();
         if (now - lastSpace < 280 && this.onToggleFly) this.onToggleFly();
         lastSpace = now;
       }
 
-      if (e.code === 'KeyE') {
+      if (e.code === kb.inventory) {
         e.preventDefault();
         if (this.onOpenInventory) this.onOpenInventory();
         return;
       }
-      if (e.code === 'KeyT' || e.code === 'Slash') {
+      if (e.code === kb.chat || e.code === 'Slash') {
         e.preventDefault();
         if (this.onOpenChat) this.onOpenChat();
         return;
       }
-      if (e.code === 'KeyV' || e.code === 'F5') {
+      if (e.code === kb.camera || e.code === 'F5') {
         e.preventDefault();
         if (this.onToggleCamera) this.onToggleCamera();
         return;
       }
-      if (e.code === 'Escape') {
+      if (e.code === kb.pause || e.code === 'Escape') {
         if (this.onOpenPause) this.onOpenPause();
         return;
       }
@@ -407,12 +418,13 @@ export class ControlManager {
   poll() {
     let fwd = 0;
     let right = 0;
+    const kb = this.keybinds;
 
-    // Keyboard
-    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) fwd += 1;
-    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) fwd -= 1;
-    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) right += 1;
-    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) right -= 1;
+    // Keyboard (customizable keybinds + Arrow keys convenience)
+    if (this.keys.has(kb.forward) || this.keys.has('ArrowUp')) fwd += 1;
+    if (this.keys.has(kb.backward) || this.keys.has('ArrowDown')) fwd -= 1;
+    if (this.keys.has(kb.right) || this.keys.has('ArrowRight')) right += 1;
+    if (this.keys.has(kb.left) || this.keys.has('ArrowLeft')) right -= 1;
 
     // Touch Joystick or D-Pad
     if (this.controlStyle === 'joystick') {
@@ -427,9 +439,9 @@ export class ControlManager {
 
     this.input.moveForward = fwd;
     this.input.moveRight = right;
-    this.input.jump = this.keys.has('Space') || this.touchJumpHeld;
-    this.input.sneak = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.touchSneakToggle;
-    this.input.sprint = this.keys.has('ControlLeft') || this.keys.has('KeyR') || this.joySprint || this.dpadSprint || this.touchSprintToggle;
+    this.input.jump = this.keys.has(kb.jump) || this.touchJumpHeld;
+    this.input.sneak = this.keys.has(kb.sneak) || (kb.sneak === 'ShiftLeft' && this.keys.has('ShiftRight')) || this.touchSneakToggle;
+    this.input.sprint = this.keys.has(kb.sprint) || this.joySprint || this.dpadSprint || this.touchSprintToggle;
     if (this.touchBreakHeld) this.input.breaking = true;
     else if (!document.pointerLockElement) this.input.breaking = false;
 

@@ -10,7 +10,8 @@ export const VILLAGER_TRADES = {
     { give: 'wheat', giveCount: 4, get: 'emerald', getCount: 1 },
     { give: 'oak_log', giveCount: 6, get: 'emerald', getCount: 1 },
     { give: 'emerald', giveCount: 1, get: 'bread', getCount: 4 },
-    { give: 'emerald', giveCount: 1, get: 'apple', getCount: 4 }
+    { give: 'emerald', giveCount: 1, get: 'apple', getCount: 4 },
+    { give: 'emerald', giveCount: 2, get: 'bed', getCount: 1 }
   ],
   Blacksmith: [
     { give: 'coal', giveCount: 6, get: 'emerald', getCount: 1 },
@@ -475,39 +476,128 @@ function createMobMesh(type, options = {}) {
       wings.push(wp);
     }
   } else if (def.villager) {
-    const trimMat = new THREE.MeshLambertMaterial({ color: profession ? profession.trim : 0x5c3e20 });
-    const legGeo = new THREE.BoxGeometry(0.22, 0.56, 0.22);
-    for (const lx of [-0.13, 0.13]) {
+    // Upgraded Detailed Profession Villager Model (Farmer / Blacksmith / Librarian)
+    const profName = profession ? profession.name : 'Farmer';
+    const robeBase = profession ? profession.robe : 0x8f6234;
+    const trimCol = profession ? profession.trim : 0xd9b84c;
+    const robeDark = new THREE.Color(robeBase).multiplyScalar(0.72).getHex();
+    const robeLight = new THREE.Color(robeBase).lerp(new THREE.Color(0xffffff), 0.16).getHex();
+    bodyMat = makeCoatMat(textures, robeBase, robeDark, robeLight, 'wool', profName === 'Farmer' ? 71 : (profName === 'Blacksmith' ? 72 : 73));
+    headMat = makeCoatMat(textures, 0xd9a882, 0xc2906a, 0xe8bc98, 'fur', 74);
+    usesCoatMap = true;
+
+    const trimMat = new THREE.MeshLambertMaterial({ color: trimCol });
+    const bootMat = new THREE.MeshLambertMaterial({ color: 0x3b2a1c });
+    const beltMat = new THREE.MeshLambertMaterial({ color: 0x4a311e });
+    const buckleMat = new THREE.MeshLambertMaterial({ color: 0xf0c846 });
+    const browMat = new THREE.MeshBasicMaterial({ color: 0x3b2718 });
+
+    // Articulated legs + sturdy villager boots
+    for (const lx of [-0.14, 0.14]) {
       const piv = new THREE.Group();
       piv.position.set(lx, 0.56, 0);
-      addShadowMesh(piv, legGeo, trimMat, 0, -0.28, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.22, 0.42, 0.24), bodyMat, 0, -0.21, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.24, 0.16, 0.27), bootMat, 0, -0.48, 0.01, false);
       group.add(piv);
       legs.push(piv);
     }
-    addShadowMesh(group, new THREE.BoxGeometry(0.54, 0.88, 0.34), bodyMat, 0, 0.96, 0);
-    addShadowMesh(group, new THREE.BoxGeometry(0.68, 0.22, 0.22), trimMat, 0, 1.06, 0.2);
-    addShadowMesh(group, new THREE.BoxGeometry(0.46, 0.56, 0.46), headMat, 0, 1.68, 0);
-    addShadowMesh(group, new THREE.BoxGeometry(0.36, 0.06, 0.04), new THREE.MeshBasicMaterial({ color: 0x3b2718 }), 0, 1.78, 0.24, false);
-    addShadowMesh(group, new THREE.BoxGeometry(0.12, 0.24, 0.14), headMat, 0, 1.56, 0.28, false);
-    addDetailedEyes(group, eyeMat, 0.11, 1.71, 0.24, 0.09, 0.07, false);
+
+    // Tailored layered robe torso + belt + gold clasp
+    addShadowMesh(group, new THREE.BoxGeometry(0.56, 0.88, 0.36), bodyMat, 0, 0.96, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(0.58, 0.10, 0.38), beltMat, 0, 0.80, 0, false);
+    addShadowMesh(group, new THREE.BoxGeometry(0.14, 0.11, 0.05), buckleMat, 0, 0.80, 0.19, false);
+    addShadowMesh(group, new THREE.BoxGeometry(0.58, 0.12, 0.38), trimMat, 0, 1.36, 0, false); // collar mantle
+
+    // Iconic crossed villager arms with sleeve cuffs
+    addShadowMesh(group, new THREE.BoxGeometry(0.18, 0.42, 0.22), bodyMat, -0.35, 1.16, 0.04);
+    addShadowMesh(group, new THREE.BoxGeometry(0.18, 0.42, 0.22), bodyMat, 0.35, 1.16, 0.04);
+    addShadowMesh(group, new THREE.BoxGeometry(0.68, 0.22, 0.24), trimMat, 0, 1.00, 0.20);
+    addShadowMesh(group, new THREE.BoxGeometry(0.32, 0.18, 0.20), headMat, 0, 1.00, 0.23, false);
+
+    // Articulated head pivot!
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 1.40, 0);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.46, 0.56, 0.46), headMat, 0, 0.28, 0);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.38, 0.06, 0.05), browMat, 0, 0.38, 0.24, false); // unibrow
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.12, 0.24, 0.15), headMat, 0, 0.16, 0.28, false); // nose
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.18, 0.04, 0.03), new THREE.MeshBasicMaterial({ color: 0x7d4c36 }), 0, 0.08, 0.235, false); // mouth
+    addDetailedEyes(headGroup, eyeMat, 0.11, 0.31, 0.24, 0.09, 0.07, false);
+
+    // Distinct Profession Garments & 3D Headgear!
+    if (profName === 'Farmer') {
+      const strawMat = makeCoatMat(textures, 0xe6c85c, 0xc4a23b, 0xf5df82, 'wool', 75);
+      const ribbonMat = new THREE.MeshLambertMaterial({ color: 0xb83832 });
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.76, 0.07, 0.76), strawMat, 0, 0.52, 0); // wide sun-hat brim
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.50, 0.18, 0.50), strawMat, 0, 0.62, 0); // hat crown
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.52, 0.06, 0.52), ribbonMat, 0, 0.56, 0, false); // red ribbon
+      addShadowMesh(group, new THREE.BoxGeometry(0.14, 0.16, 0.10), beltMat, 0.24, 0.76, 0.16, false); // seed pouch
+    } else if (profName === 'Blacksmith') {
+      const apronMat = new THREE.MeshLambertMaterial({ color: 0x26282e });
+      const ironMat = new THREE.MeshLambertMaterial({ color: 0x9fa8b5 });
+      addShadowMesh(group, new THREE.BoxGeometry(0.46, 0.64, 0.06), apronMat, 0, 0.86, 0.19, false); // leather apron
+      addShadowMesh(group, new THREE.BoxGeometry(0.24, 0.12, 0.30), ironMat, -0.36, 1.38, 0.02, false); // pauldrons
+      addShadowMesh(group, new THREE.BoxGeometry(0.24, 0.12, 0.30), ironMat, 0.36, 1.38, 0.02, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.49, 0.10, 0.49), apronMat, 0, 0.46, 0, false); // headband
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.10, 0.05), ironMat, 0, 0.46, 0.25, false); // iron plate
+    } else {
+      // Librarian: embroidered gold stole, spectacles & scholar's book hat!
+      const goldMat = new THREE.MeshLambertMaterial({ color: 0xf0c846 });
+      const pageMat = new THREE.MeshLambertMaterial({ color: 0xf4ecd8 });
+      const coverMat = new THREE.MeshLambertMaterial({ color: 0x8f2222 });
+      const lensMat = new THREE.MeshBasicMaterial({ color: 0xb8ecff });
+      addShadowMesh(group, new THREE.BoxGeometry(0.18, 0.62, 0.05), goldMat, 0, 0.92, 0.19, false); // stole
+      // Gold spectacles
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.10, 0.04), goldMat, -0.11, 0.31, 0.245, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.10, 0.04), goldMat, 0.11, 0.31, 0.245, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.03, 0.04), goldMat, 0, 0.32, 0.248, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.05, 0.045), lensMat, -0.11, 0.31, 0.247, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.05, 0.045), lensMat, 0.11, 0.31, 0.247, false);
+      // Iconic scholar book hat
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.52, 0.10, 0.52), coverMat, 0, 0.58, 0);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.46, 0.06, 0.46), pageMat, 0, 0.64, 0, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.50, 0.04, 0.08), goldMat, 0, 0.67, 0, false);
+    }
+    group.add(headGroup);
   } else if (def.golem) {
-    const vineMat = new THREE.MeshLambertMaterial({ color: 0x458534 });
-    const legGeo = new THREE.BoxGeometry(0.32, 0.92, 0.32);
-    for (const lx of [-0.24, 0.24]) {
+    // Upgraded Village Iron Golem with forged iron plates, moss vines & poppy flower!
+    bodyMat = makeCoatMat(textures, 0xd4d0c8, 0xb0aba0, 0xe8e5de, 'spots', 76);
+    headMat = makeCoatMat(textures, 0xccc7be, 0xa8a399, 0xe3dfd6, 'fur', 77);
+    usesCoatMap = true;
+    const vineMat = new THREE.MeshLambertMaterial({ color: 0x458a34 });
+    const poppyMat = new THREE.MeshLambertMaterial({ color: 0xd93838 });
+    const rivetMat = new THREE.MeshLambertMaterial({ color: 0x6b6f75 });
+
+    const legGeo = new THREE.BoxGeometry(0.34, 0.94, 0.34);
+    for (const lx of [-0.25, 0.25]) {
       const piv = new THREE.Group();
-      piv.position.set(lx, 0.92, 0);
-      addShadowMesh(piv, legGeo, bodyMat, 0, -0.46, 0);
+      piv.position.set(lx, 0.94, 0);
+      addShadowMesh(piv, legGeo, bodyMat, 0, -0.47, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.36, 0.16, 0.38), rivetMat, 0, -0.86, 0.02, false);
       group.add(piv);
       legs.push(piv);
     }
-    addShadowMesh(group, new THREE.BoxGeometry(0.95, 0.92, 0.52), bodyMat, 0, 1.38, 0);
-    addShadowMesh(group, new THREE.BoxGeometry(0.97, 0.2, 0.54), vineMat, 0, 1.48, 0, false);
-    for (const ax of [-0.66, 0.66]) {
-      addShadowMesh(group, new THREE.BoxGeometry(0.28, 1.25, 0.28), headMat, ax, 1.2, 0.08);
+    // Broad iron torso + waist core + creeping moss vine + red poppy
+    addShadowMesh(group, new THREE.BoxGeometry(0.68, 0.34, 0.42), rivetMat, 0, 1.08, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(1.06, 0.86, 0.56), bodyMat, 0, 1.56, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(1.08, 0.18, 0.58), vineMat, 0, 1.62, 0, false);
+    addShadowMesh(group, new THREE.BoxGeometry(0.22, 0.46, 0.58), vineMat, -0.26, 1.48, 0, false);
+    addShadowMesh(group, new THREE.BoxGeometry(0.12, 0.12, 0.06), poppyMat, -0.26, 1.66, 0.30, false);
+
+    // Massive riveted arms + shoulder plates
+    for (const ax of [-0.70, 0.70]) {
+      addShadowMesh(group, new THREE.BoxGeometry(0.36, 0.26, 0.42), rivetMat, ax, 1.88, 0.04);
+      addShadowMesh(group, new THREE.BoxGeometry(0.30, 1.28, 0.30), headMat, ax, 1.24, 0.06);
+      addShadowMesh(group, new THREE.BoxGeometry(0.32, 0.22, 0.32), vineMat, ax, 1.46, 0.06, false);
     }
-    addShadowMesh(group, new THREE.BoxGeometry(0.5, 0.56, 0.5), headMat, 0, 2.12, 0.06);
-    addShadowMesh(group, new THREE.BoxGeometry(0.12, 0.2, 0.12), headMat, 0, 2.02, 0.34, false);
-    addDetailedEyes(group, eyeMat, 0.12, 2.16, 0.32, 0.10, 0.07, false);
+
+    // Articulated head with heavy brow & glowing eyes
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 1.98, 0.06);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.52, 0.58, 0.52), headMat, 0, 0.28, 0);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.54, 0.10, 0.54), rivetMat, 0, 0.48, 0.02, false);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.24, 0.14), headMat, 0, 0.14, 0.28, false);
+    addDetailedEyes(headGroup, eyeMat, 0.13, 0.30, 0.27, 0.11, 0.07, false);
+    group.add(headGroup);
   } else if (def.humanoid) {
     const legGeo = new THREE.BoxGeometry(0.24, 0.72, 0.24);
     for (const lx of [-0.14, 0.14]) {
@@ -822,35 +912,34 @@ export class EntityManager {
     return mob;
   }
 
-  // Pixel-Art 3D Falling Blocks & Food/Item Sprites!
+  // Pixel-Art 3D Falling Blocks & True 3D Voxel-Extruded Dropped Items!
   spawnDrop(itemId, count, x, y, z) {
     if (!itemId || count <= 0) return;
     const def = ITEMS[itemId];
     let mesh;
 
-    if (this.textures && def && def.isBlock && !def.cross && this.blockDropMat) {
+    if (this.textures && def && def.isBlock && !def.cross && itemId !== 'bed' && this.blockDropMat) {
       // Real 3D pixel-art mini-block mapped to exact top/side/bottom atlas faces!
       const geo = this.textures.createBlockDropGeometry(def, 0.28);
       mesh = new THREE.Mesh(geo, this.blockDropMat);
       mesh.castShadow = true;
     } else if (this.textures && def) {
-      // Crisp 3D crossed double-sided pixel-art sprite (cached material per itemId!)
+      // Chunky 3D Voxel-Extruded 16x16 Pixel-Art Dropped Item (cached geometry + material!)
       let mat = this.dropSpriteMatCache[itemId];
       if (!mat) {
         const tex = this.textures.getItemTexture(itemId);
-        mat = new THREE.MeshBasicMaterial({
+        mat = new THREE.MeshLambertMaterial({
           map: tex,
           transparent: true,
-          alphaTest: 0.45,
-          side: THREE.DoubleSide
+          alphaTest: 0.45
         });
         this.dropSpriteMatCache[itemId] = mat;
       }
-      mesh = new THREE.Group();
-      const p1 = new THREE.Mesh(this.dropSpriteGeo, mat);
-      const p2 = new THREE.Mesh(this.dropSpriteGeo, mat);
-      p2.position.z = 0.025;
-      mesh.add(p1, p2);
+      const geo = this.textures.createExtrudedItemGeometry
+        ? this.textures.createExtrudedItemGeometry(itemId, 0.38)
+        : this.dropSpriteGeo;
+      mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
     } else {
       const mat = new THREE.MeshLambertMaterial({ color: this.getDropColor(itemId) });
       mesh = new THREE.Mesh(this.dropGeo, mat);
@@ -948,16 +1037,28 @@ export class EntityManager {
       }
     }
 
-    // 0. Spawn Villagers & Iron Golems in discovered villages
+    // 0. Spawn Bustling Village Population (6 Villagers + 2 Iron Golems) in discovered villages!
     for (const v of this.world.villageChunks.values()) {
       if (!v.spawned) {
         const d = Math.hypot(player.pos.x - v.x, player.pos.z - v.z);
-        if (d < 72) {
+        if (d < 84) {
           v.spawned = true;
-          this.spawnMob('villager', v.x - 1.5, v.y, v.z + 1.5, VILLAGER_PROFESSIONS[0]);
-          this.spawnMob('villager', v.x + 1.5, v.y, v.z - 1.5, VILLAGER_PROFESSIONS[1]);
-          this.spawnMob('villager', v.x - 0.5, v.y, v.z - 2.0, VILLAGER_PROFESSIONS[2]);
-          this.spawnMob('iron_golem', v.x + 0.5, v.y, v.z + 0.5);
+          const spawns = [
+            ['villager', -3.5, 3.5, VILLAGER_PROFESSIONS[0]],
+            ['villager', 3.5, -3.5, VILLAGER_PROFESSIONS[1]],
+            ['villager', -2.5, -4.0, VILLAGER_PROFESSIONS[2]],
+            ['villager', 5.0, 2.5, VILLAGER_PROFESSIONS[0]],
+            ['villager', -6.0, 0.5, VILLAGER_PROFESSIONS[1]],
+            ['villager', 1.5, 5.5, VILLAGER_PROFESSIONS[2]],
+            ['iron_golem', 0.5, 4.5, null],
+            ['iron_golem', -4.5, -2.5, null]
+          ];
+          for (const [mType, ox, oz, prof] of spawns) {
+            const sx = v.x + ox;
+            const sz = v.z + oz;
+            const sy = this.world.getSurfaceY(sx, sz);
+            this.spawnMob(mType, sx, Math.max(v.y, sy), sz, prof);
+          }
         }
       }
     }
@@ -1200,7 +1301,7 @@ export class EntityManager {
             m.wanderDir = Math.random() * Math.PI * 2;
           }
           if (m.moving) {
-            if (m.def.villager && m.pos.distanceTo(m.homePos) > 10) {
+            if ((m.def.villager || m.def.golem) && m.pos.distanceTo(m.homePos) > 22) {
               m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z);
             }
             m.yaw = m.wanderDir;
