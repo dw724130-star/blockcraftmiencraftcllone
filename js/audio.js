@@ -103,23 +103,57 @@ export class SoundManager {
     osc.stop(now + 0.17);
   }
 
-  playExplosion() {
+  playFuse() {
     if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
+    src.loop = true;
     const filter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(420, now);
-    filter.frequency.exponentialRampToValueAtTime(55, now + 0.45);
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(2200, now);
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.35, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
     src.connect(filter);
     filter.connect(gain);
     gain.connect(this.ctx.destination);
     src.start(now);
-    src.stop(now + 0.5);
+    src.stop(now + 0.44);
+  }
+
+  playExplosion() {
+    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    // 1. Deep sub-bass shockwave thump
+    const osc = this.ctx.createOscillator();
+    const oscGain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(115, now);
+    osc.frequency.exponentialRampToValueAtTime(26, now + 0.55);
+    oscGain.gain.setValueAtTime(0.45, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.62);
+    osc.connect(oscGain);
+    oscGain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.65);
+
+    // 2. Layered blast crackle & rumble
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(920, now);
+    filter.frequency.exponentialRampToValueAtTime(65, now + 0.72);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.42, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.78);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+    src.start(now);
+    src.stop(now + 0.8);
   }
 
   playCraft() {

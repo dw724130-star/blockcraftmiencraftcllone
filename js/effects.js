@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ITEMS, isBlockSolid } from './blocks.js';
 
 // Biome Ambient Effects (Snow, Desert Dust, Forest Leaves/Fireflies, Plains Pollen, Mountain Wind)
 // + 3D Block-Break Voxel Burst Particles
@@ -62,6 +63,25 @@ export class EffectsManager {
       : null;
     this.burstGroup = new THREE.Group();
     this.scene.add(this.burstGroup);
+
+    // 3. Real-Time 3D Explosion VFX (Fireballs, Shockwaves, Billowing Smoke & Primed TNT!)
+    this.explosions = [];
+    this.smokePuffs = [];
+    this.primedTnts = [];
+    this.sphereGeo = new THREE.SphereGeometry(1, 14, 10);
+    this.ringGeo = new THREE.RingGeometry(0.75, 1.0, 24);
+    this.ringGeo.rotateX(-Math.PI / 2);
+    this.smokeGeo = new THREE.BoxGeometry(0.45, 0.45, 0.45);
+    this.sparkGeo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+    this.tntWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    this.tntGeo = textures && textures.createBlockDropGeometry && ITEMS.tnt
+      ? textures.createBlockDropGeometry(ITEMS.tnt, 0.98)
+      : new THREE.BoxGeometry(0.98, 0.98, 0.98);
+    this.tntMat = textures
+      ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture })
+      : new THREE.MeshLambertMaterial({ color: 0xd93829 });
+    this.sparkMat = new THREE.MeshBasicMaterial({ color: 0xffd54f });
+    this.fireMat = new THREE.MeshBasicMaterial({ color: 0xff6b1a });
   }
 
   setEnabled(val) {
@@ -144,8 +164,224 @@ export class EffectsManager {
     }
   }
 
+  // Spawn a live bouncing, flashing, hissing Primed TNT 3D Entity!
+  spawnPrimedTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null) {
+    const mesh = new THREE.Mesh(this.tntGeo, this.tntMat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    this.burstGroup.add(mesh);
+    const ang = Math.random() * Math.PI * 2;
+    this.primedTnts.push({
+      mesh,
+      pos: new THREE.Vector3(x, y, z),
+      vel: new THREE.Vector3(
+        vx !== null ? vx : Math.cos(ang) * 1.4,
+        vy !== null ? vy : 4.2,
+        vz !== null ? vz : Math.sin(ang) * 1.4
+      ),
+      fuse,
+      maxFuse: fuse,
+      sparkCd: 0
+    });
+  }
+
+  // Dramatic 3D Explosion: White-hot Fireball + Expanding Shockwave Ring + Billowing Smoke + Flying Sparks!
+  spawnExplosion(x, y, z, radius = 4.4) {
+    // 1. Expanding white-gold -> fiery orange fireball core
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xfff5c2,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false
+    });
+    const core = new THREE.Mesh(this.sphereGeo, coreMat);
+    core.position.set(x, y, z);
+    core.scale.setScalar(0.5);
+    this.burstGroup.add(core);
+
+    const outerMat = new THREE.MeshBasicMaterial({
+      color: 0xff6b1a,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false
+    });
+    const outer = new THREE.Mesh(this.sphereGeo, outerMat);
+    outer.position.set(x, y, z);
+    outer.scale.setScalar(0.8);
+    this.burstGroup.add(outer);
+
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffd57a,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const ring = new THREE.Mesh(this.ringGeo, ringMat);
+    ring.position.set(x, y + 0.15, z);
+    ring.scale.setScalar(0.5);
+    this.burstGroup.add(ring);
+
+    this.explosions.push({
+      core, coreMat, outer, outerMat, ring, ringMat,
+      age: 0, maxAge: 0.52, radius
+    });
+
+    // 2. Billowing 3D volumetric smoke clouds rising from the crater!
+    const smokeCount = 24;
+    for (let i = 0; i < smokeCount; i++) {
+      const shade = 0.22 + Math.random() * 0.45;
+      const sMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(shade, shade * 0.98, shade * 0.95),
+        transparent: true,
+        opacity: 0.86,
+        depthWrite: false
+      });
+      const sm = new THREE.Mesh(this.smokeGeo, sMat);
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 1.4 + Math.random() * (radius * 1.45);
+      sm.position.set(
+        x + (Math.random() - 0.5) * 1.1,
+        y + (Math.random() - 0.5) * 0.9,
+        z + (Math.random() - 0.5) * 1.1
+      );
+      const startScale = 0.8 + Math.random() * 1.1;
+      sm.scale.setScalar(startScale);
+      this.burstGroup.add(sm);
+      this.smokePuffs.push({
+        mesh: sm, mat: sMat,
+        vx: Math.cos(ang) * spd,
+        vy: 1.8 + Math.random() * 4.2,
+        vz: Math.sin(ang) * spd,
+        age: 0,
+        maxAge: 0.85 + Math.random() * 0.75,
+        startScale
+      });
+    }
+
+    // 3. Fiery flying sparks & glowing embers!
+    for (let i = 0; i < 18; i++) {
+      const m = new THREE.Mesh(this.sparkGeo, i % 2 === 0 ? this.sparkMat : this.fireMat);
+      m.position.set(x, y + 0.2, z);
+      this.burstGroup.add(m);
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 4.5 + Math.random() * 8.5;
+      this.bursts.push({
+        mesh: m,
+        vx: Math.cos(ang) * spd,
+        vy: 3.5 + Math.random() * 6.5,
+        vz: Math.sin(ang) * spd,
+        life: 0.45 + Math.random() * 0.55
+      });
+    }
+  }
+
+  updatePrimedTnts(dt, world, onDetonate) {
+    for (let i = this.primedTnts.length - 1; i >= 0; i--) {
+      const t = this.primedTnts[i];
+      t.fuse -= dt;
+
+      // Gravity + solid block bounce physics
+      t.vel.y -= 20 * dt;
+      const nx = t.pos.x + t.vel.x * dt;
+      const nz = t.pos.z + t.vel.z * dt;
+      if (!isBlockSolid(world.getBlock(nx, t.pos.y, t.pos.z))) t.pos.x = nx;
+      else t.vel.x *= -0.3;
+      if (!isBlockSolid(world.getBlock(t.pos.x, t.pos.y, nz))) t.pos.z = nz;
+      else t.vel.z *= -0.3;
+
+      const ny = t.pos.y + t.vel.y * dt;
+      if (t.vel.y < 0 && isBlockSolid(world.getBlock(t.pos.x, ny - 0.5, t.pos.z))) {
+        t.pos.y = Math.floor(ny - 0.5) + 1.5;
+        t.vel.y = 0;
+        t.vel.x *= 0.72;
+        t.vel.z *= 0.72;
+      } else {
+        t.pos.y = ny;
+      }
+      t.mesh.position.copy(t.pos);
+
+      // Authentic Minecraft accelerating white/red flash + final swell right before boom!
+      const prog = 1 - Math.max(0, t.fuse) / t.maxFuse;
+      const flashFreq = 10 + prog * 34;
+      const flashWhite = Math.sin(t.fuse * flashFreq) > 0;
+      t.mesh.material = flashWhite ? this.tntWhiteMat : this.tntMat;
+      const swell = t.fuse < 0.45 ? 1.0 + (0.45 - t.fuse) * 0.65 : 1.0 + Math.sin(prog * Math.PI * 8) * 0.04;
+      t.mesh.scale.setScalar(swell);
+
+      // Emit small rising fuse sparks
+      t.sparkCd -= dt;
+      if (t.sparkCd <= 0 && this.bursts.length < 70) {
+        t.sparkCd = 0.09;
+        const sp = new THREE.Mesh(this.sparkGeo, this.sparkMat);
+        sp.position.set(t.pos.x, t.pos.y + 0.55, t.pos.z);
+        sp.scale.setScalar(0.55);
+        this.burstGroup.add(sp);
+        this.bursts.push({
+          mesh: sp,
+          vx: (Math.random() - 0.5) * 1.4,
+          vy: 2.2 + Math.random() * 1.6,
+          vz: (Math.random() - 0.5) * 1.4,
+          life: 0.28
+        });
+      }
+
+      if (t.fuse <= 0) {
+        this.burstGroup.remove(t.mesh);
+        this.primedTnts.splice(i, 1);
+        if (onDetonate) onDetonate(t.pos.x, t.pos.y, t.pos.z);
+      }
+    }
+  }
+
   update(dt, playerPos, biome, isNight) {
-    // Update block break bursts
+    // Update active 3D fireballs & shockwaves
+    for (let i = this.explosions.length - 1; i >= 0; i--) {
+      const ex = this.explosions[i];
+      ex.age += dt;
+      const p = ex.age / ex.maxAge;
+      if (p >= 1) {
+        this.burstGroup.remove(ex.core, ex.outer, ex.ring);
+        ex.coreMat.dispose();
+        ex.outerMat.dispose();
+        ex.ringMat.dispose();
+        this.explosions.splice(i, 1);
+        continue;
+      }
+      const ease = 1 - Math.pow(1 - p, 3);
+      ex.core.scale.setScalar(0.4 + ease * ex.radius * 0.72);
+      ex.coreMat.opacity = Math.max(0, (1 - p * 1.35) * 0.95);
+      ex.outer.scale.setScalar(0.6 + ease * ex.radius * 1.05);
+      ex.outerMat.opacity = Math.max(0, (1 - p) * 0.75);
+      ex.outerMat.color.setHex(p < 0.45 ? 0xff7b1a : 0xcc2b14);
+      ex.ring.scale.setScalar(0.5 + ease * ex.radius * 1.9);
+      ex.ringMat.opacity = Math.max(0, (1 - p) * 0.8);
+    }
+
+    // Update billowing explosion smoke clouds
+    for (let i = this.smokePuffs.length - 1; i >= 0; i--) {
+      const s = this.smokePuffs[i];
+      s.age += dt;
+      const p = s.age / s.maxAge;
+      if (p >= 1) {
+        this.burstGroup.remove(s.mesh);
+        s.mat.dispose();
+        this.smokePuffs.splice(i, 1);
+        continue;
+      }
+      s.vx *= 0.94;
+      s.vz *= 0.94;
+      s.vy *= 0.96;
+      s.mesh.position.x += s.vx * dt;
+      s.mesh.position.y += (s.vy + 0.8) * dt;
+      s.mesh.position.z += s.vz * dt;
+      s.mesh.rotation.x += dt * 1.2;
+      s.mesh.rotation.y += dt * 1.5;
+      s.mesh.scale.setScalar(s.startScale * (1 + p * 1.8));
+      s.mat.opacity = Math.max(0, (1 - p) * 0.82);
+    }
+
+    // Update block break bursts & sparks
     for (let i = this.bursts.length - 1; i >= 0; i--) {
       const p = this.bursts[i];
       p.life -= dt;
@@ -251,6 +487,20 @@ export class EffectsManager {
 
   clear() {
     for (const p of this.bursts) this.burstGroup.remove(p.mesh);
+    for (const ex of this.explosions) {
+      this.burstGroup.remove(ex.core, ex.outer, ex.ring);
+      ex.coreMat.dispose();
+      ex.outerMat.dispose();
+      ex.ringMat.dispose();
+    }
+    for (const s of this.smokePuffs) {
+      this.burstGroup.remove(s.mesh);
+      s.mat.dispose();
+    }
+    for (const t of this.primedTnts) this.burstGroup.remove(t.mesh);
     this.bursts = [];
+    this.explosions = [];
+    this.smokePuffs = [];
+    this.primedTnts = [];
   }
 }

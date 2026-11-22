@@ -46,9 +46,13 @@ export class ControlManager {
     this.lookLast = { x: 0, y: 0 };
 
     this.touchSneakToggle = false;
+    this.touchSneakHeld = false;
     this.touchSprintToggle = false;
     this.touchJumpHeld = false;
     this.touchBreakHeld = false;
+    this.touchPlaceHeld = false;
+    this._placeRepeatTimer = null;
+    this.isFlying = false;
     this.lastJumpTap = 0;
 
     this.bindTouchControls();
@@ -86,7 +90,13 @@ export class ControlManager {
     this.dpadDirs.clear();
     this.lookTouchId = null;
     this.touchJumpHeld = false;
+    this.touchSneakHeld = false;
     this.touchBreakHeld = false;
+    this.touchPlaceHeld = false;
+    if (this._placeRepeatTimer) {
+      clearInterval(this._placeRepeatTimer);
+      this._placeRepeatTimer = null;
+    }
     this.input.moveForward = 0;
     this.input.moveRight = 0;
     this.input.jump = false;
@@ -95,16 +105,29 @@ export class ControlManager {
     this.input.lookDeltaY = 0;
     const knob = document.getElementById('joystick-knob');
     if (knob) knob.style.transform = 'translate(0px, 0px)';
+    const sprintRing = document.getElementById('joystick-sprint-ring');
+    if (sprintRing) sprintRing.classList.remove('active');
+    const joyBase = document.getElementById('joystick-base');
+    if (joyBase) joyBase.classList.remove('sprinting');
+  }
+
+  setFlyingState(flying) {
+    this.isFlying = Boolean(flying);
+    if (this.isFlying && this.touchSneakToggle) {
+      this.touchSneakToggle = false;
+      const btnSneak = document.getElementById('btn-sneak');
+      if (btnSneak) btnSneak.classList.remove('active');
+    }
   }
 
   bindTouchControls() {
     const joyBase = document.getElementById('joystick-base');
     const joyKnob = document.getElementById('joystick-knob');
     const sprintRing = document.getElementById('joystick-sprint-ring');
-    const maxR = 46;
 
     const updateJoy = (clientX, clientY) => {
       const rect = joyBase.getBoundingClientRect();
+      const maxR = Math.max(36, rect.width * 0.34);
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       let dx = clientX - cx;
@@ -118,12 +141,14 @@ export class ControlManager {
       const dead = 7;
       this.joyVec.x = Math.abs(dx) < dead ? 0 : dx / maxR;
       this.joyVec.y = Math.abs(dy) < dead ? 0 : -dy / maxR;
-      this.joySprint = this.joyVec.y > 0.85 && Math.abs(this.joyVec.x) < 0.45;
-      sprintRing.classList.toggle('active', this.joySprint);
+      this.joySprint = this.joyVec.y > 0.84 && Math.abs(this.joyVec.x) < 0.48;
+      if (sprintRing) sprintRing.classList.toggle('active', this.joySprint);
+      joyBase.classList.toggle('sprinting', this.joySprint);
     };
 
     joyBase.addEventListener('touchstart', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       this.sound.unlock();
       if (this.joyTouchId !== null) return;
       const t = e.changedTouches[0];
@@ -133,6 +158,7 @@ export class ControlManager {
 
     joyBase.addEventListener('touchmove', (e) => {
       e.preventDefault();
+      e.stopPropagation();
       for (const t of e.changedTouches) {
         if (t.identifier === this.joyTouchId) {
           updateJoy(t.clientX, t.clientY);
@@ -148,7 +174,8 @@ export class ControlManager {
           this.joyVec = { x: 0, y: 0 };
           this.joySprint = false;
           joyKnob.style.transform = 'translate(0px, 0px)';
-          sprintRing.classList.remove('active');
+          if (sprintRing) sprintRing.classList.remove('active');
+          joyBase.classList.remove('sprinting');
           break;
         }
       }
@@ -159,9 +186,15 @@ export class ControlManager {
     // D-Pad buttons
     document.querySelectorAll('.dpad-btn').forEach((btn) => {
       const dir = btn.dataset.dir;
+      let activeTid = null;
       const start = (e) => {
         e.preventDefault();
+        e.stopPropagation();
         this.sound.unlock();
+        if (e.changedTouches && e.changedTouches.length > 0) {
+          if (activeTid !== null) return;
+          activeTid = e.changedTouches[0].identifier;
+        }
         if (dir === 'sprint') {
           this.dpadSprint = !this.dpadSprint;
           btn.classList.toggle('active', this.dpadSprint);
@@ -171,6 +204,14 @@ export class ControlManager {
         }
       };
       const end = (e) => {
+        if (e.changedTouches) {
+          let match = false;
+          for (const t of e.changedTouches) {
+            if (t.identifier === activeTid) { match = true; break; }
+          }
+          if (!match) return;
+          activeTid = null;
+        }
         e.preventDefault();
         if (dir !== 'sprint') {
           this.dpadDirs.delete(dir);
@@ -191,17 +232,29 @@ export class ControlManager {
     const btnSprint = document.getElementById('btn-sprint');
     const btnBreak = document.getElementById('btn-break');
     const btnPlace = document.getElementById('btn-place');
+    const btnFly = document.getElementById('btn-fly');
 
     const bindHold = (el, onDown, onUp) => {
+      if (!el) return;
       let usingTouch = false;
+      let activeTid = null;
       el.addEventListener('touchstart', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         usingTouch = true;
         this.sound.unlock();
+        if (activeTid !== null) return;
+        activeTid = e.changedTouches[0].identifier;
         el.classList.add('active');
         onDown();
       }, { passive: false });
       const tEnd = (e) => {
+        let match = false;
+        for (const t of e.changedTouches) {
+          if (t.identifier === activeTid) { match = true; break; }
+        }
+        if (!match) return;
+        activeTid = null;
         e.preventDefault();
         el.classList.remove('active');
         onUp();
@@ -228,7 +281,7 @@ export class ControlManager {
       btnJump,
       () => {
         const now = performance.now();
-        if (now - this.lastJumpTap < 280) {
+        if (now - this.lastJumpTap < 300) {
           if (this.onToggleFly) this.onToggleFly();
         }
         this.lastJumpTap = now;
@@ -242,12 +295,21 @@ export class ControlManager {
     bindHold(
       btnSneak,
       () => {
-        this.touchSneakToggle = !this.touchSneakToggle;
-        btnSneak.classList.toggle('active', this.touchSneakToggle);
+        if (this.isFlying) {
+          this.touchSneakHeld = true;
+          btnSneak.classList.add('active');
+        } else {
+          this.touchSneakToggle = !this.touchSneakToggle;
+          btnSneak.classList.toggle('active', this.touchSneakToggle);
+        }
       },
       () => {
-        // keep toggle visual state
-        btnSneak.classList.toggle('active', this.touchSneakToggle);
+        if (this.isFlying) {
+          this.touchSneakHeld = false;
+          btnSneak.classList.remove('active');
+        } else {
+          btnSneak.classList.toggle('active', this.touchSneakToggle);
+        }
       }
     );
 
@@ -260,6 +322,18 @@ export class ControlManager {
         },
         () => {
           btnSprint.classList.toggle('active', this.touchSprintToggle);
+        }
+      );
+    }
+
+    if (btnFly) {
+      bindHold(
+        btnFly,
+        () => {
+          if (this.onToggleFly) this.onToggleFly();
+        },
+        () => {
+          btnFly.classList.toggle('active', this.isFlying);
         }
       );
     }
@@ -278,14 +352,28 @@ export class ControlManager {
     bindHold(
       btnPlace,
       () => {
-        if (this.onPlaceOrUse) this.onPlaceOrUse();
+        this.touchPlaceHeld = true;
+        if (this.onPlaceOrUse) this.onPlaceOrUse(false);
+        if (this._placeRepeatTimer) clearInterval(this._placeRepeatTimer);
+        this._placeRepeatTimer = setInterval(() => {
+          if (this.touchPlaceHeld && this.enabled && this.onPlaceOrUse) {
+            this.onPlaceOrUse(true);
+          }
+        }, 220);
       },
-      () => {}
+      () => {
+        this.touchPlaceHeld = false;
+        if (this._placeRepeatTimer) {
+          clearInterval(this._placeRepeatTimer);
+          this._placeRepeatTimer = null;
+        }
+      }
     );
 
-    // Touch-drag camera look anywhere on the canvas
+    // Touch-drag camera look anywhere on the canvas (preventDefault avoids iPad Safari gesture bounce!)
     this.canvas.addEventListener('touchstart', (e) => {
       if (!this.enabled) return;
+      e.preventDefault();
       this.sound.unlock();
       for (const t of e.changedTouches) {
         if (this.lookTouchId === null && t.identifier !== this.joyTouchId) {
@@ -295,10 +383,11 @@ export class ControlManager {
           break;
         }
       }
-    }, { passive: true });
+    }, { passive: false });
 
     this.canvas.addEventListener('touchmove', (e) => {
       if (!this.enabled) return;
+      e.preventDefault();
       for (const t of e.changedTouches) {
         if (t.identifier === this.lookTouchId) {
           const dx = t.clientX - this.lookLast.x;
@@ -311,7 +400,7 @@ export class ControlManager {
           break;
         }
       }
-    }, { passive: true });
+    }, { passive: false });
 
     const endLook = (e) => {
       for (const t of e.changedTouches) {
@@ -382,7 +471,10 @@ export class ControlManager {
       if (!this.enabled) return;
       this.sound.unlock();
       if (document.pointerLockElement !== this.canvas && this.canvas.requestPointerLock) {
-        try { this.canvas.requestPointerLock(); } catch {}
+        try {
+          const p = this.canvas.requestPointerLock();
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch {}
       }
     });
 
@@ -440,7 +532,7 @@ export class ControlManager {
     this.input.moveForward = fwd;
     this.input.moveRight = right;
     this.input.jump = this.keys.has(kb.jump) || this.touchJumpHeld;
-    this.input.sneak = this.keys.has(kb.sneak) || (kb.sneak === 'ShiftLeft' && this.keys.has('ShiftRight')) || this.touchSneakToggle;
+    this.input.sneak = this.keys.has(kb.sneak) || (kb.sneak === 'ShiftLeft' && this.keys.has('ShiftRight')) || (this.isFlying ? this.touchSneakHeld : this.touchSneakToggle);
     this.input.sprint = this.keys.has(kb.sprint) || this.joySprint || this.dpadSprint || this.touchSprintToggle;
     if (this.touchBreakHeld) this.input.breaking = true;
     else if (!document.pointerLockElement) this.input.breaking = false;

@@ -13,11 +13,23 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=17" />
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "./js/blocks.js": "./js/blocks.js?v=17",
+        "./js/recipes.js": "./js/recipes.js?v=17",
+        "./js/world.js": "./js/world.js?v=17",
+        "./js/mobs.js": "./js/mobs.js?v=17",
+        "./js/player.js": "./js/player.js?v=17",
+        "./js/effects.js": "./js/effects.js?v=17",
+        "./js/audio.js": "./js/audio.js?v=17",
+        "./js/ui.js": "./js/ui.js?v=17",
+        "./js/controls.js": "./js/controls.js?v=17",
+        "./js/sky.js": "./js/sky.js?v=17",
+        "./js/panorama.js": "./js/panorama.js?v=17",
+        "./js/storage.js": "./js/storage.js?v=17"
       }
     }
   </script>
@@ -47,35 +59,57 @@
     </div>
   </div>
 
-  <!-- TITLE / MINECRAFT JAVA-STYLE MAIN MENU -->
+  <!-- WORLD LOADING OVERLAY (Smooth Frame-Sliced Loading) -->
+  <div id="loading-screen" class="loading-overlay hidden">
+    <div class="loading-card">
+      <div class="loading-logo">BLOCKCRAFT</div>
+      <div class="loading-title" id="loading-world-name">Loading World...</div>
+      <div class="loading-bar-track">
+        <div class="loading-bar-fill" id="loading-bar-fill"></div>
+      </div>
+      <div class="loading-status" id="loading-status">Preparing terrain...</div>
+    </div>
+  </div>
+
+  <!-- TITLE / MINECRAFT-INSPIRED 3D LIVE PANORAMA MAIN MENU -->
   <div id="title-screen" class="overlay-screen">
-    <!-- Instant-load animated pixel-art Cherry Blossom & Meadow panorama canvas -->
-    <canvas id="title-panorama" class="title-panorama"></canvas>
     <div class="title-vignette"></div>
 
-    <!-- HOME MENU VIEW (Classic Minecraft Java Layout!) -->
+    <!-- HOME MENU VIEW -->
     <div id="title-view-home" class="java-home-shell">
       <div class="java-logo-stage">
-        <h1 class="game-logo java-logo" data-text="BLOCKCRAFT">BLOCKCRAFT</h1>
+        <div class="logo-title-wrap">
+          <h1 class="game-logo java-logo" data-text="BLOCKCRAFT">BLOCKCRAFT</h1>
+          <div class="splash-text" id="title-splash">Silky 60 FPS Voxel World!</div>
+        </div>
         <div class="java-edition-banner">VOXEL EDITION</div>
-        <div class="splash-text" id="title-splash">Lots of truthiness!</div>
       </div>
 
       <div class="java-menu-stack">
-        <button id="btn-nav-singleplayer" class="mc-stone-btn java-wide" data-title-view="singleplayer">Singleplayer</button>
-        <button id="btn-nav-multiplayer" class="mc-stone-btn java-wide" data-title-view="multiplayer">Multiplayer</button>
+        <button id="btn-nav-singleplayer" class="mc-stone-btn primary java-wide" data-title-view="singleplayer">
+          <img class="px-ui-icon btn-px" data-px-icon="play" alt="" />
+          <span>Singleplayer</span>
+        </button>
+        <button id="btn-nav-multiplayer" class="mc-stone-btn java-wide" data-title-view="multiplayer">
+          <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
+          <span>Multiplayer</span>
+        </button>
         <button id="btn-nav-mods" class="mc-stone-btn java-wide java-mods-btn" data-title-view="mods">
+          <img class="px-ui-icon btn-px" data-px-icon="mods" alt="" />
           <span>Mods &amp; Add-Ons</span>
-          <span class="java-count-pill"><img class="px-ui-icon inline-px" data-px-icon="mods" alt="" /><span id="title-mod-count">2</span></span>
+          <span class="java-count-pill"><span id="title-mod-count">2</span></span>
         </button>
 
         <div class="java-bottom-row">
-          <button id="btn-nav-guide-icon" class="mc-stone-btn java-sq" data-title-view="guide" title="Controls &amp; Tips">
-            <img class="px-ui-icon btn-px solo-px" data-px-icon="globe" alt="Guide" />
+          <button id="btn-nav-options" class="mc-stone-btn java-half" data-title-view="settings">
+            <img class="px-ui-icon btn-px" data-px-icon="settings" alt="" />
+            <span>Options</span>
           </button>
-          <button id="btn-nav-options" class="mc-stone-btn java-half" data-title-view="settings">Options...</button>
-          <button id="btn-nav-guide" class="mc-stone-btn java-half" data-title-view="guide">Controls &amp; Tips</button>
-          <button id="btn-quick-scale" class="mc-stone-btn java-sq" title="Toggle Large / Compact UI Scale">
+          <button id="btn-nav-guide" class="mc-stone-btn java-half" data-title-view="guide">
+            <img class="px-ui-icon btn-px" data-px-icon="book" alt="" />
+            <span>Controls</span>
+          </button>
+          <button id="btn-quick-scale" class="mc-stone-btn java-sq" title="Toggle Large / Compact iPad UI Scale" aria-label="Toggle UI Scale">
             <img class="px-ui-icon btn-px solo-px" data-px-icon="person" alt="UI Scale" />
           </button>
         </div>
@@ -83,7 +117,7 @@
 
       <div class="java-corner-footer">
         <span>BlockCraft 1.21 • Voxel Edition</span>
-        <span>WebGL Voxel Engine • Ready to Play</span>
+        <span>iPad &amp; WebGL Optimized</span>
       </div>
     </div>
 
@@ -104,14 +138,14 @@
               <div>
                 <label>Game Mode</label>
                 <select id="new-world-mode">
-                  <option value="survival">Survival (Empty Start)</option>
-                  <option value="creative">Creative (Fly &amp; Build)</option>
+                  <option value="survival">Survival</option>
+                  <option value="creative">Creative (Fly)</option>
                 </select>
               </div>
               <div>
                 <label>World Type</label>
                 <select id="new-world-type">
-                  <option value="infinite">Infinite Biomes &amp; Villages</option>
+                  <option value="infinite">Infinite Biomes</option>
                   <option value="flat">Superflat</option>
                 </select>
               </div>
@@ -363,6 +397,10 @@
       <!-- Right Action Buttons -->
       <div id="action-zone">
         <div class="action-row-top">
+          <button id="btn-fly" class="touch-action-btn small-btn fly-btn hidden" aria-label="Toggle Flying">
+            <img class="px-ui-icon action-px sm" data-px-icon="wing" alt="" />
+            <span class="btn-lbl">FLY</span>
+          </button>
           <button id="btn-break" class="touch-action-btn break-btn" aria-label="Mine or Damage">
             <img id="btn-break-icon" class="px-ui-icon action-px" data-px-icon="mine" alt="" />
             <span id="btn-break-lbl" class="btn-lbl">MINE</span>
@@ -379,11 +417,11 @@
           </button>
           <button id="btn-sneak" class="touch-action-btn small-btn" aria-label="Sneak or Fly Down">
             <img class="px-ui-icon action-px sm" data-px-icon="sneak" alt="" />
-            <span class="btn-lbl">SNEAK</span>
+            <span id="btn-sneak-lbl" class="btn-lbl">SNEAK</span>
           </button>
           <button id="btn-jump" class="touch-action-btn jump-btn" aria-label="Jump or Fly Up">
             <img class="px-ui-icon action-px" data-px-icon="jump" alt="" />
-            <span class="btn-lbl">JUMP</span>
+            <span id="btn-jump-lbl" class="btn-lbl">JUMP</span>
           </button>
         </div>
       </div>
@@ -450,15 +488,30 @@
 
         <div id="inv-tab-recipes" class="inv-tab-panel hidden">
           <div class="recipe-header">
-            <span>Tap any available recipe to craft instantly!</span>
+            <input type="text" id="recipe-search" class="recipe-search-input" placeholder="Search all block &amp; item recipes..." />
             <span id="recipe-station-badge" class="station-badge">2×2 Hand Crafting</span>
           </div>
           <div id="recipe-list" class="recipe-list"></div>
         </div>
 
         <div id="inv-tab-creative" class="inv-tab-panel hidden">
-          <div class="creative-header">
-            <input type="text" id="creative-search" placeholder="Search blocks &amp; items..." />
+          <div class="creative-toolbar">
+            <input type="text" id="creative-search" placeholder="Search every block &amp; item..." />
+            <button type="button" id="btn-creative-stack" class="mc-btn sm primary" title="Toggle Stack Amount">Give ×64</button>
+            <button type="button" id="btn-creative-clear" class="mc-btn sm danger" title="Clear Inventory">Clear</button>
+          </div>
+          <div id="creative-cats" class="creative-cats">
+            <button type="button" class="cat-chip active" data-cat="all">All</button>
+            <button type="button" class="cat-chip" data-cat="building">Building</button>
+            <button type="button" class="cat-chip" data-cat="nature">Nature</button>
+            <button type="button" class="cat-chip" data-cat="utility">Utility</button>
+            <button type="button" class="cat-chip" data-cat="tools">Tools</button>
+            <button type="button" class="cat-chip" data-cat="armor">Armor</button>
+            <button type="button" class="cat-chip" data-cat="food">Food</button>
+            <button type="button" class="cat-chip" data-cat="materials">Materials</button>
+          </div>
+          <div class="creative-meta-bar">
+            <span id="creative-count-label">All blocks &amp; items unlocked — tap any tile to add</span>
           </div>
           <div id="creative-catalog" class="creative-catalog"></div>
         </div>
@@ -467,64 +520,125 @@
         <div class="player-inv-section">
           <div class="section-label">Inventory <span id="selected-cursor-info" class="cursor-info"></span></div>
           <div id="main-inv-grid" class="inv-grid"></div>
-          <div class="section-label small">Hotbar</div>
+          <div class="hotbar-trash-header">
+            <div class="section-label small">Hotbar</div>
+            <div id="inv-trash-slot" class="inv-trash-dropzone" data-drop-trash="true" role="button" tabindex="0" title="Drag an item here or tap a selected item to delete">
+              <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="trash-px-svg" aria-hidden="true">
+                <rect x="5" y="1" width="6" height="2" fill="#ffd2d2"/>
+                <rect x="2" y="3" width="12" height="2" fill="#ff9e9e"/>
+                <rect x="3" y="5" width="10" height="9" fill="#d94545"/>
+                <rect x="4" y="6" width="8" height="7" fill="#a82828"/>
+                <rect x="5" y="6" width="1" height="6" fill="#ff9e9e"/>
+                <rect x="7" y="6" width="2" height="6" fill="#ff9e9e"/>
+                <rect x="10" y="6" width="1" height="6" fill="#ff9e9e"/>
+              </svg>
+              <span class="inv-trash-label">Delete Item <small>(Drag here or tap selected)</small></span>
+            </div>
+          </div>
           <div id="modal-hotbar-grid" class="inv-grid hotbar-9"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- FURNACE MODAL -->
+  <!-- FURNACE MODAL (Authentic Classic Minecraft Furnace GUI!) -->
   <div id="furnace-modal" class="modal-backdrop hidden">
-    <div class="mc-window small-window">
-      <div class="mc-window-header">
-        <span>Furnace</span>
-        <button class="close-modal-btn" data-close="furnace-modal"><img class="px-ui-icon close-px" data-px-icon="close" alt="Close" /></button>
+    <div class="mc-classic-shell">
+      <!-- Optional Collapsible Smelting Recipe Book Panel (toggled by the green book button!) -->
+      <div id="furnace-book-panel" class="mc-classic-panel furnace-book-panel hidden">
+        <div class="mc-classic-title-row">
+          <span class="mc-classic-title">Smelting Recipes</span>
+        </div>
+        <div id="furnace-book-list" class="furnace-book-list"></div>
       </div>
-      <div class="furnace-body">
-        <div class="furnace-station">
-          <div class="furnace-left">
-            <div class="slot-labeled">
-              <span>Input</span>
-              <div id="furnace-input" class="inv-slot"></div>
+
+      <div class="mc-classic-panel mc-furnace-panel">
+        <button class="mc-classic-close" data-close="furnace-modal" aria-label="Close">×</button>
+        <div class="mc-classic-title centered">Furnace</div>
+
+        <div class="mc-furnace-stage">
+          <!-- Left: Iconic Green Minecraft Recipe Book Button -->
+          <div class="mc-furnace-book-col">
+            <button type="button" id="btn-furnace-book" class="mc-recipe-book-btn" title="Toggle Smelting Recipe Book" aria-label="Smelting Recipe Book">
+              <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="mc-green-book-svg">
+                <rect x="3" y="2" width="10" height="12" fill="#141414"/>
+                <rect x="2" y="3" width="12" height="10" fill="#141414"/>
+                <rect x="4" y="3" width="8" height="10" fill="#2e7d22"/>
+                <rect x="3" y="4" width="10" height="8" fill="#3fa32e"/>
+                <rect x="4" y="4" width="7" height="2" fill="#63d14b"/>
+                <rect x="5" y="6" width="5" height="2" fill="#4fbf3a"/>
+                <rect x="3" y="10" width="9" height="2" fill="#1e5916"/>
+                <rect x="5" y="11" width="7" height="2" fill="#ece6d8"/>
+                <rect x="4" y="12" width="8" height="1" fill="#bfb7a4"/>
+                <rect x="6" y="5" width="3" height="1" fill="#e8ffd8"/>
+                <rect x="7" y="7" width="2" height="1" fill="#e8ffd8"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Center-Left: Input Slot -> Pixel Flame -> Fuel Slot -->
+          <div class="mc-furnace-burn-col">
+            <div id="furnace-input" class="mc-classic-slot" title="Smelt Input"></div>
+
+            <div id="furnace-flame" class="mc-flame-meter" aria-label="Fuel Burn Progress">
+              <!-- Unlit Grey 3-Wisp Minecraft Flame Silhouette -->
+              <svg viewBox="0 0 14 14" shape-rendering="crispEdges" class="mc-flame-svg base">
+                <path d="M2 13h2V9H3V7H2V4h1V2h1v3h1v3H4v2h1v3H2zm4 0h3V9H8V6H7V3h1V1h1v2h1v4H9v3h1v3H6zm5 0h2V8h-1V5h1V3h-1v2h-1v3h1v5z" fill="#8b8b8b"/>
+              </svg>
+              <!-- Lit Fire Overlay (grows bottom-to-top via height %) -->
+              <div id="furnace-fuel-bar" class="mc-flame-fill">
+                <svg viewBox="0 0 14 14" shape-rendering="crispEdges" class="mc-flame-svg lit">
+                  <path d="M2 13h2V9H3V7H2V4h1V2h1v3h1v3H4v2h1v3H2zm4 0h3V9H8V6H7V3h1V1h1v2h1v4H9v3h1v3H6zm5 0h2V8h-1V5h1V3h-1v2h-1v3h1v5z" fill="url(#mcFlameGrad)"/>
+                  <defs>
+                    <linearGradient id="mcFlameGrad" x1="0" y1="1" x2="0" y2="0">
+                      <stop offset="0%" stop-color="#fff176"/>
+                      <stop offset="45%" stop-color="#ff9800"/>
+                      <stop offset="100%" stop-color="#e53935"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
+              </div>
             </div>
-            <div class="furnace-flame-wrap">
-              <div id="furnace-flame" class="furnace-flame"><img class="px-ui-icon flame-px" data-px-icon="flame" alt="" /></div>
-              <div class="bar-mini"><div id="furnace-fuel-bar"></div></div>
-            </div>
-            <div class="slot-labeled">
-              <span>Fuel</span>
-              <div id="furnace-fuel" class="inv-slot"></div>
+
+            <div id="furnace-fuel" class="mc-classic-slot" title="Fuel"></div>
+          </div>
+
+          <!-- Center: Pixel Horizontal Arrow Progress -->
+          <div class="mc-furnace-arrow-col">
+            <div class="mc-arrow-meter" aria-label="Smelting Progress">
+              <svg viewBox="0 0 22 16" shape-rendering="crispEdges" class="mc-arrow-svg base">
+                <path d="M0 6h14V2h1v1h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1h-1v1h-1v1h-1v1h-1v-4H0V6z" fill="#8b8b8b"/>
+              </svg>
+              <div id="furnace-cook-bar" class="mc-arrow-fill">
+                <svg viewBox="0 0 22 16" shape-rendering="crispEdges" class="mc-arrow-svg lit">
+                  <path d="M0 6h14V2h1v1h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1h-1v1h-1v1h-1v1h-1v-4H0V6z" fill="#ffffff"/>
+                </svg>
+              </div>
             </div>
           </div>
-          <div class="furnace-mid">
-            <div class="craft-arrow"><img class="px-ui-icon arrow-px" data-px-icon="arrow_right_gold" alt="" /></div>
-            <div class="bar-mini wide"><div id="furnace-cook-bar"></div></div>
-          </div>
-          <div class="slot-labeled">
-            <span>Output</span>
-            <div id="furnace-output" class="inv-slot output-slot"></div>
+
+          <!-- Right: Large Recessed Output Slot -->
+          <div class="mc-furnace-out-col">
+            <div id="furnace-output" class="mc-classic-slot mc-classic-output" title="Smelt Output"></div>
           </div>
         </div>
-        <div class="section-label">Your Inventory (Tap item to move)</div>
-        <div id="furnace-player-inv" class="inv-grid"></div>
+
+        <div class="mc-classic-label">Inventory</div>
+        <div id="furnace-player-inv" class="mc-classic-grid"></div>
+        <div id="furnace-player-hotbar" class="mc-classic-grid mc-classic-hotbar"></div>
       </div>
     </div>
   </div>
 
-  <!-- CHEST MODAL -->
+  <!-- CHEST MODAL (Authentic Classic Minecraft Chest GUI!) -->
   <div id="chest-modal" class="modal-backdrop hidden">
-    <div class="mc-window">
-      <div class="mc-window-header">
-        <span>Chest</span>
-        <button class="close-modal-btn" data-close="chest-modal"><img class="px-ui-icon close-px" data-px-icon="close" alt="Close" /></button>
-      </div>
-      <div class="chest-body">
-        <div class="section-label">Chest Storage (Tap to transfer)</div>
-        <div id="chest-grid" class="inv-grid"></div>
-        <div class="section-label">Your Inventory</div>
-        <div id="chest-player-inv" class="inv-grid"></div>
-      </div>
+    <div class="mc-classic-panel mc-chest-panel">
+      <button class="mc-classic-close" data-close="chest-modal" aria-label="Close">×</button>
+      <div class="mc-classic-title">Chest</div>
+      <div id="chest-grid" class="mc-classic-grid"></div>
+      <div class="mc-classic-label">Inventory</div>
+      <div id="chest-player-inv" class="mc-classic-grid"></div>
+      <div id="chest-player-hotbar" class="mc-classic-grid mc-classic-hotbar"></div>
     </div>
   </div>
 
@@ -538,7 +652,7 @@
       <div class="pause-body">
         <div class="pause-actions">
           <button id="btn-resume" class="mc-btn primary">Resume Game</button>
-          <button id="btn-save-now" class="mc-btn">Save World</button>
+          <button id="btn-save-quit" class="mc-btn danger">Save &amp; Quit</button>
           <button id="btn-toggle-mode" class="mc-btn">Switch Mode (Survival / Creative)</button>
           <button id="btn-respawn-spawn" class="mc-btn">Teleport to Spawn</button>
         </div>
@@ -619,8 +733,6 @@
             <div id="keybinds-list" class="keybinds-grid"></div>
           </div>
         </div>
-
-        <button id="btn-save-quit" class="mc-btn danger">Save &amp; Quit to Title</button>
       </div>
     </div>
   </div>
@@ -705,6 +817,9 @@
     </div>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <!-- Floating Inventory Drag Ghost -->
+  <div id="drag-ghost" class="drag-ghost hidden"></div>
+
+  <script type="module" src="js/main.js?v=17"></script>
 </body>
 </html>

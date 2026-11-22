@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid } from './blocks.js';
+import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 
@@ -82,6 +82,109 @@ function coordHash(x, z, seed) {
   h = (h ^ (h >>> 13)) * 1274126177;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
+
+// Reusable zero-GC TypedArray scratch buffer for chunk meshing!
+class MeshBucket {
+  constructor(initialVerts = 16384) {
+    this.cap = initialVerts;
+    this.pos = new Float32Array(initialVerts * 3);
+    this.norm = new Float32Array(initialVerts * 3);
+    this.uv = new Float32Array(initialVerts * 2);
+    this.col = new Float32Array(initialVerts * 3);
+    this.idx = new Uint32Array((initialVerts / 4) * 6);
+    this.vCount = 0;
+    this.iCount = 0;
+  }
+
+  reset() {
+    this.vCount = 0;
+    this.iCount = 0;
+  }
+
+  ensure(addVerts) {
+    if (this.vCount + addVerts <= this.cap) return;
+    let newCap = this.cap * 2;
+    while (newCap < this.vCount + addVerts) newCap *= 2;
+    const growF = (old, stride) => {
+      const next = new Float32Array(newCap * stride);
+      next.set(old);
+      return next;
+    };
+    this.pos = growF(this.pos, 3);
+    this.norm = growF(this.norm, 3);
+    this.uv = growF(this.uv, 2);
+    this.col = growF(this.col, 3);
+    const nextIdx = new Uint32Array((newCap / 4) * 6);
+    nextIdx.set(this.idx);
+    this.idx = nextIdx;
+    this.cap = newCap;
+  }
+
+  pushQuad(
+    x0, y0, z0, u0, v0, c0,
+    x1, y1, z1, u1, v1, c1,
+    x2, y2, z2, u2, v2, c2,
+    x3, y3, z3, u3, v3, c3,
+    nx, ny, nz
+  ) {
+    this.ensure(4);
+    const base = this.vCount;
+    const p = base * 3;
+    const u = base * 2;
+    const pos = this.pos, norm = this.norm, uv = this.uv, col = this.col;
+
+    pos[p] = x0; pos[p + 1] = y0; pos[p + 2] = z0;
+    pos[p + 3] = x1; pos[p + 4] = y1; pos[p + 5] = z1;
+    pos[p + 6] = x2; pos[p + 7] = y2; pos[p + 8] = z2;
+    pos[p + 9] = x3; pos[p + 10] = y3; pos[p + 11] = z3;
+
+    norm[p] = nx; norm[p + 1] = ny; norm[p + 2] = nz;
+    norm[p + 3] = nx; norm[p + 4] = ny; norm[p + 5] = nz;
+    norm[p + 6] = nx; norm[p + 7] = ny; norm[p + 8] = nz;
+    norm[p + 9] = nx; norm[p + 10] = ny; norm[p + 11] = nz;
+
+    uv[u] = u0; uv[u + 1] = v0;
+    uv[u + 2] = u1; uv[u + 3] = v1;
+    uv[u + 4] = u2; uv[u + 5] = v2;
+    uv[u + 6] = u3; uv[u + 7] = v3;
+
+    col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
+    col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
+    col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
+    col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+
+    const ii = this.iCount;
+    const idx = this.idx;
+    idx[ii] = base; idx[ii + 1] = base + 1; idx[ii + 2] = base + 2;
+    idx[ii + 3] = base; idx[ii + 4] = base + 2; idx[ii + 5] = base + 3;
+
+    this.vCount = base + 4;
+    this.iCount = ii + 6;
+  }
+
+  toGeometry() {
+    if (this.vCount === 0) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos.slice(0, this.vCount * 3), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(this.norm.slice(0, this.vCount * 3), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(this.uv.slice(0, this.vCount * 2), 2));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.col.slice(0, this.vCount * 3), 3));
+    const idxSlice = this.vCount < 65536
+      ? new Uint16Array(this.idx.subarray(0, this.iCount))
+      : this.idx.slice(0, this.iCount);
+    geo.setIndex(new THREE.BufferAttribute(idxSlice, 1));
+    return geo;
+  }
+}
+
+const SCRATCH_BUCKETS = {
+  opaque: new MeshBucket(24576),
+  cutout: new MeshBucket(8192),
+  staticCutout: new MeshBucket(4096),
+  water: new MeshBucket(8192)
+};
+// Scratch grid for coarse 4x4x4 trilinear cave noise (5 x 25 x 5 = 625 floats)
+const CAVE_GRID = new Float32Array(5 * 25 * 5);
 
 export class World {
   constructor(scene, textures, options = {}) {
@@ -182,9 +285,9 @@ export class World {
            float sunWrap = max(0.0, dot(normalize(vWorldNorm), normalize(uSunDir)) * 0.65 + 0.35);
            gl_FragColor.rgb *= mix(vec3(1.0), vec3(1.06, 1.01, 0.94), sunWrap * (0.35 + 0.65 * uSunsetFactor) * uDayFactor);
 
-           // Warm torch & glowstone emissive radiance
+           // Warm torch & glowstone emissive radiance (glows vibrantly day & night!)
            if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.72, 0.32) * vEmissive * 2.4;
+             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
            }
 
            // Sun-directional Atmospheric Aerial Perspective Haze (golden toward sun, misty sky away!)
@@ -194,6 +297,9 @@ export class World {
            atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
            gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
          } else {
+           if (vEmissive > 0.01) {
+             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
+           }
            #include <fog_fragment>
          }`
       );
@@ -521,6 +627,72 @@ export class World {
     this.scene.add(this.group);
 
     this.meshQueue = [];
+    this._spiralOffsets = [];
+    this._spiralDataOffsets = [];
+    this._spiralForRD = -1;
+
+    // Precomputed fast lookup tables for zero-overhead meshing inner loop
+    this._defTable = new Array(256);
+    this._solidTable = new Uint8Array(256);
+    this._transTable = new Uint8Array(256);
+    this._uvTable = new Array(256); // [blockId] -> Array(6) of UV objects
+    for (let id = 1; id < 256; id++) {
+      const def = getBlockDef(id);
+      if (!def) continue;
+      this._defTable[id] = def;
+      this._solidTable[id] = isBlockSolid(id) ? 1 : 0;
+      this._transTable[id] = isBlockTransparent(id) ? 1 : 0;
+      const faceUVs = new Array(6);
+      for (let fi = 0; fi < 6; fi++) {
+        const ft = FACES[fi].faceType;
+        const texName = def.faces[ft] || def.faces.all || def.faces.side;
+        faceUVs[fi] = this.textures.getUV(texName);
+      }
+      this._uvTable[id] = faceUVs;
+    }
+    this._bedTopUV = this.textures.getUV('bed_top');
+    this._bedSideUV = this.textures.getUV('bed_side');
+    this._bedWoodUV = this.textures.getUV('oak_planks');
+    this._bedRedUV = this.textures.getUV('wool_red');
+    this._bedWhiteUV = this.textures.getUV('wool_white');
+    this._torchWoodUV = this.textures.getUV('oak_planks');
+    this._torchCoalUV = this.textures.getUV('coal_ore');
+    this._torchGlowUV = this.textures.getUV('glowstone');
+
+    // Dynamic Placed Torch & Glowstone Lighting Pool (illuminates ground & walls at night!)
+    this.lightSources = new Map(); // "x,y,z" -> { x, y, z, isGlowstone }
+    this._lightDirty = true;
+    this._lightRefreshTimer = 0;
+    this._lightClock = 0;
+    this._activeLightSources = [];
+    this.torchLightPool = [];
+    for (let i = 0; i < 10; i++) {
+      const pl = new THREE.PointLight(0xffb44c, 0, 28, 1.0);
+      pl.castShadow = false;
+      this.group.add(pl);
+      this.torchLightPool.push(pl);
+    }
+  }
+
+  _ensureSpiralOffsets(r) {
+    if (this._spiralForRD === r) return;
+    this._spiralForRD = r;
+    const meshList = [];
+    const dataList = [];
+    const rMeshSq = (r + 0.5) * (r + 0.5);
+    const rData = r + 1;
+    const rDataSq = (rData + 0.5) * (rData + 0.5);
+    for (let dz = -rData; dz <= rData; dz++) {
+      for (let dx = -rData; dx <= rData; dx++) {
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= rDataSq) dataList.push({ dx, dz, d2 });
+        if (d2 <= rMeshSq) meshList.push({ dx, dz, d2 });
+      }
+    }
+    dataList.sort((a, b) => a.d2 - b.d2);
+    meshList.sort((a, b) => a.d2 - b.d2);
+    this._spiralDataOffsets = dataList;
+    this._spiralOffsets = meshList;
   }
 
   // Fast numeric integer key — ZERO string allocations in getBlock/raycast/meshing!
@@ -542,6 +714,68 @@ export class World {
     map.set(lx + (lz << 4) + (y << 8), blockId);
   }
 
+  // Single-pass combined Biome + Terrain Height sampler (eliminates duplicate 2D fbm calls!)
+  sampleColumn(wx, wz) {
+    if (this.worldType === 'flat') return { biome: 'Plains', height: 36 };
+
+    const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
+    const moist = this.moistureNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
+    const mountField = this.heightNoise.fbm2D(wx * 0.0038 + 50, wz * 0.0038 - 50, 3);
+
+    let biome = 'Plains';
+    if (mountField > 0.16) biome = 'Mountains';
+    else if (temp > 0.15 && moist < 0.03) biome = 'Desert';
+    else if (temp < -0.14) biome = 'Snowy Taiga';
+    else if (moist > 0.11) biome = temp > 0.0 ? 'Forest' : 'Birch Forest';
+
+    // 1. Continental elevation + smooth gentle rolling hills
+    const cont = this.heightNoise.fbm2D(wx * 0.0042, wz * 0.0042, 4);
+    const hills = this.heightNoise.fbm2D(wx * 0.015, wz * 0.015, 3);
+    const micro = this.heightNoise.noise2D(wx * 0.048, wz * 0.048) * 1.4;
+
+    // 2. Smooth continuous Mountain Massif Weight (seamless foothills -> high alpine peaks!)
+    const mRaw = Math.max(0, Math.min(1, (mountField - 0.02) / 0.34));
+    const mSmooth = mRaw * mRaw * (3 - 2 * mRaw);
+
+    let alpineBoost = 0;
+    if (mSmooth > 0.001) {
+      const warpX = this.biomeNoise.fbm2D(wx * 0.009 + 11, wz * 0.009 - 19, 2) * 28;
+      const warpZ = this.moistureNoise.fbm2D(wx * 0.009 - 27, wz * 0.009 + 33, 2) * 28;
+      const rx = wx + warpX;
+      const rz = wz + warpZ;
+
+      const r1 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.0085, rz * 0.0085) * 1.85);
+      const r2 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.019 + 41, rz * 0.019 - 17) * 1.85);
+      const r3 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.042 - 13, rz * 0.042 + 29) * 1.85);
+
+      const ridgeA = Math.pow(Math.max(0, r1), 1.75);
+      const ridgeB = Math.pow(Math.max(0, r2), 2.0) * (0.35 + 0.65 * ridgeA);
+      const ridgeC = Math.pow(Math.max(0, r3), 2.2) * (0.25 + 0.75 * ridgeB);
+
+      const foothill = mSmooth * 10.5;
+      const massif = (mSmooth * mSmooth) * (ridgeA * 34.0 + ridgeB * 14.0 + ridgeC * 4.5);
+      alpineBoost = foothill + massif;
+    }
+
+    // 3. Smooth meandering scenic rivers & natural lakeside basins
+    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.0052 + 200, wz * 0.0052 - 150, 3));
+    const riverT = riverRaw < 0.056 ? (1 - riverRaw / 0.056) : 0;
+    const riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 11.5 * (1 - mSmooth * 0.72);
+
+    const pondNoise = this.biomeNoise.fbm2D(wx * 0.011 - 90, wz * 0.011 + 110, 2);
+    const pondT = pondNoise < -0.24 ? Math.min(1, (-0.24 - pondNoise) / 0.22) : 0;
+    const pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 7.5 * (1 - mSmooth * 0.9);
+
+    // 4. Gentle Plains/Desert flattening + terraced forested meadow hills
+    const flatBlend = Math.max(0, Math.min(1, 1 - mSmooth * 1.8));
+    const hillAmp = (temp > 0.14 ? 4.0 : 6.4) * flatBlend + 3.0 * mSmooth;
+    const terrace = Math.sin(hills * 3.14159) * 0.45 * flatBlend;
+
+    const baseH = SEA_LEVEL + 4.8 + cont * 13.0 + (hills * hillAmp + terrace) + micro + alpineBoost - riverCarve - pondCarve;
+    const height = Math.max(8, Math.min(CHUNK_HEIGHT - 8, Math.floor(baseH)));
+    return { biome, height };
+  }
+
   getBiomeAt(wx, wz) {
     if (this.worldType === 'flat') return 'Plains';
     const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
@@ -555,60 +789,43 @@ export class World {
   }
 
   // Realistic Continuous Domain-Warped Terrain & Alpine Mountains (ZERO abrupt cliff seams!)
-  getTerrainHeight(wx, wz, biome = null) {
-    if (this.worldType === 'flat') return 36;
+  getTerrainHeight(wx, wz) {
+    return this.sampleColumn(wx, wz).height;
+  }
 
-    // 1. Continental elevation + smooth gentle rolling hills
-    const cont = this.heightNoise.fbm2D(wx * 0.0042, wz * 0.0042, 4);
-    const hills = this.heightNoise.fbm2D(wx * 0.015, wz * 0.015, 3);
-    const micro = this.heightNoise.noise2D(wx * 0.048, wz * 0.048) * 1.4;
+  // Guarantees new worlds spawn on safe, flat, scenic dry land with an open vista (NEVER underwater or facing a wall!)
+  findSafeSpawn(startX = 0.5, startZ = 0.5) {
+    if (this.worldType === 'flat') return { x: startX, z: startZ };
+    const isGood = (wx, wz) => {
+      // Avoid village terracing seams so spawn view is always clean open nature near the village
+      if (this.getVillageForChunk(wx >> 4, wz >> 4)) return false;
+      const col = this.sampleColumn(wx, wz);
+      const h = col.height;
+      if (h < SEA_LEVEL + 2 || h > 52) return false;
+      // Check surrounding flat meadow & open sightline ahead (-Z)
+      const hN = this.sampleColumn(wx, wz - 2).height;
+      const hN2 = this.sampleColumn(wx, wz - 5).height;
+      const hS = this.sampleColumn(wx, wz + 2).height;
+      const hE = this.sampleColumn(wx + 2, wz).height;
+      const hW = this.sampleColumn(wx - 2, wz).height;
+      if (hN <= SEA_LEVEL || hS <= SEA_LEVEL || hE <= SEA_LEVEL || hW <= SEA_LEVEL) return false;
+      if (Math.abs(hN - h) > 1 || Math.abs(hS - h) > 2 || Math.abs(hE - h) > 2 || Math.abs(hW - h) > 2) return false;
+      if (hN2 > h + 2) return false;
+      return true;
+    };
+    const bx = Math.floor(startX);
+    const bz = Math.floor(startZ);
+    if (isGood(bx, bz)) return { x: bx + 0.5, z: bz + 0.5 };
 
-    // 2. Smooth continuous Mountain Massif Weight (seamless foothills -> high alpine peaks!)
-    const mountField = this.heightNoise.fbm2D(wx * 0.0038 + 50, wz * 0.0038 - 50, 3);
-    const mRaw = Math.max(0, Math.min(1, (mountField - 0.02) / 0.34));
-    const mSmooth = mRaw * mRaw * (3 - 2 * mRaw); // smoothstep
-
-    // Domain warp bends mountain ridgelines into realistic sweeping alpine ranges & valleys!
-    let alpineBoost = 0;
-    if (mSmooth > 0.001) {
-      const warpX = this.biomeNoise.fbm2D(wx * 0.009 + 11, wz * 0.009 - 19, 2) * 28;
-      const warpZ = this.moistureNoise.fbm2D(wx * 0.009 - 27, wz * 0.009 + 33, 2) * 28;
-      const rx = wx + warpX;
-      const rz = wz + warpZ;
-
-      // 3-octave eroded ridged multifractal (broad massif + sharp sweeping ridges + rocky crags)
-      const r1 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.0085, rz * 0.0085) * 1.85);
-      const r2 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.019 + 41, rz * 0.019 - 17) * 1.85);
-      const r3 = 1.0 - Math.abs(this.heightNoise.noise2D(rx * 0.042 - 13, rz * 0.042 + 29) * 1.85);
-
-      const ridgeA = Math.pow(Math.max(0, r1), 1.75);
-      const ridgeB = Math.pow(Math.max(0, r2), 2.0) * (0.35 + 0.65 * ridgeA); // erosion weighting!
-      const ridgeC = Math.pow(Math.max(0, r3), 2.2) * (0.25 + 0.75 * ridgeB);
-
-      const foothill = mSmooth * 10.5;
-      const massif = (mSmooth * mSmooth) * (ridgeA * 34.0 + ridgeB * 14.0 + ridgeC * 4.5);
-      alpineBoost = foothill + massif;
+    for (let rad = 4; rad <= 128; rad += 4) {
+      for (let i = 0; i < 16; i++) {
+        const ang = (i / 16) * Math.PI * 2;
+        const wx = Math.floor(bx + Math.cos(ang) * rad);
+        const wz = Math.floor(bz + Math.sin(ang) * rad);
+        if (isGood(wx, wz)) return { x: wx + 0.5, z: wz + 0.5 };
+      }
     }
-
-    // 3. Smooth meandering scenic rivers & natural lakeside basins (like classic Minecraft!)
-    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.0052 + 200, wz * 0.0052 - 150, 3));
-    const riverT = riverRaw < 0.056 ? (1 - riverRaw / 0.056) : 0;
-    const riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 11.5 * (1 - mSmooth * 0.72);
-
-    // Occasional scenic meadow ponds / lake clearings in flat lowlands
-    const pondNoise = this.biomeNoise.fbm2D(wx * 0.011 - 90, wz * 0.011 + 110, 2);
-    const pondT = pondNoise < -0.24 ? Math.min(1, (-0.24 - pondNoise) / 0.22) : 0;
-    const pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 7.5 * (1 - mSmooth * 0.9);
-
-    // 4. Gentle Plains/Desert flattening + terraced forested meadow hills
-    const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
-    const flatBlend = Math.max(0, Math.min(1, 1 - mSmooth * 1.8));
-    const hillAmp = (temp > 0.14 ? 4.0 : 6.4) * flatBlend + 3.0 * mSmooth;
-    // Subtle Minecraft-style natural meadow terracing on moderate hills
-    const terrace = Math.sin(hills * 3.14159) * 0.45 * flatBlend;
-
-    const baseH = SEA_LEVEL + 4.8 + cont * 13.0 + (hills * hillAmp + terrace) + micro + alpineBoost - riverCarve - pondCarve;
-    return Math.max(8, Math.min(CHUNK_HEIGHT - 8, Math.floor(baseH)));
+    return { x: startX, z: startZ };
   }
 
   isVillageCenter(vcx, vcz) {
@@ -645,7 +862,7 @@ export class World {
   }
 
   // HUGE 3x3-Chunk (48x48 block!) Multi-District Living Village with Real Beds & Architecture!
-  buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, vInfo) {
+  buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, getLocal, vInfo) {
     const { vcx, vcz, dx: vdx, dz: vdz, baseY, biome } = vInfo;
     const isDesert = biome === 'Desert';
     const isSnow = biome === 'Snowy Taiga';
@@ -803,13 +1020,21 @@ export class World {
         setLocal(x0 - 1, baseY, midZ, BLOCK.COBBLESTONE);
       }
 
-      // Interior Furnishings: Torches, REAL 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
+      // Interior Furnishings: Torches, REAL 2-BLOCK-LONG 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
       setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
-      if (beds >= 1) setLocal(x0 + 1, baseY + 1, z0 + 1, BLOCK.BED);
-      if (beds >= 2 && w >= 6) setLocal(x0 + 2, baseY + 1, z0 + 1, BLOCK.BED);
+      if (beds >= 1) {
+        // Place a full 2-block-long × 1-block-wide bed (Head at z0+1, Foot at z0+2)
+        setLocal(x0 + 1, baseY + 1, z0 + 1, BLOCK.BED_HEAD_N);
+        setLocal(x0 + 1, baseY + 1, z0 + 2, BLOCK.BED);
+      }
+      if (beds >= 2 && w >= 6) {
+        setLocal(x0 + 2, baseY + 1, z0 + 1, BLOCK.BED_HEAD_N);
+        setLocal(x0 + 2, baseY + 1, z0 + 2, BLOCK.BED);
+      }
       if (twoStory) {
         for (let ly = 1; ly <= h + 1; ly++) setLocal(x0 + 1, baseY + ly, z0 + d - 2, BLOCK.LADDER);
-        setLocal(x0 + 2, baseY + h + 2, z0 + 1, BLOCK.BED);
+        setLocal(x0 + 2, baseY + h + 2, z0 + 1, BLOCK.BED_HEAD_N);
+        setLocal(x0 + 2, baseY + h + 2, z0 + 2, BLOCK.BED);
         setLocal(x0 + 1, baseY + h + 3, z0 + 1, BLOCK.TORCH);
       }
       if (furnace) setLocal(x0 + w - 2, baseY + 1, z0 + d - 2, BLOCK.FURNACE);
@@ -820,7 +1045,8 @@ export class World {
           setLocal(bx, baseY + 1, z0 + 1, BLOCK.BOOKSHELF);
           setLocal(bx, baseY + 2, z0 + 1, BLOCK.BOOKSHELF);
         }
-        setLocal(x0 + 1, baseY + 1, z0 + d - 2, BLOCK.BED);
+        setLocal(x0 + 1, baseY + 1, z0 + d - 2, BLOCK.BED_FOOT_E);
+        setLocal(x0 + 2, baseY + 1, z0 + d - 2, BLOCK.BED_HEAD_E);
       }
       if (chestTier) addLootChest(x0 + w - 2, baseY + 1, z0 + 2, chestTier);
 
@@ -882,7 +1108,8 @@ export class World {
       setLocal(12, baseY + 14, 3, BLOCK.GLOWSTONE);
       setLocal(12, baseY + 8, 3, BLOCK.GOLD_BLOCK);
       setLocal(12, baseY + 1, 5, BLOCK.AIR); setLocal(12, baseY + 2, 5, BLOCK.AIR);
-      setLocal(11, baseY + 1, 2, BLOCK.BED);
+      setLocal(11, baseY + 1, 2, BLOCK.BED_HEAD_N);
+      setLocal(11, baseY + 1, 3, BLOCK.BED);
 
       // Market Stalls with Colorful Wool Awnings (bottom quadrants!)
       const buildStall = (sx, sz, woolA, woolB) => {
@@ -993,92 +1220,153 @@ export class World {
     const oz = cz * CHUNK_SIZE;
 
     const heights = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
+    const padHeights = new Int16Array(18 * 18); // 1-block border padding for zero-recompute slope!
     const biomes = new Array(CHUNK_SIZE * CHUNK_SIZE);
+    let chunkPeakH = SEA_LEVEL;
 
-    // Precompute heightmap & biome map first so we can calculate real local terrain slope!
-    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        const wx = ox + lx;
-        const wz = oz + lz;
-        const biome = this.getBiomeAt(wx, wz);
-        biomes[lx + lz * CHUNK_SIZE] = biome;
-        heights[lx + lz * CHUNK_SIZE] = this.getTerrainHeight(wx, wz, biome);
+    // Precompute padded heightmap & biome map in a single noise pass
+    for (let pz = 0; pz < 18; pz++) {
+      const wz = oz + pz - 1;
+      for (let px = 0; px < 18; px++) {
+        const wx = ox + px - 1;
+        const col = this.sampleColumn(wx, wz);
+        padHeights[px + pz * 18] = col.height;
+        if (px >= 1 && px <= 16 && pz >= 1 && pz <= 16) {
+          const idx2 = (px - 1) + ((pz - 1) << 4);
+          biomes[idx2] = col.biome;
+          heights[idx2] = col.height;
+          if (col.height > chunkPeakH) chunkPeakH = col.height;
+        }
       }
     }
 
-    // 1. Base Terrain + Realistic Slope-Aware Alpine Geology + Caves + Ores
-    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        const wx = ox + lx;
-        const wz = oz + lz;
-        const idx2 = lx + lz * CHUNK_SIZE;
-        const biome = biomes[idx2];
-        const h = heights[idx2];
-
-        // Local terrain slope for realistic rocky cliffs & snow caps!
-        const hL = lx > 0 ? heights[idx2 - 1] : this.getTerrainHeight(wx - 1, wz);
-        const hR = lx < 15 ? heights[idx2 + 1] : this.getTerrainHeight(wx + 1, wz);
-        const hD = lz > 0 ? heights[idx2 - CHUNK_SIZE] : this.getTerrainHeight(wx, wz - 1);
-        const hU = lz < 15 ? heights[idx2 + CHUNK_SIZE] : this.getTerrainHeight(wx, wz + 1);
-        const slope = Math.max(Math.abs(h - hL), Math.abs(h - hR), Math.abs(h - hD), Math.abs(h - hU));
-
-        for (let y = 0; y < CHUNK_HEIGHT; y++) {
-          if (y === 0) {
-            setLocal(lx, y, lz, BLOCK.BEDROCK);
-            continue;
-          }
-
-          if (y <= h) {
-            // 3D Caves (not in flat mode)
-            if (this.worldType !== 'flat' && y > 3 && y < h - 3) {
-              const cv = this.caveNoise.noise3D(wx * 0.065, y * 0.085, wz * 0.065);
-              if (cv > 0.34) {
-                setLocal(lx, y, lz, BLOCK.AIR);
-                continue;
-              }
-            }
-
-            if (y === h) {
-              if (h < SEA_LEVEL + 1 && this.worldType !== 'flat') {
-                setLocal(lx, y, lz, (slope >= 2 && biome === 'Mountains') ? BLOCK.GRAVEL : BLOCK.SAND);
-              } else if (biome === 'Desert') {
-                setLocal(lx, y, lz, BLOCK.SAND);
-              } else if (slope >= 3 && h > SEA_LEVEL + 5) {
-                // Steep alpine cliff faces expose realistic bare stone!
-                setLocal(lx, y, lz, BLOCK.STONE);
-              } else if (h >= 58 || (biome === 'Snowy Taiga' && slope <= 2)) {
-                // Wind-swept snow caps on peaks & snowy taiga
-                setLocal(lx, y, lz, BLOCK.SNOW);
-              } else if (h >= 52 && slope >= 2) {
-                // Rocky scree transition below the snow line
-                setLocal(lx, y, lz, coordHash(wx, wz, this.seed + 41) > 0.65 ? BLOCK.GRAVEL : BLOCK.STONE);
-              } else {
-                setLocal(lx, y, lz, BLOCK.GRASS);
-              }
-            } else if (y >= h - 3) {
-              if (biome === 'Desert') setLocal(lx, y, lz, y >= h - 2 ? BLOCK.SAND : BLOCK.SANDSTONE);
-              else if (slope >= 3 || h >= 54) setLocal(lx, y, lz, BLOCK.STONE);
-              else setLocal(lx, y, lz, BLOCK.DIRT);
-            } else {
-              let blk = BLOCK.STONE;
-              if (this.worldType !== 'flat') {
-                const ov = this.oreNoise.noise3D(wx * 0.16, y * 0.16, wz * 0.16);
-                if (y < 16 && ov > 0.38) blk = BLOCK.DIAMOND_ORE;
-                else if (y < 26 && ov > 0.34) blk = BLOCK.GOLD_ORE;
-                else if (y < 44 && ov > 0.28) blk = BLOCK.IRON_ORE;
-                else if (ov < -0.27) blk = BLOCK.COAL_ORE;
-              }
-              setLocal(lx, y, lz, blk);
-            }
-          } else if (this.worldType !== 'flat' && y <= SEA_LEVEL) {
-            if (y === SEA_LEVEL && biome === 'Snowy Taiga') {
-              setLocal(lx, y, lz, BLOCK.ICE);
-            } else {
-              setLocal(lx, y, lz, BLOCK.WATER);
-            }
+    // Precompute coarse 4x4x4 3D cave noise grid (~400 samples instead of ~9,000 = 15x faster!)
+    const isFlat = this.worldType === 'flat';
+    const maxCaveCellY = isFlat ? 0 : Math.min(24, Math.ceil((chunkPeakH - 2) / 4));
+    if (!isFlat) {
+      for (let cy = 0; cy <= maxCaveCellY; cy++) {
+        const wy = cy * 4;
+        const yBase = cy * 25;
+        for (let czg = 0; czg < 5; czg++) {
+          const wz = oz + czg * 4;
+          const zBase = yBase + czg * 5;
+          for (let cxg = 0; cxg < 5; cxg++) {
+            const wx = ox + cxg * 4;
+            CAVE_GRID[zBase + cxg] = this.caveNoise.noise3D(wx * 0.065, wy * 0.085, wz * 0.065);
           }
         }
       }
+    }
+
+    // 1. Base Terrain + Realistic Slope-Aware Alpine Geology + Trilinear 3D Caves
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+      const gz = lz >> 2;
+      const fz = (lz & 3) * 0.25;
+      const wz = oz + lz;
+      const padRow = (lz + 1) * 18;
+      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+        const gx = lx >> 2;
+        const fx = (lx & 3) * 0.25;
+        const wx = ox + lx;
+        const idx2 = lx + (lz << 4);
+        const biome = biomes[idx2];
+        const h = heights[idx2];
+
+        const padIdx = padRow + (lx + 1);
+        const hL = padHeights[padIdx - 1];
+        const hR = padHeights[padIdx + 1];
+        const hD = padHeights[padIdx - 18];
+        const hU = padHeights[padIdx + 18];
+        const slope = Math.max(Math.abs(h - hL), Math.abs(h - hR), Math.abs(h - hD), Math.abs(h - hU));
+
+        const colBase = lx + (lz << 4);
+        const fillTopY = isFlat ? h : Math.max(h, SEA_LEVEL);
+        if (fillTopY > maxY) maxY = fillTopY;
+
+        data[colBase] = BLOCK.BEDROCK;
+
+        const caveMaxY = h - 3;
+        for (let y = 1; y <= h; y++) {
+          if (!isFlat && y > 3 && y < caveMaxY) {
+            const gy = y >> 2;
+            const fy = (y & 3) * 0.25;
+            const i000 = gy * 25 + gz * 5 + gx;
+            const i100 = i000 + 1;
+            const i010 = i000 + 5;
+            const i110 = i010 + 1;
+            const i001 = i000 + 25;
+            const i101 = i001 + 1;
+            const i011 = i001 + 5;
+            const i111 = i011 + 1;
+
+            const c00 = CAVE_GRID[i000] + (CAVE_GRID[i100] - CAVE_GRID[i000]) * fx;
+            const c10 = CAVE_GRID[i010] + (CAVE_GRID[i110] - CAVE_GRID[i010]) * fx;
+            const c01 = CAVE_GRID[i001] + (CAVE_GRID[i101] - CAVE_GRID[i001]) * fx;
+            const c11 = CAVE_GRID[i011] + (CAVE_GRID[i111] - CAVE_GRID[i011]) * fx;
+            const c0 = c00 + (c10 - c00) * fz;
+            const c1 = c01 + (c11 - c01) * fz;
+            if (c0 + (c1 - c0) * fy > 0.34) continue; // AIR (already 0!)
+          }
+
+          let blk;
+          if (y === h) {
+            if (h < SEA_LEVEL + 1 && !isFlat) {
+              blk = (slope >= 2 && biome === 'Mountains') ? BLOCK.GRAVEL : BLOCK.SAND;
+            } else if (biome === 'Desert') {
+              blk = BLOCK.SAND;
+            } else if (slope >= 3 && h > SEA_LEVEL + 5) {
+              blk = BLOCK.STONE;
+            } else if (h >= 58 || (biome === 'Snowy Taiga' && slope <= 2)) {
+              blk = BLOCK.SNOW;
+            } else if (h >= 52 && slope >= 2) {
+              blk = coordHash(wx, wz, this.seed + 41) > 0.65 ? BLOCK.GRAVEL : BLOCK.STONE;
+            } else {
+              blk = BLOCK.GRASS;
+            }
+          } else if (y >= h - 3) {
+            if (biome === 'Desert') blk = y >= h - 2 ? BLOCK.SAND : BLOCK.SANDSTONE;
+            else if (slope >= 3 || h >= 54) blk = BLOCK.STONE;
+            else blk = BLOCK.DIRT;
+          } else {
+            blk = BLOCK.STONE;
+          }
+          data[colBase + (y << 8)] = blk;
+        }
+
+        if (!isFlat && h < SEA_LEVEL) {
+          for (let y = h + 1; y <= SEA_LEVEL; y++) {
+            data[colBase + (y << 8)] = (y === SEA_LEVEL && biome === 'Snowy Taiga') ? BLOCK.ICE : BLOCK.WATER;
+          }
+        }
+      }
+    }
+
+    // 1b. Authentic Deterministic Minecraft Ore Veins (100x faster than 8,000 noise3D calls!)
+    if (!isFlat) {
+      const placeVeins = (blockId, count, minY, maxY, veinSize, salt) => {
+        for (let v = 0; v < count; v++) {
+          let vx = Math.floor(coordHash(cx * 31 + v, cz * 17 + salt, this.seed + salt) * 14) + 1;
+          let vz = Math.floor(coordHash(cx * 19 + salt, cz * 29 + v, this.seed + salt + 7) * 14) + 1;
+          let vy = minY + Math.floor(coordHash(cx + v * 7, cz - v * 11, this.seed + salt + 19) * (maxY - minY));
+          for (let s = 0; s < veinSize; s++) {
+            if (vx >= 0 && vx < 16 && vz >= 0 && vz < 16 && vy > 1 && vy < CHUNK_HEIGHT - 4) {
+              const idx = vx + (vz << 4) + (vy << 8);
+              if (data[idx] === BLOCK.STONE) data[idx] = blockId;
+            }
+            const step = Math.floor(coordHash(vx * 13 + s, vz * 23 + vy, this.seed + salt + 53) * 6);
+            if (step === 0) vx++;
+            else if (step === 1) vx--;
+            else if (step === 2) vz++;
+            else if (step === 3) vz--;
+            else if (step === 4) vy++;
+            else vy--;
+          }
+        }
+      };
+      placeVeins(BLOCK.COAL_ORE, 10, 6, 48, 7, 101);
+      placeVeins(BLOCK.IRON_ORE, 9, 4, 42, 6, 202);
+      placeVeins(BLOCK.GOLD_ORE, 4, 3, 25, 5, 303);
+      placeVeins(BLOCK.DIAMOND_ORE, 3, 2, 15, 4, 404);
     }
 
     // 2. Multi-Chunk Villages, Scenic Hilltop Watchtowers, OR Trees, Cacti, Lush Meadows & Wildflowers
@@ -1091,7 +1379,7 @@ export class World {
       coordHash(cx * 31, cz * 29, this.seed + 777) > 0.45;
 
     if (vInfo) {
-      this.buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, vInfo);
+      this.buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, getLocal, vInfo);
     } else if (isWatchtowerChunk) {
       const th = heights[8 + 8 * CHUNK_SIZE];
       const tb = biomes[8 + 8 * CHUNK_SIZE];
@@ -1242,7 +1530,7 @@ export class World {
       }
     }
 
-    const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true };
+    const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true, queued: false };
     this.chunks.set(key, chunk);
     return chunk;
   }
@@ -1271,16 +1559,25 @@ export class World {
     }
 
     // Clean up tile entities if broken
+    const bKey = `${x},${y},${z}`;
     if (blockId === BLOCK.AIR) {
-      this.chests.delete(`${x},${y},${z}`);
-      this.furnaces.delete(`${x},${y},${z}`);
-    } else if (blockId === BLOCK.CHEST && !this.chests.has(`${x},${y},${z}`)) {
-      this.chests.set(`${x},${y},${z}`, new Array(27).fill(null));
-    } else if (blockId === BLOCK.FURNACE && !this.furnaces.has(`${x},${y},${z}`)) {
-      this.furnaces.set(`${x},${y},${z}`, {
+      this.chests.delete(bKey);
+      this.furnaces.delete(bKey);
+    } else if (blockId === BLOCK.CHEST && !this.chests.has(bKey)) {
+      this.chests.set(bKey, new Array(27).fill(null));
+    } else if (blockId === BLOCK.FURNACE && !this.furnaces.has(bKey)) {
+      this.furnaces.set(bKey, {
         input: null, fuel: null, output: null,
         burnTime: 0, burnMax: 0, cookTime: 0
       });
+    }
+
+    // Track placed/removed light-emitting blocks for real dynamic PointLights
+    if (blockId === BLOCK.TORCH || blockId === BLOCK.GLOWSTONE) {
+      this.lightSources.set(bKey, { x, y, z, isGlowstone: blockId === BLOCK.GLOWSTONE });
+      this._lightDirty = true;
+    } else if (this.lightSources.delete(bKey)) {
+      this._lightDirty = true;
     }
 
     const cx = x >> 4;
@@ -1303,9 +1600,13 @@ export class World {
 
   markDirty(cx, cz) {
     const c = this.chunks.get(this.chunkKey(cx, cz));
-    if (c && !c.dirty) {
+    if (c) {
       c.dirty = true;
-      this.meshQueue.push(c);
+      if (!c.queued) {
+        c.queued = true;
+        // Player block edits jump straight to the front for instant 0-latency feedback!
+        this.meshQueue.unshift(c);
+      }
     }
   }
 
@@ -1317,19 +1618,33 @@ export class World {
     }
     chunk.meshes = [];
     chunk.dirty = false;
+    chunk.queued = false;
+    chunk.meshed = true;
 
-    const buckets = {
-      opaque: { pos: [], norm: [], uv: [], col: [], idx: [] },
-      cutout: { pos: [], norm: [], uv: [], col: [], idx: [] },
-      staticCutout: { pos: [], norm: [], uv: [], col: [], idx: [] },
-      water: { pos: [], norm: [], uv: [], col: [], idx: [] }
-    };
+    // Refresh light-emitting block registry for this chunk
+    if (chunk.lightKeys) {
+      for (const lk of chunk.lightKeys) this.lightSources.delete(lk);
+    }
+    chunk.lightKeys = [];
+
+    const bOpaque = SCRATCH_BUCKETS.opaque;
+    const bCutout = SCRATCH_BUCKETS.cutout;
+    const bStatic = SCRATCH_BUCKETS.staticCutout;
+    const bWater = SCRATCH_BUCKETS.water;
+    bOpaque.reset();
+    bCutout.reset();
+    bStatic.reset();
+    bWater.reset();
 
     const cx = chunk.cx;
     const cz = chunk.cz;
     const ox = cx << 4;
     const oz = cz << 4;
     const data = chunk.data;
+    const defTable = this._defTable;
+    const solidTable = this._solidTable;
+    const transTable = this._transTable;
+    const uvTable = this._uvTable;
 
     // Pre-fetch 3x3 neighbor chunk Uint8Arrays ONCE -> ZERO Map/string lookups in the inner loop!
     const getNbr = (dcx, dcz) => {
@@ -1357,6 +1672,9 @@ export class World {
     };
 
     const yLimit = Math.min(CHUNK_HEIGHT - 1, (chunk.maxY || CHUNK_HEIGHT - 1) + 1);
+    const bedTopUV = this._bedTopUV;
+    const bedSideUV = this._bedSideUV;
+    const bedWoodUV = this._bedWoodUV;
 
     for (let y = 0; y <= yLimit; y++) {
       const yOff = y << 8;
@@ -1366,70 +1684,147 @@ export class World {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
           const id = data[lx + zOff + yOff];
           if (id === 0) continue;
-          const def = getBlockDef(id);
+          const def = defTable[id];
           if (!def) continue;
 
           const wx = ox + lx;
 
-          // Custom Sculpted 3D Bed Geometry (4 oak legs + quilted red mattress + raised white pillow!)
-          if (id === BLOCK.BED) {
-            const b = buckets.opaque;
-            const topUV = this.textures.getUV('bed_top');
-            const sideUV = this.textures.getUV('bed_side');
-            const woodUV = this.textures.getUV('oak_planks');
+          // Register light-emitting blocks (placed OR generated village torches / glowstone!)
+          if (id === BLOCK.TORCH || id === BLOCK.GLOWSTONE) {
+            const lKey = `${wx},${y},${wz}`;
+            chunk.lightKeys.push(lKey);
+            this.lightSources.set(lKey, { x: wx, y, z: wz, isGlowstone: id === BLOCK.GLOWSTONE });
+          }
+
+          // True 2-Block-Long × 1-Block-Wide Sculpted 3D Bed Geometry (Seamless Head + Foot Halves!)
+          if (isBedBlock(id)) {
+            const info = getBedInfo(id);
+            const bedRedUV = this._bedRedUV;
+            const bedWhiteUV = this._bedWhiteUV;
             const addBox = (x0, y0, z0, x1, y1, z1, uTop, uSide, uBot) => {
-              const boxFaces = [
-                { n: [0, 1, 0], sh: 1.0, uv: uTop, pts: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
-                { n: [0, -1, 0], sh: 0.58, uv: uBot, pts: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
-                { n: [1, 0, 0], sh: 0.84, uv: uSide, pts: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
-                { n: [-1, 0, 0], sh: 0.84, uv: uSide, pts: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
-                { n: [0, 0, 1], sh: 0.74, uv: uSide, pts: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
-                { n: [0, 0, -1], sh: 0.74, uv: uSide, pts: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] }
-              ];
-              for (const f of boxFaces) {
-                const baseIdx = b.pos.length / 3;
-                const u = f.uv;
-                for (let pi = 0; pi < 4; pi++) {
-                  const pt = f.pts[pi];
-                  b.pos.push(wx + pt[0], y + pt[1], wz + pt[2]);
-                  b.norm.push(f.n[0], f.n[1], f.n[2]);
-                  b.col.push(f.sh, f.sh, f.sh);
-                }
-                b.uv.push(u.u0, u.v0, u.u1, u.v0, u.u1, u.v1, u.u0, u.v1);
-                b.idx.push(baseIdx, baseIdx + 1, baseIdx + 2, baseIdx, baseIdx + 2, baseIdx + 3);
-              }
+              const bx0 = wx + x0, by0 = y + y0, bz0 = wz + z0;
+              const bx1 = wx + x1, by1 = y + y1, bz1 = wz + z1;
+              bOpaque.pushQuad(bx0,by1,bz1,uTop.u0,uTop.v0,1.0, bx1,by1,bz1,uTop.u1,uTop.v0,1.0, bx1,by1,bz0,uTop.u1,uTop.v1,1.0, bx0,by1,bz0,uTop.u0,uTop.v1,1.0, 0,1,0);
+              bOpaque.pushQuad(bx0,by0,bz0,uBot.u0,uBot.v0,0.58, bx1,by0,bz0,uBot.u1,uBot.v0,0.58, bx1,by0,bz1,uBot.u1,uBot.v1,0.58, bx0,by0,bz1,uBot.u0,uBot.v1,0.58, 0,-1,0);
+              bOpaque.pushQuad(bx1,by0,bz1,uSide.u0,uSide.v0,0.84, bx1,by0,bz0,uSide.u1,uSide.v0,0.84, bx1,by1,bz0,uSide.u1,uSide.v1,0.84, bx1,by1,bz1,uSide.u0,uSide.v1,0.84, 1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz0,uSide.u0,uSide.v0,0.84, bx0,by0,bz1,uSide.u1,uSide.v0,0.84, bx0,by1,bz1,uSide.u1,uSide.v1,0.84, bx0,by1,bz0,uSide.u0,uSide.v1,0.84, -1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz1,uSide.u0,uSide.v0,0.74, bx1,by0,bz1,uSide.u1,uSide.v0,0.74, bx1,by1,bz1,uSide.u1,uSide.v1,0.74, bx0,by1,bz1,uSide.u0,uSide.v1,0.74, 0,0,1);
+              bOpaque.pushQuad(bx1,by0,bz0,uSide.u0,uSide.v0,0.74, bx0,by0,bz0,uSide.u1,uSide.v0,0.74, bx0,by1,bz0,uSide.u1,uSide.v1,0.74, bx1,by1,bz0,uSide.u0,uSide.v1,0.74, 0,0,-1);
             };
-            // Mattress + blanket
-            addBox(0.02, 0.22, 0.02, 0.98, 0.56, 0.98, topUV, sideUV, woodUV);
-            // 4 oak wooden legs
-            addBox(0.04, 0.0, 0.04, 0.22, 0.22, 0.22, woodUV, woodUV, woodUV);
-            addBox(0.78, 0.0, 0.04, 0.96, 0.22, 0.22, woodUV, woodUV, woodUV);
-            addBox(0.04, 0.0, 0.78, 0.22, 0.22, 0.96, woodUV, woodUV, woodUV);
-            addBox(0.78, 0.0, 0.78, 0.96, 0.22, 0.96, woodUV, woodUV, woodUV);
+            // Local coordinates: u = across width [0..1], v = along length from join edge (0) to outer end (1)
+            const addBedOriented = (u0, y0, v0, u1, y1, v1, uTop, uSide, uBot) => {
+              // dir is toward Head; partner is at (dx, dz). So join edge is toward (dx, dz) and outer edge is away!
+              let x0, x1, z0, z1;
+              if (info.dx === 0 && info.dz === -1) {
+                // Partner is at -Z (join at z=0, outer at z=1)
+                x0 = u0; x1 = u1; z0 = v0; z1 = v1;
+              } else if (info.dx === 0 && info.dz === 1) {
+                // Partner is at +Z (join at z=1, outer at z=0)
+                x0 = u0; x1 = u1; z0 = 1 - v1; z1 = 1 - v0;
+              } else if (info.dx === 1 && info.dz === 0) {
+                // Partner is at +X (join at x=1, outer at x=0)
+                x0 = 1 - v1; x1 = 1 - v0; z0 = u0; z1 = u1;
+              } else {
+                // Partner is at -X (join at x=0, outer at x=1)
+                x0 = v0; x1 = v1; z0 = u0; z1 = u1;
+              }
+              addBox(x0, y0, z0, x1, y1, z1, uTop, uSide, uBot);
+            };
+
+            // 1. Sturdy Oak Bedframe Base (seamless join at v=0, clean 0.96 width!)
+            addBedOriented(0.02, 0.20, 0.0, 0.98, 0.34, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
+            // 2. Two Oak Legs at the outer corners of this half
+            addBedOriented(0.04, 0.0, 0.80, 0.22, 0.20, 0.96, bedWoodUV, bedWoodUV, bedWoodUV);
+            addBedOriented(0.78, 0.0, 0.80, 0.96, 0.20, 0.96, bedWoodUV, bedWoodUV, bedWoodUV);
+
+            if (info.isHead) {
+              // HEAD HALF: Red blanket meeting join + folded white sheet + plush raised white pillow + oak headboard!
+              addBedOriented(0.02, 0.34, 0.0, 0.98, 0.56, 0.32, bedRedUV, bedRedUV, bedWoodUV);
+              addBedOriented(0.02, 0.34, 0.32, 0.98, 0.57, 0.94, bedWhiteUV, bedWhiteUV, bedWoodUV);
+              // Raised sculpted fluffy white pillow!
+              addBedOriented(0.10, 0.57, 0.44, 0.90, 0.69, 0.88, bedWhiteUV, bedWhiteUV, bedWhiteUV);
+              // Subtle oak headboard rim at outer head end
+              addBedOriented(0.02, 0.34, 0.92, 0.98, 0.66, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
+            } else {
+              // FOOT HALF: Full plush quilted crimson wool blanket + subtle footboard trim!
+              addBedOriented(0.02, 0.34, 0.0, 0.98, 0.56, 0.96, bedRedUV, bedRedUV, bedWoodUV);
+              addBedOriented(0.02, 0.20, 0.94, 0.98, 0.46, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
+            }
             continue;
           }
 
-          // Cross-quad blocks (flowers, tall grass sway; torches & ladders stay static!)
+          // Sculpted 3D Voxel Torch Model (wooden shaft + charred ember collar + blazing emissive flame tip + auto wall-mount tilt!)
+          if (id === BLOCK.TORCH) {
+            const hasFloor = solidTable[fastGet(lx, y - 1, lz)] === 1;
+            let tiltX = 0, tiltZ = 0, offX = 0, offY = 0, offZ = 0;
+            if (!hasFloor) {
+              // Automatically attach & angle off an adjacent solid wall block!
+              if (solidTable[fastGet(lx - 1, y, lz)] === 1) { offX = -0.34; offY = 0.16; tiltX = 0.34; }
+              else if (solidTable[fastGet(lx + 1, y, lz)] === 1) { offX = 0.34; offY = 0.16; tiltX = -0.34; }
+              else if (solidTable[fastGet(lx, y, lz - 1)] === 1) { offZ = -0.34; offY = 0.16; tiltZ = 0.34; }
+              else if (solidTable[fastGet(lx, y, lz + 1)] === 1) { offZ = 0.34; offY = 0.16; tiltZ = -0.34; }
+            }
+
+            const addTorchBox = (x0, y0, z0, x1, y1, z1, uv, sTop, sSide, sBot) => {
+              const tx0 = tiltX * y0 + offX, tz0 = tiltZ * y0 + offZ;
+              const tx1 = tiltX * y1 + offX, tz1 = tiltZ * y1 + offZ;
+              const bx00 = wx + x0 + tx0, bx10 = wx + x1 + tx0;
+              const bz00 = wz + z0 + tz0, bz10 = wz + z1 + tz0;
+              const bx01 = wx + x0 + tx1, bx11 = wx + x1 + tx1;
+              const bz01 = wz + z0 + tz1, bz11 = wz + z1 + tz1;
+              const by0 = y + y0 + offY, by1 = y + y1 + offY;
+              // Top & Bottom
+              bOpaque.pushQuad(bx01,by1,bz11,uv.u0,uv.v0,sTop, bx11,by1,bz11,uv.u1,uv.v0,sTop, bx11,by1,bz01,uv.u1,uv.v1,sTop, bx01,by1,bz01,uv.u0,uv.v1,sTop, 0,1,0);
+              bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sBot, bx10,by0,bz00,uv.u1,uv.v0,sBot, bx10,by0,bz10,uv.u1,uv.v1,sBot, bx00,by0,bz10,uv.u0,uv.v1,sBot, 0,-1,0);
+              // +X & -X sides
+              bOpaque.pushQuad(bx10,by0,bz10,uv.u0,uv.v0,sSide, bx10,by0,bz00,uv.u1,uv.v0,sSide, bx11,by1,bz01,uv.u1,uv.v1,sSide, bx11,by1,bz11,uv.u0,uv.v1,sSide, 1,0,0);
+              bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sSide, bx00,by0,bz10,uv.u1,uv.v0,sSide, bx01,by1,bz11,uv.u1,uv.v1,sSide, bx01,by1,bz01,uv.u0,uv.v1,sSide, -1,0,0);
+              // +Z & -Z sides
+              bOpaque.pushQuad(bx00,by0,bz10,uv.u0,uv.v0,sSide * 0.94, bx10,by0,bz10,uv.u1,uv.v0,sSide * 0.94, bx11,by1,bz11,uv.u1,uv.v1,sSide * 0.94, bx01,by1,bz11,uv.u0,uv.v1,sSide * 0.94, 0,0,1);
+              bOpaque.pushQuad(bx10,by0,bz00,uv.u0,uv.v0,sSide * 0.94, bx00,by0,bz00,uv.u1,uv.v0,sSide * 0.94, bx01,by1,bz01,uv.u1,uv.v1,sSide * 0.94, bx11,by1,bz01,uv.u0,uv.v1,sSide * 0.94, 0,0,-1);
+            };
+
+            const woodUV = this._torchWoodUV;
+            const coalUV = this._torchCoalUV;
+            const glowUV = this._torchGlowUV;
+            // 1. Grounded Oak Base Foot (on floor torches)
+            if (hasFloor) {
+              addTorchBox(0.39, 0.0, 0.39, 0.61, 0.06, 0.61, woodUV, 0.9, 0.78, 0.58);
+            }
+            // 2. Sturdy Oak Wooden Handle Shaft
+            addTorchBox(0.425, 0.0, 0.425, 0.575, 0.54, 0.575, woodUV, 0.95, 0.86, 0.62);
+            // 3. Dark Charred Coal/Iron Ember Collar
+            addTorchBox(0.405, 0.53, 0.405, 0.595, 0.63, 0.595, coalUV, 0.55, 0.46, 0.38);
+            // 4. Glowing Amber-Orange Torch Head (emissive!)
+            addTorchBox(0.415, 0.63, 0.415, 0.585, 0.77, 0.585, glowUV, 1.54, 1.48, 1.32);
+            // 5. Blazing Sculpted Inner Flame Core & Tapered Crown Tip (super-emissive!)
+            addTorchBox(0.445, 0.77, 0.445, 0.555, 0.88, 0.555, glowUV, 1.72, 1.66, 1.5);
+            addTorchBox(0.47, 0.88, 0.47, 0.53, 0.96, 0.53, glowUV, 1.82, 1.76, 1.6);
+            continue;
+          }
+
+          // Cross-quad blocks (flowers, tall grass sway; ladders stay static!)
           if (def.cross) {
             const isStaticCross = id === BLOCK.TORCH || id === BLOCK.LADDER;
-            const b = isStaticCross ? buckets.staticCutout : buckets.cutout;
-            const uv = this.textures.getUV(def.faces.all);
+            const b = isStaticCross ? bStatic : bCutout;
+            const uv = uvTable[id][0];
             const shade = def.light > 0 ? 1.18 : 0.94;
-            const yBase = isStaticCross ? 0.0 : 0.02;
-            const quads = [
-              [[0.15, yBase, 0.15, 0, 0], [0.85, yBase, 0.85, 1, 0], [0.85, 0.9, 0.85, 1, 1], [0.15, 0.9, 0.15, 0, 1]],
-              [[0.15, yBase, 0.85, 0, 0], [0.85, yBase, 0.15, 1, 0], [0.85, 0.9, 0.15, 1, 1], [0.15, 0.9, 0.85, 0, 1]]
-            ];
-            for (const q of quads) {
-              const baseIdx = b.pos.length / 3;
-              for (const [qx, qy, qz, u, v] of q) {
-                b.pos.push(wx + qx, y + qy, wz + qz);
-                b.norm.push(0, 1, 0);
-                b.uv.push(u ? uv.u1 : uv.u0, v ? uv.v1 : uv.v0);
-                b.col.push(shade, shade, shade);
-              }
-              b.idx.push(baseIdx, baseIdx + 1, baseIdx + 2, baseIdx, baseIdx + 2, baseIdx + 3);
-            }
+            const y0 = y + (isStaticCross ? 0.0 : 0.02);
+            const y1 = y + 0.9;
+            b.pushQuad(
+              wx + 0.15, y0, wz + 0.15, uv.u0, uv.v0, shade,
+              wx + 0.85, y0, wz + 0.85, uv.u1, uv.v0, shade,
+              wx + 0.85, y1, wz + 0.85, uv.u1, uv.v1, shade,
+              wx + 0.15, y1, wz + 0.15, uv.u0, uv.v1, shade,
+              0, 1, 0
+            );
+            b.pushQuad(
+              wx + 0.15, y0, wz + 0.85, uv.u0, uv.v0, shade,
+              wx + 0.85, y0, wz + 0.15, uv.u1, uv.v0, shade,
+              wx + 0.85, y1, wz + 0.15, uv.u1, uv.v1, shade,
+              wx + 0.15, y1, wz + 0.85, uv.u0, uv.v1, shade,
+              0, 1, 0
+            );
             continue;
           }
 
@@ -1437,75 +1832,97 @@ export class World {
           const isStaticCutout = id === BLOCK.GLASS || id === BLOCK.ICE;
           const isCutout = !isWater && !isStaticCutout && def.transparent;
           const b = isWater
-            ? buckets.water
-            : (isStaticCutout ? buckets.staticCutout : (isCutout ? buckets.cutout : buckets.opaque));
+            ? bWater
+            : (isStaticCutout ? bStatic : (isCutout ? bCutout : bOpaque));
           const waterTopLower = isWater && fastGet(lx, y + 1, lz) !== BLOCK.WATER;
+          const faceUVs = uvTable[id];
+          const lightBoost = def.light > 0 ? 1.18 : 1.0;
 
           for (let fi = 0; fi < 6; fi++) {
             const face = FACES[fi];
-            const nlx = lx + face.dir[0];
-            const ny = y + face.dir[1];
-            const nlz = lz + face.dir[2];
+            const dx0 = face.dir[0];
+            const dy0 = face.dir[1];
+            const dz0 = face.dir[2];
+            const nlx = lx + dx0;
+            const ny = y + dy0;
+            const nlz = lz + dz0;
             const neighbor = fastGet(nlx, ny, nlz);
 
-            // Culling logic
+            // Fast culling via lookup table
             if (isWater) {
-              if (neighbor === BLOCK.WATER || (neighbor !== 0 && !isBlockTransparent(neighbor))) continue;
+              if (neighbor === BLOCK.WATER || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
             } else if (isCutout || isStaticCutout) {
-              if (neighbor === id && (id === BLOCK.GLASS || id === BLOCK.ICE)) continue;
-              if (neighbor !== 0 && !isBlockTransparent(neighbor)) continue;
+              if (neighbor === id && isStaticCutout) continue;
+              if (neighbor !== 0 && transTable[neighbor] === 0) continue;
             } else {
-              if (neighbor !== 0 && !isBlockTransparent(neighbor)) continue;
+              if (neighbor !== 0 && transTable[neighbor] === 0) continue;
             }
 
-            const texName = def.faces[face.faceType] || def.faces.all || def.faces.side;
-            const uv = this.textures.getUV(texName);
-            const baseIdx = b.pos.length / 3;
-            const lightBoost = def.light > 0 ? 1.18 : 1.0;
+            const uv = faceUVs[fi];
+            const c0 = face.corners[0];
+            const c1 = face.corners[1];
+            const c2 = face.corners[2];
+            const c3 = face.corners[3];
+            const baseShade = face.shade * lightBoost;
 
-            for (let ci = 0; ci < 4; ci++) {
-              const [cx0, cy0, cz0, u, v] = face.corners[ci];
-              const py = (waterTopLower && cy0 === 1) ? y + 0.88 : y + cy0;
-              b.pos.push(wx + cx0, py, wz + cz0);
-              b.norm.push(face.dir[0], face.dir[1], face.dir[2]);
-              b.uv.push(u ? uv.u1 : uv.u0, v ? uv.v1 : uv.v0);
-
-              let ao = 1.0;
-              if (!isWater) {
-                let occ = 0;
-                if (face.faceType === 'top') {
-                  const dx = cx0 === 0 ? -1 : 1;
-                  const dz = cz0 === 0 ? -1 : 1;
-                  if (isBlockSolid(fastGet(lx + dx, y + 1, lz))) occ++;
-                  if (isBlockSolid(fastGet(lx, y + 1, lz + dz))) occ++;
-                  if (isBlockSolid(fastGet(lx + dx, y + 1, lz + dz))) occ++;
-                } else if (face.faceType === 'side') {
-                  const dy = cy0 === 0 ? -1 : 1;
-                  const sdx = face.dir[0] === 0 ? (cx0 === 0 ? -1 : 1) : 0;
-                  const sdz = face.dir[2] === 0 ? (cz0 === 0 ? -1 : 1) : 0;
-                  if (isBlockSolid(fastGet(nlx, y + dy, nlz))) occ++;
-                  if (isBlockSolid(fastGet(nlx + sdx, y, nlz + sdz))) occ++;
-                  if (isBlockSolid(fastGet(nlx + sdx, y + dy, nlz + sdz))) occ++;
-                }
-                ao = 1.0 - occ * 0.12;
-              }
-              const s = Math.min(1.2, face.shade * ao * lightBoost);
-              b.col.push(s, s, s);
+            let s0, s1, s2, s3;
+            if (isWater || fi === 1) {
+              const s = baseShade > 1.2 ? 1.2 : baseShade;
+              s0 = s1 = s2 = s3 = s;
+            } else if (fi === 0) {
+              // Top face AO (inlined!)
+              const y1 = y + 1;
+              const calcTop = (cx0, cz0) => {
+                const ddx = cx0 === 0 ? -1 : 1;
+                const ddz = cz0 === 0 ? -1 : 1;
+                const occ = solidTable[fastGet(lx + ddx, y1, lz)]
+                  + solidTable[fastGet(lx, y1, lz + ddz)]
+                  + solidTable[fastGet(lx + ddx, y1, lz + ddz)];
+                const v = baseShade * (1.0 - occ * 0.12);
+                return v > 1.2 ? 1.2 : v;
+              };
+              s0 = calcTop(c0[0], c0[2]);
+              s1 = calcTop(c1[0], c1[2]);
+              s2 = calcTop(c2[0], c2[2]);
+              s3 = calcTop(c3[0], c3[2]);
+            } else {
+              // Side face AO (inlined!)
+              const calcSide = (cx0, cy0, cz0) => {
+                const ddy = cy0 === 0 ? -1 : 1;
+                const sdx = dx0 === 0 ? (cx0 === 0 ? -1 : 1) : 0;
+                const sdz = dz0 === 0 ? (cz0 === 0 ? -1 : 1) : 0;
+                const occ = solidTable[fastGet(nlx, y + ddy, nlz)]
+                  + solidTable[fastGet(nlx + sdx, y, nlz + sdz)]
+                  + solidTable[fastGet(nlx + sdx, y + ddy, nlz + sdz)];
+                const v = baseShade * (1.0 - occ * 0.12);
+                return v > 1.2 ? 1.2 : v;
+              };
+              s0 = calcSide(c0[0], c0[1], c0[2]);
+              s1 = calcSide(c1[0], c1[1], c1[2]);
+              s2 = calcSide(c2[0], c2[1], c2[2]);
+              s3 = calcSide(c3[0], c3[1], c3[2]);
             }
-            b.idx.push(baseIdx, baseIdx + 1, baseIdx + 2, baseIdx, baseIdx + 2, baseIdx + 3);
+
+            const py0 = (waterTopLower && c0[1] === 1) ? y + 0.88 : y + c0[1];
+            const py1 = (waterTopLower && c1[1] === 1) ? y + 0.88 : y + c1[1];
+            const py2 = (waterTopLower && c2[1] === 1) ? y + 0.88 : y + c2[1];
+            const py3 = (waterTopLower && c3[1] === 1) ? y + 0.88 : y + c3[1];
+
+            b.pushQuad(
+              wx + c0[0], py0, wz + c0[2], c0[3] ? uv.u1 : uv.u0, c0[4] ? uv.v1 : uv.v0, s0,
+              wx + c1[0], py1, wz + c1[2], c1[3] ? uv.u1 : uv.u0, c1[4] ? uv.v1 : uv.v0, s1,
+              wx + c2[0], py2, wz + c2[2], c2[3] ? uv.u1 : uv.u0, c2[4] ? uv.v1 : uv.v0, s2,
+              wx + c3[0], py3, wz + c3[2], c3[3] ? uv.u1 : uv.u0, c3[4] ? uv.v1 : uv.v0, s3,
+              dx0, dy0, dz0
+            );
           }
         }
       }
     }
 
     const addBucket = (bucket, mat, renderOrder = 0, shadows = false) => {
-      if (bucket.pos.length === 0) return;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(bucket.pos, 3));
-      geo.setAttribute('normal', new THREE.Float32BufferAttribute(bucket.norm, 3));
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(bucket.uv, 2));
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(bucket.col, 3));
-      geo.setIndex(bucket.idx);
+      const geo = bucket.toGeometry();
+      if (!geo) return;
       const mesh = new THREE.Mesh(geo, mat);
       mesh.renderOrder = renderOrder;
       mesh.frustumCulled = true;
@@ -1515,10 +1932,11 @@ export class World {
       chunk.meshes.push(mesh);
     };
 
-    addBucket(buckets.opaque, this.opaqueMat, 0, true);
-    addBucket(buckets.cutout, this.cutoutMat, 1, false);
-    addBucket(buckets.staticCutout, this.staticCutoutMat, 1, false);
-    addBucket(buckets.water, this.waterMat, 2, false);
+    addBucket(bOpaque, this.opaqueMat, 0, true);
+    addBucket(bCutout, this.cutoutMat, 1, false);
+    addBucket(bStatic, this.staticCutoutMat, 1, false);
+    addBucket(bWater, this.waterMat, 2, false);
+    if (chunk.lightKeys.length > 0) this._lightDirty = true;
   }
 
   setShaderMode(mode) {
@@ -1559,10 +1977,32 @@ export class World {
     }
   }
 
-  updateChunksAround(px, pz, maxBuildsPerFrame = 3) {
+  _hasCardinalNeighbors(cx, cz) {
+    return (
+      this.chunks.has(this.chunkKey(cx + 1, cz)) &&
+      this.chunks.has(this.chunkKey(cx - 1, cz)) &&
+      this.chunks.has(this.chunkKey(cx, cz + 1)) &&
+      this.chunks.has(this.chunkKey(cx, cz - 1))
+    );
+  }
+
+  _tryQueueChunkForMesh(cx, cz, pcx, pcz, rSq) {
+    const c = this.chunks.get(this.chunkKey(cx, cz));
+    if (!c || !c.dirty || c.queued) return;
+    const dx = cx - pcx;
+    const dz = cz - pcz;
+    if (dx * dx + dz * dz > rSq) return;
+    if (this._hasCardinalNeighbors(cx, cz)) {
+      c.queued = true;
+      this.meshQueue.push(c);
+    }
+  }
+
+  updateChunksAround(px, pz, maxBuildsPerFrame = 2, budgetMs = 4.0) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const r = this.renderDistance;
+    this._ensureSpiralOffsets(r);
 
     const movedChunk = pcx !== this._lastChunkPcx || pcz !== this._lastChunkPcz || r !== this._lastChunkRD;
     if (movedChunk) {
@@ -1570,39 +2010,57 @@ export class World {
       this._lastChunkPcz = pcz;
       this._lastChunkRD = r;
       this._chunksAllLoaded = false;
+      this._spiralCursor = 0;
     }
 
-    // 1. Only scan spiral grid when still streaming chunks or after crossing a chunk border!
+    const tStart = performance.now();
+    const rMeshSq = (r + 0.5) * (r + 0.5);
+
+    // 1. Stream missing chunk voxel data in pre-sorted spiral order under strict frame budget!
     if (!this._chunksAllLoaded) {
-      const needed = [];
-      const rSq = (r + 0.5) * (r + 0.5);
-      for (let dz = -r; dz <= r; dz++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const d2 = dx * dx + dz * dz;
-          if (d2 > rSq) continue;
-          const cx = pcx + dx;
-          const cz = pcz + dz;
-          if (!this.chunks.has(this.chunkKey(cx, cz))) {
-            needed.push({ cx, cz, dist: d2 });
+      const dataOffsets = this._spiralDataOffsets;
+      let cursor = this._spiralCursor || 0;
+      let generated = 0;
+      const maxGen = r > 8 ? 3 : 2;
+      const genBudget = budgetMs * 0.52;
+
+      while (cursor < dataOffsets.length) {
+        const off = dataOffsets[cursor];
+        const cx = pcx + off.dx;
+        const cz = pcz + off.dz;
+        const ck = this.chunkKey(cx, cz);
+        if (!this.chunks.has(ck)) {
+          this.generateChunk(cx, cz);
+          generated++;
+          // Check if this chunk or any cardinal neighbor now has all 4 neighbors ready to mesh
+          this._tryQueueChunkForMesh(cx, cz, pcx, pcz, rMeshSq);
+          this._tryQueueChunkForMesh(cx + 1, cz, pcx, pcz, rMeshSq);
+          this._tryQueueChunkForMesh(cx - 1, cz, pcx, pcz, rMeshSq);
+          this._tryQueueChunkForMesh(cx, cz + 1, pcx, pcz, rMeshSq);
+          this._tryQueueChunkForMesh(cx, cz - 1, pcx, pcz, rMeshSq);
+
+          cursor++;
+          if (generated >= maxGen || performance.now() - tStart >= genBudget) break;
+        } else {
+          // Ensure already-generated unmeshed chunks inside radius get queued
+          const existing = this.chunks.get(ck);
+          if (existing && existing.dirty && !existing.queued && off.d2 <= rMeshSq && this._hasCardinalNeighbors(cx, cz)) {
+            existing.queued = true;
+            this.meshQueue.push(existing);
           }
+          cursor++;
         }
       }
 
-      if (needed.length === 0) {
+      this._spiralCursor = cursor;
+      if (cursor >= dataOffsets.length) {
         this._chunksAllLoaded = true;
-      } else {
-        needed.sort((a, b) => a.dist - b.dist);
-        const maxGen = this.renderDistance > 8 ? 4 : 3;
-        for (let i = 0; i < needed.length && i < maxGen; i++) {
-          const chunk = this.generateChunk(needed[i].cx, needed[i].cz);
-          this.meshQueue.push(chunk);
-        }
       }
     }
 
-    // 2. Build dirty chunk meshes (prioritize closest)
+    // 2. Build dirty chunk meshes within the remaining frame budget (zero lag spikes!)
     if (this.meshQueue.length > 0) {
-      if (this.meshQueue.length > 1) {
+      if (this.meshQueue.length > 2) {
         this.meshQueue.sort((a, b) => {
           const da = (a.cx - pcx) ** 2 + (a.cz - pcz) ** 2;
           const db = (b.cx - pcx) ** 2 + (b.cz - pcz) ** 2;
@@ -1611,20 +2069,21 @@ export class World {
       }
 
       let built = 0;
-      const tStart = performance.now();
       while (this.meshQueue.length > 0 && built < maxBuildsPerFrame) {
         const chunk = this.meshQueue.shift();
-        if (chunk && chunk.dirty && this.chunks.has(chunk.key)) {
+        if (!chunk) continue;
+        chunk.queued = false;
+        if (chunk.dirty && this.chunks.has(chunk.key)) {
           this.buildChunkMesh(chunk);
           built++;
-          if (performance.now() - tStart > 4.5) break;
+          if (performance.now() - tStart >= budgetMs) break;
         }
       }
     }
 
     // 3. Only check unload when crossing a chunk border!
     if (movedChunk) {
-      const unloadR = r + 2;
+      const unloadR = r + 3;
       const unloadSq = unloadR * unloadR;
       for (const [key, chunk] of this.chunks.entries()) {
         const dx = chunk.cx - pcx;
@@ -1634,18 +2093,71 @@ export class World {
             this.group.remove(m);
             m.geometry.dispose();
           }
+          if (chunk.lightKeys && chunk.lightKeys.length > 0) {
+            for (const lk of chunk.lightKeys) this.lightSources.delete(lk);
+            this._lightDirty = true;
+          }
           this.chunks.delete(key);
         }
       }
     }
   }
 
-  // Blazing-Fast Spawn Preload: build immediate 3x3 synchronously (<45ms!), stream outer rings seamlessly!
+  // Smooth Frame-Sliced Spawn Preload (generates 5x5 data + meshes inner 3x3 with ZERO freezes!)
+  async preloadSpawnAsync(px, pz, onProgress = null) {
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+
+    const dataCoords = [];
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        dataCoords.push([pcx + dx, pcz + dz, dx * dx + dz * dz]);
+      }
+    }
+    dataCoords.sort((a, b) => a[2] - b[2]);
+
+    const meshCoords = [];
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        meshCoords.push([pcx + dx, pcz + dz, dx * dx + dz * dz]);
+      }
+    }
+    meshCoords.sort((a, b) => a[2] - b[2]);
+
+    const total = dataCoords.length + meshCoords.length;
+    let done = 0;
+    const yieldFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+    let t = performance.now();
+    for (const [cx, cz] of dataCoords) {
+      this.generateChunk(cx, cz);
+      done++;
+      if (performance.now() - t > 10) {
+        if (onProgress) onProgress(done / total, 'Generating terrain...');
+        await yieldFrame();
+        t = performance.now();
+      }
+    }
+
+    for (const [cx, cz] of meshCoords) {
+      const c = this.chunks.get(this.chunkKey(cx, cz));
+      if (c) this.buildChunkMesh(c);
+      done++;
+      if (performance.now() - t > 10) {
+        if (onProgress) onProgress(done / total, 'Building world meshes...');
+        await yieldFrame();
+        t = performance.now();
+      }
+    }
+    if (onProgress) onProgress(1, 'Ready!');
+  }
+
+  // Synchronous fallback
   preloadSpawn(px, pz) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
         this.generateChunk(pcx + dx, pcz + dz);
       }
     }
@@ -1715,27 +2227,47 @@ export class World {
     return null;
   }
 
-  explode(cx, cy, cz, radius = 3.2) {
-    const r = Math.ceil(radius);
+  explode(cx, cy, cz, radius = 4.4) {
+    const centerBlock = this.getBlock(cx, cy, cz);
+    const inWater = centerBlock === BLOCK.WATER;
+    const effRadius = inWater ? Math.max(1.2, radius * 0.32) : radius;
+    const r = Math.ceil(effRadius + 0.6);
     const broken = [];
+    const chainTnt = [];
+
     for (let dy = -r; dy <= r; dy++) {
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
           const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (d <= radius) {
-            const bx = Math.floor(cx + dx);
-            const by = Math.floor(cy + dy);
-            const bz = Math.floor(cz + dz);
+          const bx = Math.floor(cx + dx);
+          const by = Math.floor(cy + dy);
+          const bz = Math.floor(cz + dz);
+          // Organic jagged crater rim like authentic Minecraft explosions!
+          const jitter = (coordHash(bx * 7 + by, bz * 13 - by, this.seed + 911) - 0.5) * 0.85;
+          if (d <= effRadius + jitter) {
             const id = this.getBlock(bx, by, bz);
-            if (id !== BLOCK.AIR && id !== BLOCK.BEDROCK && id !== BLOCK.OBSIDIAN && id !== BLOCK.WATER) {
+            if (id === BLOCK.AIR || id === BLOCK.BEDROCK || id === BLOCK.OBSIDIAN || id === BLOCK.WATER) continue;
+            if (id === BLOCK.TNT) {
               this.setBlock(bx, by, bz, BLOCK.AIR, true);
-              broken.push({ x: bx, y: by, z: bz, id });
+              chainTnt.push({ x: bx + 0.5, y: by + 0.5, z: bz + 0.5 });
+              continue;
             }
+            // Clear linked 2-block bed partner cleanly
+            const bedInfo = getBedInfo(id);
+            if (bedInfo) {
+              const px = bx + bedInfo.dx;
+              const pz = bz + bedInfo.dz;
+              if (this.getBlock(px, by, pz) === bedInfo.partner) {
+                this.setBlock(px, by, pz, BLOCK.AIR, true);
+              }
+            }
+            this.setBlock(bx, by, bz, BLOCK.AIR, true);
+            broken.push({ x: bx, y: by, z: bz, id });
           }
         }
       }
     }
-    return broken;
+    return { broken, chainTnt, inWater };
   }
 
   updateFurnaces(dt) {
@@ -1769,6 +2301,61 @@ export class World {
     }
   }
 
+  // Update pooled real-time PointLights for the closest placed Torches & Glowstone (brighter at night!)
+  updateTorchLights(dt, playerPos, sky = null) {
+    if (!this.torchLightPool || this.torchLightPool.length === 0 || !playerPos) return;
+    this._lightClock += dt;
+    this._lightRefreshTimer -= dt;
+
+    if (this._lightDirty || this._lightRefreshTimer <= 0) {
+      this._lightDirty = false;
+      this._lightRefreshTimer = 0.16;
+
+      const maxDistSq = 34 * 34;
+      const near = [];
+      for (const src of this.lightSources.values()) {
+        const dx = src.x + 0.5 - playerPos.x;
+        const dy = src.y + 0.8 - playerPos.y;
+        const dz = src.z + 0.5 - playerPos.z;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 <= maxDistSq) near.push({ src, d2 });
+      }
+      near.sort((a, b) => a.d2 - b.d2);
+      const count = Math.min(this.torchLightPool.length, near.length);
+      this._activeLightSources.length = count;
+      for (let i = 0; i < count; i++) {
+        this._activeLightSources[i] = near[i].src;
+      }
+    }
+
+    const dayFactor = sky && sky.skyUniforms ? sky.skyUniforms.uDayFactor.value : 0.5;
+    const nightFactor = Math.max(0, Math.min(1, 1.0 - dayFactor));
+    const t = this._lightClock;
+    const activeCount = this._activeLightSources.length;
+
+    for (let i = 0; i < this.torchLightPool.length; i++) {
+      const pl = this.torchLightPool[i];
+      if (i < activeCount) {
+        const s = this._activeLightSources[i];
+        // Position light slightly above the torch flame so it floods nearby floor & walls cleanly!
+        pl.position.set(s.x + 0.5, s.y + (s.isGlowstone ? 0.6 : 1.15), s.z + 0.5);
+        const phase = s.x * 1.7 + s.z * 2.3 + s.y * 0.9;
+        const flicker = s.isGlowstone
+          ? Math.sin(t * 3.5 + phase) * 0.12
+          : Math.sin(t * 8.5 + phase) * 0.28 + Math.cos(t * 15.2 + phase * 1.3) * 0.14;
+        // Rich warm light during dusk/day, and dramatically brighter & wider at night!
+        const baseIntensity = s.isGlowstone
+          ? (4.8 + nightFactor * 7.2)
+          : (4.0 + nightFactor * 6.8);
+        pl.intensity = Math.max(0.5, baseIntensity + flicker);
+        pl.distance = 24 + nightFactor * 8;
+        pl.color.setHex(s.isGlowstone ? 0xffd27a : 0xffb247);
+      } else {
+        pl.intensity = 0;
+      }
+    }
+  }
+
   dispose() {
     for (const chunk of this.chunks.values()) {
       for (const m of chunk.meshes) {
@@ -1777,6 +2364,8 @@ export class World {
       }
     }
     this.chunks.clear();
+    this.lightSources.clear();
+    this._activeLightSources = [];
     this.scene.remove(this.group);
   }
 }

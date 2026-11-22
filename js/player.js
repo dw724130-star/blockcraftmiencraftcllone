@@ -119,9 +119,29 @@ export class Player {
     this._lastHeldSpriteId = null;
     this.handPivot.add(this.heldSpriteMesh);
 
-    // Dynamic Torch / Glowstone PointLight (BSL Dynamic Lights!)
-    this.heldLight = new THREE.PointLight(0xffb454, 0, 14, 1.6);
-    this.heldLight.position.set(0.3, -0.1, -0.4);
+    // Sculpted 3D First-Person Held Torch Model!
+    this.heldTorchGroup = new THREE.Group();
+    const htWoodMat = new THREE.MeshLambertMaterial({ color: 0x9c6e3b });
+    const htCollarMat = new THREE.MeshLambertMaterial({ color: 0x2c2826 });
+    const htHeadMat = new THREE.MeshBasicMaterial({ color: 0xffa62b });
+    const htFlameMat = new THREE.MeshBasicMaterial({ color: 0xfff099 });
+    const htShaft = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.24, 0.062), htWoodMat);
+    htShaft.position.set(0, -0.02, 0);
+    const htCollar = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.042, 0.072), htCollarMat);
+    htCollar.position.set(0, 0.11, 0);
+    const htHead = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.062, 0.068), htHeadMat);
+    htHead.position.set(0, 0.16, 0);
+    const htTip = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.054, 0.044), htFlameMat);
+    htTip.position.set(0, 0.215, 0);
+    this.heldTorchGroup.add(htShaft, htCollar, htHead, htTip);
+    this.heldTorchGroup.position.set(-0.04, 0.08, -0.14);
+    this.heldTorchGroup.rotation.set(0.18, -0.22, 0.12);
+    this.heldTorchGroup.visible = false;
+    this.handPivot.add(this.heldTorchGroup);
+
+    // Dynamic Torch / Glowstone PointLight (Bright, Warm & Wide Reach!)
+    this.heldLight = new THREE.PointLight(0xffb64f, 0, 26, 1.0);
+    this.heldLight.position.set(0.3, 0.05, -0.45);
     this.handGroup.add(this.heldLight);
 
     this.handPivot.position.set(0.52, -0.46, -0.62);
@@ -604,12 +624,14 @@ export class Player {
          held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') || held.id.includes('venison') || held.id.includes('salmon') ? 0xe05555 : 0xc9b393)
       : 0xdba882;
 
-    const isBlockHeld = !!(held && held.isBlock && !held.cross && held.id !== 'bed');
-    const isSpriteHeld = !!(held && !isBlockHeld);
+    const isTorchHeld = !!(held && held.id === 'torch');
+    const isBlockHeld = !!(held && held.isBlock && !held.cross && held.id !== 'bed' && !isTorchHeld);
+    const isSpriteHeld = !!(held && !isBlockHeld && !isTorchHeld);
+    this.heldTorchGroup.visible = isTorchHeld;
     this.heldBlockMesh.visible = isBlockHeld;
     this.heldSpriteMesh.visible = isSpriteHeld;
-    this.armMesh.visible = !isBlockHeld && !isSpriteHeld;
-    this.sleeveMesh.visible = !isBlockHeld && !isSpriteHeld;
+    this.armMesh.visible = !isBlockHeld && !isSpriteHeld && !isTorchHeld;
+    this.sleeveMesh.visible = !isBlockHeld && !isSpriteHeld && !isTorchHeld;
 
     if (isBlockHeld && this.textures && this._lastHeldBlockId !== held.id) {
       this._lastHeldBlockId = held.id;
@@ -620,10 +642,10 @@ export class Player {
       this.heldSpriteMat.needsUpdate = true;
     }
 
-    // Dynamic Torch / Glowstone Light flicker
+    // Dynamic Torch / Glowstone Light flicker (brighter & wider reach!)
     const emitsLight = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
     if (emitsLight) {
-      const flicker = 1.65 + Math.sin(performance.now() * 0.015) * 0.16 + Math.cos(performance.now() * 0.037) * 0.08;
+      const flicker = 5.4 + Math.sin(performance.now() * 0.015) * 0.32 + Math.cos(performance.now() * 0.037) * 0.16;
       this.heldLight.intensity = flicker;
     } else {
       this.heldLight.intensity = 0;

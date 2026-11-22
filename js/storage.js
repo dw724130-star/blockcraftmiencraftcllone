@@ -19,8 +19,16 @@ export const DEFAULT_KEYBINDS = {
   pause: 'Escape'
 };
 
+export function isTouchDevice() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /iPad|iPhone|iPod|Android/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua));
+}
+
+const TOUCH_DEFAULT = isTouchDevice();
+
 export const DEFAULT_SETTINGS = {
-  renderDistance: 6,
+  renderDistance: TOUCH_DEFAULT ? 5 : 6,
   sensitivity: 1.0,
   fov: 72,
   controlStyle: 'joystick', // 'joystick' | 'dpad'
@@ -28,7 +36,7 @@ export const DEFAULT_SETTINGS = {
   sound: true,
   minecraftUI: true,   // Classic Minecraft pixel bevel UI theme (revertable)
   largeUI: true,       // Larger iPad-friendly UI scale (revertable)
-  shaders: 'ultra',    // 'off' | 'enhanced' | 'ultra'
+  shaders: TOUCH_DEFAULT ? 'enhanced' : 'ultra',    // 'off' | 'enhanced' | 'ultra'
   biomeEffects: true,  // Biome ambient particles & atmosphere
   allowCheats: false,  // Enable / disable cheat commands & creative shortcuts
   keybinds: { ...DEFAULT_KEYBINDS }

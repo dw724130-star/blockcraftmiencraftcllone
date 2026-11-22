@@ -1,4 +1,4 @@
-const CACHE_NAME = 'blockcraft-v10';
+const CACHE_NAME = 'blockcraft-v17';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './js/main.js',
+  './js/panorama.js',
   './js/blocks.js',
   './js/textures.js',
   './js/noise.js',
@@ -44,7 +45,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: 'no-cache' })
       .then((res) => {
         const clone = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)).catch(() => {});

@@ -45,13 +45,20 @@ export const BLOCK = {
   TALL_GRASS: 41,
   FLOWER_RED: 42,
   FLOWER_YELLOW: 43,
-  BED: 44,
+  BED: 44,          // Foot half facing North (-Z) (partner head at z - 1)
   STONE_BRICKS: 45,
   IRON_BLOCK: 46,
   GOLD_BLOCK: 47,
   DIAMOND_BLOCK: 48,
   LADDER: 49,
-  FARMLAND: 50
+  FARMLAND: 50,
+  BED_HEAD_N: 51,   // Head half facing North (-Z) (partner foot at z + 1)
+  BED_FOOT_S: 52,   // Foot half facing South (+Z) (partner head at z + 1)
+  BED_HEAD_S: 53,   // Head half facing South (+Z) (partner foot at z - 1)
+  BED_FOOT_E: 54,   // Foot half facing East (+X) (partner head at x + 1)
+  BED_HEAD_E: 55,   // Head half facing East (+X) (partner foot at x - 1)
+  BED_FOOT_W: 56,   // Foot half facing West (-X) (partner head at x - 1)
+  BED_HEAD_W: 57    // Head half facing West (-X) (partner foot at x + 1)
 };
 
 // Block numeric ID -> string item key
@@ -150,6 +157,13 @@ regBlock(BLOCK.FLOWER_RED, 'flower_red', { name: 'Poppy', solid: false, transpar
 regBlock(BLOCK.FLOWER_YELLOW, 'flower_yellow', { name: 'Dandelion', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', faces: { all: 'flower_yellow' } });
 
 regBlock(BLOCK.BED, 'bed', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_HEAD_N, 'bed_head_n', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_FOOT_S, 'bed_foot_s', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_HEAD_S, 'bed_head_s', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_FOOT_E, 'bed_foot_e', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_HEAD_E, 'bed_head_e', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_FOOT_W, 'bed_foot_w', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
+regBlock(BLOCK.BED_HEAD_W, 'bed_head_w', { name: 'Red Bed', hardness: 0.6, transparent: true, sound: 'wood', interactive: 'bed', drop: 'bed', hiddenFromCreative: true, faces: { top: 'bed_top', side: 'bed_side', bottom: 'oak_planks' } });
 regBlock(BLOCK.STONE_BRICKS, 'stone_bricks', { name: 'Stone Bricks', hardness: 2.3, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'stone_bricks' } });
 regBlock(BLOCK.IRON_BLOCK, 'iron_block', { name: 'Block of Iron', hardness: 3.8, tool: 'pickaxe', minTier: 2, sound: 'stone', faces: { all: 'iron_block' } });
 regBlock(BLOCK.GOLD_BLOCK, 'gold_block', { name: 'Block of Gold', hardness: 3.4, tool: 'pickaxe', minTier: 3, sound: 'stone', faces: { all: 'gold_block' } });
@@ -263,4 +277,54 @@ export function isBlockCross(blockId) {
   if (!blockId) return false;
   const def = getBlockDef(blockId);
   return def ? !!def.cross : false;
+}
+
+// 2-Block-Long × 1-Block-Wide Bed Metadata & Orientation Helpers
+const BED_META = {
+  [BLOCK.BED]:        { isHead: false, dir: 'N', dx: 0, dz: -1, partner: BLOCK.BED_HEAD_N },
+  [BLOCK.BED_HEAD_N]: { isHead: true,  dir: 'N', dx: 0, dz: 1,  partner: BLOCK.BED },
+  [BLOCK.BED_FOOT_S]: { isHead: false, dir: 'S', dx: 0, dz: 1,  partner: BLOCK.BED_HEAD_S },
+  [BLOCK.BED_HEAD_S]: { isHead: true,  dir: 'S', dx: 0, dz: -1, partner: BLOCK.BED_FOOT_S },
+  [BLOCK.BED_FOOT_E]: { isHead: false, dir: 'E', dx: 1, dz: 0,  partner: BLOCK.BED_HEAD_E },
+  [BLOCK.BED_HEAD_E]: { isHead: true,  dir: 'E', dx: -1, dz: 0, partner: BLOCK.BED_FOOT_E },
+  [BLOCK.BED_FOOT_W]: { isHead: false, dir: 'W', dx: -1, dz: 0, partner: BLOCK.BED_HEAD_W },
+  [BLOCK.BED_HEAD_W]: { isHead: true,  dir: 'W', dx: 1, dz: 0,  partner: BLOCK.BED_FOOT_W }
+};
+
+export function isBedBlock(blockId) {
+  return Boolean(BED_META[blockId]);
+}
+
+export function getBedInfo(blockId) {
+  return BED_META[blockId] || null;
+}
+
+export function getBedPairForYaw(yaw) {
+  // Forward look direction is (-sin(yaw), -cos(yaw))
+  const fx = -Math.sin(yaw);
+  const fz = -Math.cos(yaw);
+  if (Math.abs(fx) > Math.abs(fz)) {
+    return fx > 0
+      ? { foot: BLOCK.BED_FOOT_E, head: BLOCK.BED_HEAD_E, dx: 1, dz: 0 }
+      : { foot: BLOCK.BED_FOOT_W, head: BLOCK.BED_HEAD_W, dx: -1, dz: 0 };
+  }
+  return fz > 0
+    ? { foot: BLOCK.BED_FOOT_S, head: BLOCK.BED_HEAD_S, dx: 0, dz: 1 }
+    : { foot: BLOCK.BED, head: BLOCK.BED_HEAD_N, dx: 0, dz: -1 };
+}
+
+export function getItemCategory(def) {
+  if (!def) return 'materials';
+  if (def.armorSlot !== undefined) return 'armor';
+  if (def.toolType) return 'tools';
+  if (def.food) return 'food';
+  if (!def.isBlock) return 'materials';
+  const id = def.id;
+  if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
+    return 'utility';
+  }
+  if (['grass', 'dirt', 'sand', 'gravel', 'water', 'oak_log', 'oak_leaves', 'birch_log', 'birch_leaves', 'spruce_log', 'spruce_leaves', 'cactus', 'snow', 'ice', 'tall_grass', 'flower_red', 'flower_yellow', 'farmland', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'].includes(id)) {
+    return 'nature';
+  }
+  return 'building';
 }

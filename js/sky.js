@@ -182,26 +182,25 @@ export class SkySystem {
           float moonHalo = pow(moonDot, 36.0) * 0.28;
           skyCol += vec3(0.78, 0.88, 1.0) * (moonDisc + moonHalo) * moonVisible;
 
-          // 4. Procedural Multi-Layered Volumetric-Style Puffy Clouds (BSL / Bliss Look!)
+          // 4. Procedural Volumetric-Style Puffy Clouds (Optimized 4-tap ALU for 60 FPS iPad!)
           if (dir.y > 0.012 && uCloudCover > 0.01) {
-            // Curved sky plane projection so clouds stretch gracefully to the horizon
             float projY = dir.y + 0.11;
             vec2 cloudUV = (dir.xz / projY) * 0.42;
             vec2 drift = vec2(uTime * 0.0085, uTime * 0.0032);
 
-            float n1 = fbmCloud(cloudUV * 1.15 + drift);
-            float n2 = fbmCloudFast(cloudUV * 2.35 - drift * 0.65 + vec2(4.2, 9.1));
-            float rawDensity = n1 * 0.72 + n2 * 0.28;
+            float n1 = fbmCloudFast(cloudUV * 1.15 + drift);
+            float n2 = noise2D(cloudUV * 2.4 - drift * 0.65 + vec2(4.2, 9.1));
+            float rawDensity = n1 * 0.74 + n2 * 0.26;
 
             float thresh = mix(0.49, 0.36, uRainFactor);
             float cloudAlpha = smoothstep(thresh, thresh + 0.22, rawDensity);
 
-            // Fast directional volumetric self-shadowing (only evaluate when cloud is visible!)
+            // Fast single-tap directional volumetric self-shadowing
             float selfLight = 0.65;
             if (cloudAlpha > 0.01) {
               vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.075;
-              float nSun = fbmCloudFast((cloudUV + sunStep) * 1.15 + drift) * 0.72 + n2 * 0.28;
-              selfLight = clamp((rawDensity - nSun) * 3.4 + 0.58, 0.0, 1.0);
+              float nSun = noise2D((cloudUV + sunStep) * 1.15 + drift) * 0.68 + n2 * 0.32;
+              selfLight = clamp((rawDensity - nSun) * 3.1 + 0.58, 0.0, 1.0);
             }
 
             // Warm sunlit rim + silver lining around sun
@@ -446,9 +445,9 @@ export class SkySystem {
       .lerp(tmp.setHex(0xfff5e0), dayFactor)
       .lerp(tmp.setHex(0xffa65c), clearSunset * 0.82);
 
-    const snapX = Math.round(playerPos.x);
-    const snapY = Math.round(playerPos.y);
-    const snapZ = Math.round(playerPos.z);
+    const snapX = Math.round(playerPos.x / 4) * 4;
+    const snapY = Math.round(playerPos.y / 4) * 4;
+    const snapZ = Math.round(playerPos.z / 4) * 4;
     const lightDir = dayFactor > 0.08 ? this.skyUniforms.uSunDir.value : this.skyUniforms.uMoonDir.value;
     this.sunLight.position.set(
       snapX + lightDir.x * 80,
