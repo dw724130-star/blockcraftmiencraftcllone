@@ -77,19 +77,21 @@ export class SkySystem {
       uCloudCover: { value: 1.0 }
     };
 
-    // Volumetric Atmospheric Sky Dome (BSL / Complementary / Bliss Shader Style — 1600 radius for 64-chunk vistas!)
-    const domeGeo = new THREE.SphereGeometry(1600, 32, 24);
+    // Volumetric Atmospheric Sky Dome — GPU Early-Z Optimized (renders AFTER opaque terrain at depth=1.0 so hidden sky pixels cost 0 GPU!)
+    const domeGeo = new THREE.SphereGeometry(1600, 24, 18);
     const domeMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       side: THREE.BackSide,
       depthWrite: false,
-      depthTest: false,
+      depthTest: true,
+      depthFunc: THREE.LessEqualDepth,
       fog: false,
       vertexShader: `
         varying vec3 vDir;
         void main() {
           vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vec4 clipPos = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          gl_Position = clipPos.xyww;
         }
       `,
       fragmentShader: `
@@ -234,7 +236,7 @@ export class SkySystem {
     });
 
     this.skyDome = new THREE.Mesh(domeGeo, domeMat);
-    this.skyDome.renderOrder = -1000;
+    this.skyDome.renderOrder = 2;
     this.skyDome.frustumCulled = false;
     this.skyGroup.add(this.skyDome);
 
@@ -264,8 +266,9 @@ export class SkySystem {
       blending: THREE.AdditiveBlending
     });
     this.stars = new THREE.Points(starGeo, this.starMat);
-    this.stars.renderOrder = -999;
+    this.stars.renderOrder = 2;
     this.stars.frustumCulled = false;
+    this.stars.visible = false;
     this.skyGroup.add(this.stars);
 
     // 4. Rain Streaks (soft translucent droplets)
@@ -475,9 +478,11 @@ export class SkySystem {
     this.fillLight.position.set(-lightDir.x * 50, 34, 42);
     this.fillLight.intensity = (0.14 + dayFactor * 0.36) * rainDim;
 
-    // Stars twinkle gently at night
-    this.starMat.opacity = Math.max(0, 1.0 - dayFactor * 2.4) * (1.0 - rainFactor * 0.9) * 0.92;
-    this.stars.rotation.y += dt * 0.004;
+    // Stars twinkle gently at night (completely skipped during day for zero draw calls!)
+    const starAlpha = Math.max(0, 1.0 - dayFactor * 2.4) * (1.0 - rainFactor * 0.9) * 0.92;
+    this.starMat.opacity = starAlpha;
+    this.stars.visible = starAlpha > 0.01;
+    if (this.stars.visible) this.stars.rotation.y += dt * 0.004;
 
     // Rain animation
     this.rainPoints.visible = isRain;

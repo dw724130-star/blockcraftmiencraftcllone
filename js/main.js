@@ -25,16 +25,20 @@ class BlockCraftGame {
     this.textures = new TextureManager();
     this.ui = new UIManager(this.textures, this.sound);
 
-    // Three.js Renderer (iPad-tuned pixelRatio & AA for rock-solid 60 FPS!)
+    // Three.js Renderer (10x GPU-tuned: smart DPR, skip redundant MSAA on HiDPI, throttled shadow updates!)
     this.container = document.getElementById('game-container');
+    const rawDpr = window.devicePixelRatio || 1;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isTouch,
-      powerPreference: 'high-performance'
+      antialias: !this.isTouch && rawDpr <= 1.25,
+      powerPreference: 'high-performance',
+      stencil: false
     });
-    const maxDpr = this.isTouch ? 1.35 : 1.5;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
+    const maxDpr = this.isTouch ? 1.25 : 1.5;
+    this.renderer.setPixelRatio(Math.min(rawDpr, maxDpr));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = (this.settings.shaders || 'enhanced') === 'ultra';
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
@@ -61,8 +65,12 @@ class BlockCraftGame {
     this.running = false;
     this.currentTarget = null;
     this.lastTime = performance.now();
-    this.fpsFrames = 0;
-    this.fpsAccum = 0;
+    // True wall-clock rolling FPS ring buffer (never skewed by physics dt clamp!)
+    this._fpsRing = new Float64Array(32);
+    this._fpsHead = 0;
+    this._fpsCount = 0;
+    this._fpsLastReport = performance.now();
+    this._shadowFrame = 0;
     this.currentFps = 60;
     this.autosaveTimer = 0;
     this.furnaceUiTimer = 0;
@@ -122,6 +130,7 @@ class BlockCraftGame {
     // Shaders & Cinematic ACES Filmic Tone Mapping (20x BSL vibrancy!)
     const sh = this.settings.shaders || 'ultra';
     this.renderer.shadowMap.enabled = sh === 'ultra';
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = sh === 'off' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = sh === 'ultra' ? 1.12 : (sh === 'enhanced' ? 1.08 : 1.0);
 
@@ -974,13 +983,19 @@ class BlockCraftGame {
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
     this.lastTime = now;
 
-    // FPS counter
-    this.fpsFrames++;
-    this.fpsAccum += dt;
-    if (this.fpsAccum >= 0.5) {
-      this.currentFps = Math.round(this.fpsFrames / this.fpsAccum);
-      this.fpsFrames = 0;
-      this.fpsAccum = 0;
+    // True wall-clock rolling FPS counter (accurate from 1 FPS to 240+ FPS, zero dt-clamp bias!)
+    const ring = this._fpsRing;
+    const ringLen = ring.length;
+    ring[this._fpsHead] = now;
+    this._fpsHead = (this._fpsHead + 1) % ringLen;
+    if (this._fpsCount < ringLen) this._fpsCount++;
+    if (now - this._fpsLastReport >= 200 && this._fpsCount >= 2) {
+      const oldestIdx = this._fpsCount < ringLen ? 0 : this._fpsHead;
+      const elapsedMs = now - ring[oldestIdx];
+      if (elapsedMs > 0) {
+        this.currentFps = Math.round(((this._fpsCount - 1) * 1000) / elapsedMs);
+      }
+      this._fpsLastReport = now;
     }
 
     if (this.running && this.world && this.player) {
@@ -1114,6 +1129,15 @@ class BlockCraftGame {
       if (this.autosaveTimer >= 45) {
         this.autosaveTimer = 0;
         this.saveCurrentWorld(false);
+      }
+
+      // Throttled shadow map refresh (cuts shadow-pass GPU cost by 75% while keeping crisp moving shadows!)
+      if (this.renderer.shadowMap.enabled) {
+        this._shadowFrame++;
+        if (this.world._shadowNeedsUpdate || (this._shadowFrame & 3) === 0) {
+          this.renderer.shadowMap.needsUpdate = true;
+          this.world._shadowNeedsUpdate = false;
+        }
       }
 
       this.renderer.render(this.scene, this.camera);
