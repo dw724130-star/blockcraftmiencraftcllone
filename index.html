@@ -47,27 +47,52 @@
     </div>
   </div>
 
-  <!-- TITLE / WORLD SELECT SCREEN -->
+  <!-- TITLE / MINECRAFT JAVA-STYLE MAIN MENU -->
   <div id="title-screen" class="overlay-screen">
-    <div class="title-bg">
-      <div class="title-clouds"></div>
-      <div class="title-mountains"></div>
+    <!-- Instant-load animated pixel-art Cherry Blossom & Meadow panorama canvas -->
+    <canvas id="title-panorama" class="title-panorama"></canvas>
+    <div class="title-vignette"></div>
+
+    <!-- HOME MENU VIEW (Classic Minecraft Java Layout!) -->
+    <div id="title-view-home" class="java-home-shell">
+      <div class="java-logo-stage">
+        <h1 class="game-logo java-logo" data-text="BLOCKCRAFT">BLOCKCRAFT</h1>
+        <div class="java-edition-banner">VOXEL EDITION</div>
+        <div class="splash-text" id="title-splash">Lots of truthiness!</div>
+      </div>
+
+      <div class="java-menu-stack">
+        <button id="btn-nav-singleplayer" class="mc-stone-btn java-wide" data-title-view="singleplayer">Singleplayer</button>
+        <button id="btn-nav-multiplayer" class="mc-stone-btn java-wide" data-title-view="multiplayer">Multiplayer</button>
+        <button id="btn-nav-mods" class="mc-stone-btn java-wide java-mods-btn" data-title-view="mods">
+          <span>Mods &amp; Add-Ons</span>
+          <span class="java-count-pill"><img class="px-ui-icon inline-px" data-px-icon="mods" alt="" /><span id="title-mod-count">2</span></span>
+        </button>
+
+        <div class="java-bottom-row">
+          <button id="btn-nav-guide-icon" class="mc-stone-btn java-sq" data-title-view="guide" title="Controls &amp; Tips">
+            <img class="px-ui-icon btn-px solo-px" data-px-icon="globe" alt="Guide" />
+          </button>
+          <button id="btn-nav-options" class="mc-stone-btn java-half" data-title-view="settings">Options...</button>
+          <button id="btn-nav-guide" class="mc-stone-btn java-half" data-title-view="guide">Controls &amp; Tips</button>
+          <button id="btn-quick-scale" class="mc-stone-btn java-sq" title="Toggle Large / Compact UI Scale">
+            <img class="px-ui-icon btn-px solo-px" data-px-icon="person" alt="UI Scale" />
+          </button>
+        </div>
+      </div>
+
+      <div class="java-corner-footer">
+        <span>BlockCraft 1.21 • Voxel Edition</span>
+        <span>WebGL Voxel Engine • Ready to Play</span>
+      </div>
     </div>
-    <div class="title-panel">
-      <div class="logo-wrap">
-        <h1 class="game-logo">BLOCKCRAFT</h1>
-        <div class="splash-text" id="title-splash">BSL Shaders, Mirror Water &amp; Wildlife!</div>
-        <div class="logo-sub">iPad &amp; Desktop Voxel Edition • Shaders • Wildlife • Villages</div>
-      </div>
 
-      <div class="title-nav-tabs">
-        <button class="mc-btn primary title-tab active" data-title-tab="play"><img class="px-ui-icon btn-px" data-px-icon="play" alt="" /> Play &amp; Worlds</button>
-        <button class="mc-btn title-tab" data-title-tab="mods"><img class="px-ui-icon btn-px" data-px-icon="mods" alt="" /> Mods &amp; Add-Ons (<span id="title-mod-count">2</span>)</button>
-        <button class="mc-btn title-tab" data-title-tab="settings"><img class="px-ui-icon btn-px" data-px-icon="keybind" alt="" /> Settings &amp; Keys</button>
-        <button class="mc-btn title-tab" data-title-tab="guide"><img class="px-ui-icon btn-px" data-px-icon="book" alt="" /> Controls &amp; Tips</button>
+    <!-- SINGLEPLAYER SUB-SCREEN (Select World & Create New World) -->
+    <div id="title-view-singleplayer" class="java-subscreen hidden">
+      <div class="java-sub-header">
+        <h2><img class="px-ui-icon btn-px" data-px-icon="play" alt="" /> Select World</h2>
       </div>
-
-      <div id="title-tab-play" class="title-tab-view">
+      <div class="java-sub-body">
         <div id="title-main-view">
           <div class="create-world-box">
             <h3>Create New World</h3>
@@ -102,7 +127,7 @@
               </label>
               <input type="checkbox" id="new-world-cheats" />
             </div>
-            <button id="btn-create-world" class="mc-btn primary large">Create &amp; Play</button>
+            <button id="btn-create-world" class="mc-stone-btn primary large">Create New World &amp; Play</button>
           </div>
 
           <div class="saved-worlds-box">
@@ -113,13 +138,90 @@
           </div>
         </div>
       </div>
+      <div class="java-sub-footer">
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Back to Title Screen</button>
+      </div>
+    </div>
 
-      <div id="title-tab-mods" class="title-tab-view hidden">
+    <!-- MULTIPLAYER SUB-SCREEN (Authentic Placeholder Server Browser!) -->
+    <div id="title-view-multiplayer" class="java-subscreen hidden">
+      <div class="java-sub-header">
+        <h2><img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" /> Play Multiplayer</h2>
+      </div>
+      <div class="java-sub-body mp-body">
+        <div class="mp-placeholder-banner">
+          <img class="px-ui-icon btn-px" data-px-icon="server" alt="" />
+          <div>
+            <strong>Multiplayer Mode — Coming Soon (Placeholder)</strong>
+            <span>Online Realms, LAN Co-Op &amp; Custom Servers are being built. Preview the server browser below!</span>
+          </div>
+        </div>
+        <div id="mp-server-list" class="mp-server-list">
+          <div class="mp-server-row selected" data-server="BlockCraft Official Hub">
+            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="globe" alt="" /></div>
+            <div class="mp-server-info">
+              <div class="mp-server-top">
+                <span class="mp-server-name">BlockCraft Official Hub</span>
+                <span class="mp-server-status">0 / 100 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+              </div>
+              <div class="mp-server-motd">Survival SMP • Villages • Cross-Play WebGL — Coming Soon!</div>
+              <div class="mp-server-addr">play.blockcraft.gg (Placeholder)</div>
+            </div>
+          </div>
+          <div class="mp-server-row" data-server="Alpine Realms SMP">
+            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="map" alt="" /></div>
+            <div class="mp-server-info">
+              <div class="mp-server-top">
+                <span class="mp-server-name">Alpine Realms SMP</span>
+                <span class="mp-server-status">0 / 40 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+              </div>
+              <div class="mp-server-motd">Co-op Mountain Building, Trading Villages &amp; Custom Biomes</div>
+              <div class="mp-server-addr">smp.blockcraft.local (Placeholder)</div>
+            </div>
+          </div>
+          <div class="mp-server-row" data-server="Creative Plots &amp; Minigames">
+            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="star" alt="" /></div>
+            <div class="mp-server-info">
+              <div class="mp-server-top">
+                <span class="mp-server-name">Creative Plots &amp; Minigames</span>
+                <span class="mp-server-status">0 / 64 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+              </div>
+              <div class="mp-server-motd">Infinite Creative Plots • Parkour • TNT Arena — Coming Soon!</div>
+              <div class="mp-server-addr">creative.blockcraft.local (Placeholder)</div>
+            </div>
+          </div>
+        </div>
+        <div id="mp-status-msg" class="mp-status-msg">Select a server or add a custom address (Multiplayer networking coming soon).</div>
+      </div>
+      <div class="java-sub-footer mp-footer-grid">
+        <button id="btn-mp-join" class="mc-stone-btn primary">Join Server</button>
+        <button id="btn-mp-direct" class="mc-stone-btn">Direct Connection</button>
+        <button id="btn-mp-add" class="mc-stone-btn">Add Server</button>
+        <button id="btn-mp-refresh" class="mc-stone-btn">Refresh</button>
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Cancel</button>
+      </div>
+    </div>
+
+    <!-- MODS & ADD-ONS SUB-SCREEN -->
+    <div id="title-view-mods" class="java-subscreen hidden">
+      <div class="java-sub-header">
+        <h2><img class="px-ui-icon btn-px" data-px-icon="mods" alt="" /> Mods &amp; Add-Ons</h2>
+      </div>
+      <div class="java-sub-body">
         <div class="mods-intro">Toggle built-in Mods &amp; Add-Ons anytime (works in both Survival &amp; Creative):</div>
         <div id="title-mods-list" class="mods-grid"></div>
       </div>
+      <div class="java-sub-footer">
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Done</button>
+      </div>
+    </div>
 
-      <div id="title-tab-settings" class="title-tab-view hidden">
+    <!-- OPTIONS & KEYBINDS SUB-SCREEN -->
+    <div id="title-view-settings" class="java-subscreen hidden">
+      <div class="java-sub-header">
+        <h2><img class="px-ui-icon btn-px" data-px-icon="settings" alt="" /> Options &amp; Keybinds</h2>
+      </div>
+      <div class="java-sub-body">
         <div class="title-settings-panel">
           <div class="setting-row inline cheat-toggle-row">
             <label for="title-set-allow-cheats" class="check-label-icon">
@@ -128,40 +230,60 @@
             </label>
             <input type="checkbox" id="title-set-allow-cheats" />
           </div>
+          <div class="setting-row inline">
+            <label>Shaders &amp; Graphics</label>
+            <select id="title-set-shaders">
+              <option value="ultra">Ultra BSL (Shadows + Mirror Water + Clouds)</option>
+              <option value="enhanced">Enhanced (Mirror Water + Clouds + Glow)</option>
+              <option value="off">Classic (Fastest)</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Render Distance: <strong id="title-val-render-dist">6</strong> chunks</label>
+            <input type="range" id="title-set-render-dist" min="2" max="16" step="1" value="6" />
+          </div>
           <div class="setting-row keybinds-section">
             <div class="keybinds-header">
               <label class="check-label-icon">
                 <img class="px-ui-icon inline-px" data-px-icon="keybind" alt="" />
                 Keyboard Keybinds (Click any key to rebind, ESC to cancel)
               </label>
-              <button type="button" id="btn-title-reset-keybinds" class="mc-btn sm">Reset Defaults</button>
+              <button type="button" id="btn-title-reset-keybinds" class="mc-stone-btn sm">Reset Defaults</button>
             </div>
             <div id="title-keybinds-list" class="keybinds-grid"></div>
           </div>
         </div>
       </div>
+      <div class="java-sub-footer">
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Done</button>
+      </div>
+    </div>
 
-      <div id="title-tab-guide" class="title-tab-view hidden">
+    <!-- CONTROLS & TIPS SUB-SCREEN -->
+    <div id="title-view-guide" class="java-subscreen hidden">
+      <div class="java-sub-header">
+        <h2><img class="px-ui-icon btn-px" data-px-icon="book" alt="" /> Controls &amp; Tips</h2>
+      </div>
+      <div class="java-sub-body">
         <div class="guide-grid">
           <div class="guide-card">
             <h4><img class="px-ui-icon inline-px" data-px-icon="play" alt="" /> Touch &amp; Desktop Controls</h4>
-            <p>• <strong>Left Thumb / WASD:</strong> Walk &amp; Sprint (or D-Pad in Settings)<br>
+            <p>• <strong>Left Thumb / WASD:</strong> Walk &amp; Sprint (rebindable in Options!)<br>
                • <strong>Drag Screen / Mouse:</strong> Smooth 360° Look<br>
                • <strong>MINE / DAMAGE:</strong> Hold to crack &amp; mine blocks — switches to <strong>DAMAGE</strong> when aiming at animals/mobs<br>
                • <strong>PLACE / USE:</strong> Tap to place blocks — switches to <strong>USE</strong> when hovering over Villagers, Crafting Tables, Furnaces, Chests, or Beds</p>
           </div>
           <div class="guide-card">
-            <h4><img class="px-ui-icon inline-px" data-px-icon="paw" alt="" /> Wildlife, Shaders &amp; Villages</h4>
-            <p>• Spot <strong>Deer, Foxes, Bunnies, Wolves, Songbirds, Ducks, Turtles, Butterflies &amp; Swimming Fish</strong> across biomes!<br>
-               • Try <strong>Sunrise</strong> or <strong>Sunset</strong> in Pause/Chat to see glowing clouds reflect across the rippling water!<br>
-               • Explore east/southeast (gold marker on Radar) for <strong>Villages</strong>, Hilltop Watchtowers, loot chests &amp; Villager trading.<br>
-               • Hold a <strong>Torch</strong> for dynamic cave lighting, and tap the Camera button for 1st/3rd-person views.</p>
+            <h4><img class="px-ui-icon inline-px" data-px-icon="paw" alt="" /> Wildlife, Villages &amp; Beds</h4>
+            <p>• Spot <strong>Deer, Foxes, Bunnies, Wolves, Songbirds, Ducks, Turtles, Butterflies &amp; Fish</strong> across biomes!<br>
+               • Explore east/southeast (gold marker on Radar) for massive <strong>Multi-District Villages</strong> with Farmers, Blacksmiths, Librarians &amp; Clerics.<br>
+               • Craft or find a <strong>Red Bed</strong> (3 Wool + 3 Planks) to sleep through the night &amp; set your respawn point.<br>
+               • Enable <strong>Allow Cheats</strong> in Options to unlock <code>/give</code>, <code>/effect</code>, and <code>/time set</code>!</p>
           </div>
         </div>
       </div>
-
-      <div class="title-footer">
-        <span>Touch + Keyboard/Mouse • Volumetric Clouds &amp; Reflective Water • Wildlife &amp; Villages</span>
+      <div class="java-sub-footer">
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Done</button>
       </div>
     </div>
   </div>

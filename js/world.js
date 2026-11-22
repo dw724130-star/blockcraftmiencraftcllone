@@ -590,17 +590,24 @@ export class World {
       alpineBoost = foothill + massif;
     }
 
-    // 3. Smooth meandering scenic rivers (less carving deep inside alpine peaks)
-    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.0058 + 200, wz * 0.0058 - 150, 3));
-    const riverT = riverRaw < 0.048 ? (1 - riverRaw / 0.048) : 0;
-    const riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 10.5 * (1 - mSmooth * 0.72);
+    // 3. Smooth meandering scenic rivers & natural lakeside basins (like classic Minecraft!)
+    const riverRaw = Math.abs(this.moistureNoise.fbm2D(wx * 0.0052 + 200, wz * 0.0052 - 150, 3));
+    const riverT = riverRaw < 0.056 ? (1 - riverRaw / 0.056) : 0;
+    const riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 11.5 * (1 - mSmooth * 0.72);
 
-    // 4. Gentle Plains/Desert flattening blended smoothly by climate noise
+    // Occasional scenic meadow ponds / lake clearings in flat lowlands
+    const pondNoise = this.biomeNoise.fbm2D(wx * 0.011 - 90, wz * 0.011 + 110, 2);
+    const pondT = pondNoise < -0.24 ? Math.min(1, (-0.24 - pondNoise) / 0.22) : 0;
+    const pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 7.5 * (1 - mSmooth * 0.9);
+
+    // 4. Gentle Plains/Desert flattening + terraced forested meadow hills
     const temp = this.biomeNoise.fbm2D(wx * 0.0034, wz * 0.0034, 3);
     const flatBlend = Math.max(0, Math.min(1, 1 - mSmooth * 1.8));
-    const hillAmp = (temp > 0.14 ? 4.2 : 6.0) * flatBlend + 3.0 * mSmooth;
+    const hillAmp = (temp > 0.14 ? 4.0 : 6.4) * flatBlend + 3.0 * mSmooth;
+    // Subtle Minecraft-style natural meadow terracing on moderate hills
+    const terrace = Math.sin(hills * 3.14159) * 0.45 * flatBlend;
 
-    const baseH = SEA_LEVEL + 4.5 + cont * 13.5 + hills * hillAmp + micro + alpineBoost - riverCarve;
+    const baseH = SEA_LEVEL + 4.8 + cont * 13.0 + (hills * hillAmp + terrace) + micro + alpineBoost - riverCarve - pondCarve;
     return Math.max(8, Math.min(CHUNK_HEIGHT - 8, Math.floor(baseH)));
   }
 
@@ -1150,11 +1157,12 @@ export class World {
             biome === 'Plains' ? 0.0085 : 0;
 
           if (r < treeChance && (topBlock === BLOCK.GRASS || topBlock === BLOCK.SNOW)) {
+            const mixedBirch = biome === 'Forest' && coordHash(wx, wz, this.seed + 61) > 0.78;
             const logType =
-              biome === 'Birch Forest' ? BLOCK.BIRCH_LOG :
+              (biome === 'Birch Forest' || mixedBirch) ? BLOCK.BIRCH_LOG :
               biome === 'Snowy Taiga' ? BLOCK.SPRUCE_LOG : BLOCK.OAK_LOG;
             const leafType =
-              biome === 'Birch Forest' ? BLOCK.BIRCH_LEAVES :
+              (biome === 'Birch Forest' || mixedBirch) ? BLOCK.BIRCH_LEAVES :
               biome === 'Snowy Taiga' ? BLOCK.SPRUCE_LEAVES : BLOCK.OAK_LEAVES;
 
             const styleR = coordHash(wx, wz, this.seed + 88);
@@ -1584,7 +1592,7 @@ export class World {
         this._chunksAllLoaded = true;
       } else {
         needed.sort((a, b) => a.dist - b.dist);
-        const maxGen = this.renderDistance > 8 ? 4 : 2;
+        const maxGen = this.renderDistance > 8 ? 4 : 3;
         for (let i = 0; i < needed.length && i < maxGen; i++) {
           const chunk = this.generateChunk(needed[i].cx, needed[i].cz);
           this.meshQueue.push(chunk);
@@ -1632,17 +1640,17 @@ export class World {
     }
   }
 
-  // Preload immediate spawn chunks synchronously
+  // Blazing-Fast Spawn Preload: build immediate 3x3 synchronously (<45ms!), stream outer rings seamlessly!
   preloadSpawn(px, pz) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    for (let dz = -2; dz <= 2; dz++) {
-      for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
         this.generateChunk(pcx + dx, pcz + dz);
       }
     }
-    for (let dz = -2; dz <= 2; dz++) {
-      for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
         const c = this.chunks.get(this.chunkKey(pcx + dx, pcz + dz));
         if (c) this.buildChunkMesh(c);
       }

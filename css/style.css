@@ -2308,5 +2308,614 @@ body.mc-theme .touch-action-btn.break-btn.mode-damage {
   height: 48px;
 }
 
+/* =====================================================================
+   AUTHENTIC MINECRAFT JAVA MAIN MENU + 40X PIXEL-ART UI OVERHAUL
+   ===================================================================== */
+
+/* Crisp Pixel Typography & Zero-Blur Minecraft Feel */
+body.mc-theme {
+  font-family: 'Courier New', 'Consolas', 'Lucida Console', monospace;
+  letter-spacing: 0.25px;
+}
+
+/* Animated Pixel-Art Cherry Blossom & Meadow Panorama Canvas (Image 1!) */
+#title-screen {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  padding: 0 !important;
+  background: #6da8f7;
+}
+
+.title-panorama {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  z-index: 0;
+  filter: saturate(1.06) brightness(0.96);
+}
+
+.title-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(circle at 50% 42%, rgba(0, 0, 0, 0.04) 20%, rgba(0, 0, 0, 0.42) 100%);
+  pointer-events: none;
+}
+
+/* Classic Java Home Shell */
+.java-home-shell {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(18px, 4vh, 36px);
+  padding: max(22px, var(--safe-top)) 16px max(26px, var(--safe-bottom));
+}
+
+.java-logo-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: -14px;
+  user-select: none;
+}
+
+/* Chunky Extruded Stone-Cracked 3D Pixel Title Logo (Image 1!) */
+.game-logo.java-logo {
+  margin: 0;
+  font-family: 'Arial Black', 'Impact', 'Courier New', sans-serif;
+  font-size: clamp(42px, 8.2vw, 88px);
+  font-weight: 900;
+  letter-spacing: 5px;
+  line-height: 1;
+  color: #dcdcdc;
+  background: repeating-linear-gradient(
+      0deg,
+      #ececec 0px, #ececec 5px,
+      #cfcfcf 5px, #cfcfcf 10px,
+      #b5b5b5 10px, #b5b5b5 15px,
+      #9c9c9c 15px, #9c9c9c 20px
+    );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter:
+    drop-shadow(0 2px 0 #141414)
+    drop-shadow(0 4px 0 #4f4f4f)
+    drop-shadow(0 7px 0 #2e2e2e)
+    drop-shadow(0 10px 0 #121212)
+    drop-shadow(3px 0 0 #121212)
+    drop-shadow(-3px 0 0 #121212)
+    drop-shadow(0 -3px 0 #121212)
+    drop-shadow(0 14px 12px rgba(0, 0, 0, 0.55));
+}
+
+.java-edition-banner {
+  margin-top: 6px;
+  padding: 2px 14px;
+  background: rgba(20, 20, 24, 0.72);
+  border: 2px solid #0e0e10;
+  color: #e6e6e6;
+  font-size: clamp(12px, 1.8vw, 17px);
+  font-weight: 900;
+  letter-spacing: 4px;
+  text-shadow: 2px 2px 0 #000;
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,0.22);
+}
+
+.java-logo-stage .splash-text {
+  position: absolute;
+  right: -24px;
+  bottom: -14px;
+  color: #ffff33;
+  font-size: clamp(13px, 1.9vw, 18px);
+  font-weight: 900;
+  text-shadow: 2px 2px 0 #3f3f00, -1px -1px 0 #242400;
+  transform: rotate(-16deg);
+  animation: javaSplashBounce 0.58s ease-in-out infinite alternate;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@keyframes javaSplashBounce {
+  from { transform: rotate(-16deg) scale(0.96); }
+  to   { transform: rotate(-16deg) scale(1.07); }
+}
+
+/* Authentic Classic Minecraft Stone-Textured Buttons */
+.mc-stone-btn,
+body.mc-theme .mc-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 0 !important;
+  border: 2px solid #0b0b0c !important;
+  background-color: #707070;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.04) 0 4px, rgba(0,0,0,0.05) 4px 8px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 4px, rgba(0,0,0,0.06) 4px 8px),
+    linear-gradient(180deg, #868686 0%, #6c6c6c 55%, #5c5c5c 100%) !important;
+  color: #f4f4f4 !important;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-weight: 900;
+  font-size: 16px;
+  text-shadow: 2px 2px 0 #242424;
+  cursor: pointer;
+  padding: 10px 16px;
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.36),
+    inset -2px -3px 0 rgba(0, 0, 0, 0.52),
+    0 2px 0 rgba(0, 0, 0, 0.35) !important;
+  transition: filter 0.08s ease;
+  user-select: none;
+}
+
+.mc-stone-btn:hover,
+body.mc-theme .mc-btn:hover {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 4px, rgba(0,0,0,0.05) 4px 8px),
+    linear-gradient(180deg, #7e8bd4 0%, #6370b5 100%) !important;
+  color: #ffffa0 !important;
+  border-color: #ffffff !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.45),
+    inset -2px -3px 0 rgba(20, 26, 70, 0.6),
+    0 0 0 2px #0b0b0c !important;
+}
+
+.mc-stone-btn:active,
+body.mc-theme .mc-btn:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 2px 2px 0 rgba(0, 0, 0, 0.5),
+    inset -2px -2px 0 rgba(255, 255, 255, 0.2) !important;
+}
+
+.mc-stone-btn.primary,
+body.mc-theme .mc-btn.primary {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 4px, rgba(0,0,0,0.05) 4px 8px),
+    linear-gradient(180deg, #56a842 0%, #3d822c 60%, #2f6921 100%) !important;
+}
+
+.mc-stone-btn.primary:hover,
+body.mc-theme .mc-btn.primary:hover {
+  background-image: linear-gradient(180deg, #68c251 0%, #4b9c37 100%) !important;
+  color: #ffffa0 !important;
+}
+
+.mc-stone-btn.sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.mc-stone-btn.large {
+  width: 100%;
+  padding: 13px 18px;
+  font-size: 17px;
+}
+
+/* Java Centered Button Stack (Exact Image 1 Proportions!) */
+.java-menu-stack {
+  width: min(440px, 90vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.java-wide {
+  width: 100%;
+  height: 46px;
+  font-size: 17px;
+}
+
+.java-mods-btn {
+  justify-content: center;
+}
+
+.java-count-pill {
+  position: absolute;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: rgba(15, 18, 24, 0.65);
+  border: 2px solid #0b0b0c;
+  font-size: 13px;
+  color: #a8ff8a;
+}
+
+.java-bottom-row {
+  display: grid;
+  grid-template-columns: 46px 1fr 1fr 46px;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.java-sq {
+  width: 46px;
+  height: 46px;
+  padding: 0 !important;
+}
+
+.java-half {
+  height: 46px;
+  font-size: 15px;
+}
+
+.solo-px {
+  margin-right: 0 !important;
+  width: 22px !important;
+  height: 22px !important;
+}
+
+.java-corner-footer {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: max(8px, var(--safe-bottom));
+  z-index: 4;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  text-shadow: 2px 2px 0 #181818;
+  pointer-events: none;
+}
+
+/* Classic Dirt-Tiled Minecraft Sub-Screens (Singleplayer, Multiplayer, Mods, Options, Guide) */
+.java-subscreen {
+  position: relative;
+  z-index: 4;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: #241911;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(138, 96, 62, 0.22) 0 8px, rgba(58, 37, 22, 0.28) 8px 16px),
+    repeating-linear-gradient(0deg, rgba(112, 74, 46, 0.24) 0 8px, rgba(42, 26, 15, 0.32) 8px 16px);
+}
+
+.java-sub-header {
+  padding: max(14px, var(--safe-top)) 16px 12px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.45);
+  border-bottom: 3px solid #0b0b0c;
+  box-shadow: 0 3px 0 rgba(255, 255, 255, 0.08);
+}
+
+.java-sub-header h2 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 900;
+  text-shadow: 2px 2px 0 #000;
+}
+
+.java-sub-body {
+  flex: 1;
+  overflow-y: auto;
+  width: min(920px, 95vw);
+  margin: 0 auto;
+  padding: 18px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.java-sub-footer {
+  padding: 12px 16px max(14px, var(--safe-bottom));
+  background: rgba(0, 0, 0, 0.52);
+  border-top: 3px solid #0b0b0c;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.java-back-btn {
+  min-width: min(260px, 80vw);
+  height: 44px;
+}
+
+/* Authentic Placeholder Multiplayer Server Browser! */
+.mp-body {
+  max-width: 760px;
+}
+
+.mp-placeholder-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(24, 34, 56, 0.88);
+  border: 3px solid #0b0b0c;
+  box-shadow: inset 2px 2px 0 rgba(126, 174, 255, 0.3), inset -2px -2px 0 rgba(0, 0, 0, 0.5);
+  color: #dcebff;
+  font-size: 13px;
+}
+
+.mp-placeholder-banner strong {
+  display: block;
+  color: #ffd54f;
+  font-size: 15px;
+  margin-bottom: 2px;
+  text-shadow: 2px 2px 0 #000;
+}
+
+.mp-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  background: rgba(16, 16, 20, 0.78);
+  border: 3px solid #3c3c42;
+  cursor: pointer;
+  transition: border-color 0.08s ease;
+}
+
+.mp-server-row:hover {
+  border-color: #8f9bb8;
+  background: rgba(28, 32, 46, 0.86);
+}
+
+.mp-server-row.selected {
+  border-color: #ffffff;
+  background: rgba(40, 48, 72, 0.88);
+  box-shadow: inset 0 0 0 2px #0b0b0c;
+}
+
+.mp-server-icon {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b2d34;
+  border: 2px solid #0b0b0c;
+  box-shadow: inset 2px 2px 0 rgba(255,255,255,0.18), inset -2px -2px 0 rgba(0,0,0,0.5);
+}
+
+.mp-server-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mp-server-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mp-server-name {
+  font-size: 16px;
+  font-weight: 900;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 #000;
+}
+
+.mp-server-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #b8c2cf;
+}
+
+.mp-server-motd {
+  margin-top: 3px;
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.mp-server-addr {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.mp-status-msg {
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid #0b0b0c;
+  color: #ffe082;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.mp-footer-grid .mc-stone-btn {
+  min-width: 138px;
+  height: 42px;
+  font-size: 14px;
+}
+
+/* =====================================================================
+   AUTHENTIC MINECRAFT PIXEL-CRISP HOTBAR, XP BAR & SURVIVAL HUD (Images 5,7,8!)
+   ===================================================================== */
+body.mc-theme #hud-bottom {
+  gap: 3px !important;
+}
+
+body.mc-theme #survival-bars {
+  width: min(464px, 94vw);
+  gap: 3px !important;
+}
+
+body.mc-theme .stat-bar {
+  gap: 0px !important;
+}
+
+body.mc-theme .hud-px-icon {
+  width: 18px;
+  height: 18px;
+  margin: 0 -0.5px;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.85));
+}
+
+body.mc-theme.large-ui .hud-px-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Classic Segmented Pixel XP Bar directly above Hotbar! */
+body.mc-theme #xp-bar-wrap {
+  height: 11px !important;
+  border-radius: 0 !important;
+  border: 2px solid #0a0a0c !important;
+  background: #1d2614 !important;
+  box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.65);
+  overflow: visible !important;
+  position: relative;
+}
+
+body.mc-theme #xp-bar-fill {
+  border-radius: 0 !important;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 22px, rgba(0, 0, 0, 0.35) 22px 24px),
+    linear-gradient(180deg, #9cff42 0%, #6ce01f 55%, #48a614 100%) !important;
+}
+
+body.mc-theme #xp-level {
+  top: -13px !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  color: #80ff20 !important;
+  text-shadow:
+    2px 0 0 #000, -2px 0 0 #000,
+    0 2px 0 #000, 0 -2px 0 #000,
+    2px 2px 0 #000, -2px -2px 0 #000 !important;
+}
+
+/* Continuous Authentic Minecraft Stone-Bevel Hotbar! */
+body.mc-theme #hotbar-row {
+  gap: 4px !important;
+  background: none !important;
+  padding: 0 !important;
+}
+
+body.mc-theme #hotbar-slots {
+  gap: 0 !important;
+  background: #1b1b1e;
+  border: 2px solid #09090b;
+  padding: 2px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+}
+
+body.mc-theme .hotbar-slot {
+  border-radius: 0 !important;
+  border: 2px solid #59595e !important;
+  background: rgba(34, 34, 38, 0.86) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(12, 12, 15, 0.78),
+    inset -2px -2px 0 rgba(168, 168, 176, 0.35) !important;
+}
+
+body.mc-theme .hotbar-slot.selected {
+  z-index: 3;
+  transform: scale(1.08);
+  border: 3px solid #ffffff !important;
+  background: rgba(66, 68, 76, 0.92) !important;
+  box-shadow:
+    0 0 0 2px #0b0b0c,
+    inset 2px 2px 0 #c6c6c6,
+    inset -2px -2px 0 #45454a !important;
+}
+
+body.mc-theme .hotbar-slot.inv-btn {
+  border: 2px solid #0b0b0c !important;
+  background: linear-gradient(180deg, #828286 0%, #5c5c61 100%) !important;
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.35),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Classic Pixel-Bevel Inventory & Modal Windows */
+body.mc-theme .mc-window {
+  border-radius: 0 !important;
+  border: 3px solid #0b0b0c !important;
+  background: #2b2d34 !important;
+  box-shadow:
+    inset 3px 3px 0 #666a75,
+    inset -3px -3px 0 #17181c,
+    0 18px 48px rgba(0, 0, 0, 0.78) !important;
+}
+
+body.mc-theme .mc-window-header {
+  background: #3d404a !important;
+  border-bottom: 3px solid #0b0b0c !important;
+  text-shadow: 2px 2px 0 #000;
+}
+
+body.mc-theme .inv-slot {
+  border-radius: 0 !important;
+  border: 2px solid #1b1c20 !important;
+  background: #555861 !important;
+  box-shadow:
+    inset 2px 2px 0 #2b2d33,
+    inset -2px -2px 0 #8a8e99 !important;
+}
+
+body.mc-theme .inv-slot:hover {
+  background: #6b6f7a !important;
+}
+
+body.mc-theme .hud-icon-btn,
+body.mc-theme .hud-info-pill,
+body.mc-theme .mode-badge,
+body.mc-theme .cmd-chip,
+body.mc-theme .tab-btn,
+body.mc-theme .close-modal-btn,
+body.mc-theme .mod-card,
+body.mc-theme .world-card,
+body.mc-theme .create-world-box,
+body.mc-theme .saved-worlds-box,
+body.mc-theme .guide-card {
+  border-radius: 0 !important;
+  border-color: #0b0b0c !important;
+}
+
+@media (max-width: 600px) {
+  .java-logo-stage .splash-text {
+    right: 4px;
+    bottom: -18px;
+  }
+  .java-bottom-row {
+    grid-template-columns: 42px 1fr 1fr 42px;
+    gap: 6px;
+  }
+  .java-sq { width: 42px; height: 42px; }
+  .java-half { height: 42px; font-size: 13px; }
+  .java-corner-footer { font-size: 11px; }
+}
+
 
 

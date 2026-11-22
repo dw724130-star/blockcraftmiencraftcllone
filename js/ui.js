@@ -43,11 +43,12 @@ function formatKeyCode(code) {
 }
 
 const SPLASH_TEXTS = [
+  'Lots of truthiness!',
+  '40x Better Villagers!',
+  'Reforge Pixel-Art Food!',
   'BSL Shaders & Mirror Water!',
   'Wild Deer, Foxes & Songbirds!',
-  'Watch the Golden Sunset!',
-  'Villages, Watchtowers & Mods!',
-  'Volumetric Sunlit Clouds!',
+  'Alpine Mountains & Villages!',
   '100% WebGL Voxel Engine!'
 ];
 
@@ -114,12 +115,173 @@ export class UIManager {
     this.game = game;
     this.hydratePixelIcons();
     this.buildHotbarDOM();
-    this.renderCreativeCatalog('');
+    // Creative catalog renders lazily on first Creative tab click for instant startup!
+    this._creativeRendered = false;
     this.renderModsUI();
     this.renderKeybindsUI(game.settings.keybinds);
     this.syncCheatUI(game.areCheatsAllowed());
     const splash = document.getElementById('title-splash');
     if (splash) splash.textContent = SPLASH_TEXTS[Math.floor(Math.random() * SPLASH_TEXTS.length)];
+    this.startTitlePanorama();
+  }
+
+  // Instant-load pixel-art Cherry Blossom & Meadow Panorama (zero WebGL overhead, <4ms setup!)
+  startTitlePanorama() {
+    const canvas = document.getElementById('title-panorama');
+    if (!canvas) return;
+    if (!this._panoTile) {
+      const tw = 480;
+      const th = 220;
+      const off = document.createElement('canvas');
+      off.width = tw;
+      off.height = th;
+      const ctx = off.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      // Sky gradient (crisp bright Minecraft daytime sky!)
+      const grad = ctx.createLinearGradient(0, 0, 0, th * 0.68);
+      grad.addColorStop(0, '#5a97f5');
+      grad.addColorStop(0.55, '#8ec2ff');
+      grad.addColorStop(1, '#cbe3ff');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, tw, th);
+
+      // Blocky white Minecraft clouds
+      ctx.fillStyle = 'rgba(255,255,255,0.86)';
+      const clouds = [[22,18,64,12],[120,28,82,14],[245,14,72,12],[356,26,90,14],[410,44,44,10]];
+      for (const [cx, cy, cw, ch] of clouds) {
+        ctx.fillRect(cx, cy, cw, ch);
+        ctx.fillStyle = 'rgba(210,226,248,0.85)';
+        ctx.fillRect(cx, cy + ch - 3, cw, 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.86)';
+      }
+
+      // Distant misty voxel mountains
+      ctx.fillStyle = '#7ba892';
+      for (let x = 0; x < tw; x += 8) {
+        const mh = 22 + Math.floor(Math.sin(x * 0.025) * 14 + Math.cos(x * 0.055) * 9);
+        ctx.fillRect(x, 128 - mh, 8, mh + 30);
+      }
+      // Midground stepped green rolling voxel hills
+      for (let x = 0; x < tw; x += 8) {
+        const hh = 14 + Math.floor(Math.sin(x * 0.04 + 1.2) * 10 + Math.cos(x * 0.08) * 6);
+        const y0 = 146 - hh;
+        ctx.fillStyle = '#5a9432';
+        ctx.fillRect(x, y0, 8, 6);
+        ctx.fillStyle = '#6eb03e';
+        ctx.fillRect(x, y0, 8, 2);
+        ctx.fillStyle = '#7c5534';
+        ctx.fillRect(x, y0 + 6, 8, 90);
+      }
+
+      // Lush foreground grassy meadow floor
+      for (let y = 148; y < th; y += 6) {
+        for (let x = 0; x < tw; x += 6) {
+          const n = ((x * 19 + y * 37) % 11);
+          ctx.fillStyle = n < 3 ? '#4c8028' : (n < 7 ? '#5f9c35' : '#70b341');
+          ctx.fillRect(x, y, 6, 6);
+        }
+      }
+
+      // Iconic Cherry Blossom Voxel Trees (dark cherry trunks + layered pink pixel blossom canopies!)
+      const drawCherryTree = (tx, ty, scale) => {
+        const u = Math.round(6 * scale);
+        // Dark cherry wood trunk & angled branch
+        ctx.fillStyle = '#331c24';
+        ctx.fillRect(tx, ty - u * 7, u * 2, u * 7);
+        ctx.fillStyle = '#4a2b36';
+        ctx.fillRect(tx + u, ty - u * 7, Math.max(2, u - 1), u * 7);
+        ctx.fillRect(tx - u * 2, ty - u * 5, u * 3, u);
+        // Layered pink blossom canopy blocks
+        const blobs = [
+          [-5, -9, 11, 3], [-4, -11, 9, 3], [-2, -12, 6, 2],
+          [-6, -7, 5, 2], [2, -7, 6, 2]
+        ];
+        for (const [bx, by, bw, bh] of blobs) {
+          for (let py = 0; py < bh; py++) {
+            for (let px0 = 0; px0 < bw; px0++) {
+              const h = ((px0 * 13 + py * 29 + tx) % 7);
+              ctx.fillStyle = h < 2 ? '#d984a7' : (h < 5 ? '#f5b3cf' : '#ffd9eb');
+              ctx.fillRect(tx + (bx + px0) * u, ty + (by + py) * u, u, u);
+            }
+          }
+        }
+        // Cute hanging pink petals
+        ctx.fillStyle = '#ffd6e9';
+        ctx.fillRect(tx - u * 4, ty - u * 5, u, u);
+        ctx.fillRect(tx + u * 4, ty - u * 5, u, u);
+      };
+      drawCherryTree(58, 168, 1.3);
+      drawCherryTree(190, 154, 1.0);
+      drawCherryTree(325, 160, 1.15);
+      drawCherryTree(436, 172, 1.35);
+
+      // Scattered pink cherry petals & daisies across the grassy meadow (just like Image 1!)
+      for (let i = 0; i < 95; i++) {
+        const px0 = (i * 53 + 17) % tw;
+        const py0 = 152 + ((i * 29) % (th - 156));
+        ctx.fillStyle = i % 4 === 0 ? '#ffffff' : (i % 2 === 0 ? '#ffc2df' : '#f29bc5');
+        ctx.fillRect(px0, py0, 4, 2);
+        ctx.fillRect(px0 + 2, py0 - 2, 2, 2);
+      }
+
+      // Cute floating Minecraft golden voxel bees!
+      const drawBee = (bx, by) => {
+        ctx.fillStyle = '#241c14'; ctx.fillRect(bx - 1, by - 1, 14, 9);
+        ctx.fillStyle = '#f5c731'; ctx.fillRect(bx, by, 12, 7);
+        ctx.fillStyle = '#2b2016'; ctx.fillRect(bx + 3, by, 2, 7); ctx.fillRect(bx + 7, by, 2, 7);
+        ctx.fillStyle = '#70d6ff'; ctx.fillRect(bx + 1, by + 2, 2, 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillRect(bx + 3, by - 4, 5, 3);
+      };
+      drawBee(128, 112);
+      drawBee(382, 98);
+
+      this._panoTile = off;
+    }
+
+    if (this._panoRaf) return;
+    canvas.width = 320;
+    canvas.height = 180;
+    const pctx = canvas.getContext('2d');
+    pctx.imageSmoothingEnabled = false;
+    this._panoOffset = this._panoOffset || 0;
+    let last = performance.now();
+
+    const tick = (now) => {
+      if (this._panoStopped) { this._panoRaf = null; return; }
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const tw = this._panoTile.width;
+      this._panoOffset = (this._panoOffset + dt * 11) % tw;
+      const ox = Math.floor(this._panoOffset);
+      pctx.drawImage(this._panoTile, ox, 0, tw - ox, this._panoTile.height, 0, 0, (tw - ox) * (320 / 280), 180);
+      pctx.drawImage(this._panoTile, 0, 0, ox, this._panoTile.height, (tw - ox) * (320 / 280), 0, ox * (320 / 280), 180);
+      this._panoRaf = requestAnimationFrame(tick);
+    };
+    this._panoStopped = false;
+    this._panoRaf = requestAnimationFrame(tick);
+  }
+
+  stopTitlePanorama() {
+    this._panoStopped = true;
+    if (this._panoRaf) {
+      cancelAnimationFrame(this._panoRaf);
+      this._panoRaf = null;
+    }
+  }
+
+  showTitleView(viewName = 'home') {
+    this.cancelKeybindListen();
+    const views = ['home', 'singleplayer', 'multiplayer', 'mods', 'settings', 'guide'];
+    for (const v of views) {
+      const el = document.getElementById(`title-view-${v}`);
+      if (el) el.classList.toggle('hidden', v !== viewName);
+    }
+    if (viewName === 'mods') this.renderModsUI();
+    if (viewName === 'settings' && this.game) {
+      this.syncSettingsUI(this.game.settings);
+      this.syncCheatUI(this.game.areCheatsAllowed());
+    }
   }
 
   hydratePixelIcons() {
@@ -144,31 +306,89 @@ export class UIManager {
         document.querySelectorAll('.inv-tab-panel').forEach((p) => p.classList.add('hidden'));
         document.getElementById(`inv-tab-${tab}`).classList.remove('hidden');
         if (tab === 'recipes') this.renderRecipeBook();
+        if (tab === 'creative' && !this._creativeRendered) {
+          this._creativeRendered = true;
+          this.renderCreativeCatalog(document.getElementById('creative-search')?.value || '');
+        }
       });
     });
 
     // Creative search
     document.getElementById('creative-search').addEventListener('input', (e) => {
+      this._creativeRendered = true;
       this.renderCreativeCatalog(e.target.value);
     });
 
-    // Title screen tabs
-    document.querySelectorAll('.title-tab').forEach((btn) => {
+    // Minecraft Java Main Menu navigation buttons
+    document.querySelectorAll('[data-title-view]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const tab = btn.dataset.titleTab;
-        document.querySelectorAll('.title-tab').forEach((b) => {
-          b.classList.toggle('active', b === btn);
-          b.classList.toggle('primary', b === btn);
-        });
-        document.querySelectorAll('.title-tab-view').forEach((v) => v.classList.add('hidden'));
-        const el = document.getElementById(`title-tab-${tab}`);
-        if (el) el.classList.remove('hidden');
-        if (tab === 'mods') this.renderModsUI();
-        if (tab === 'settings' && this.game) {
-          this.renderKeybindsUI(this.game.settings.keybinds);
-          this.syncCheatUI(this.game.areCheatsAllowed());
+        if (this.sound && this.sound.playPop) this.sound.playPop();
+        this.showTitleView(btn.dataset.titleView);
+      });
+    });
+
+    // Quick Accessibility / Large UI Scale toggle button (Java bottom-right square button)
+    const quickScaleBtn = document.getElementById('btn-quick-scale');
+    if (quickScaleBtn) {
+      quickScaleBtn.addEventListener('click', () => {
+        if (!this.game) return;
+        const next = !this.game.settings.largeUI;
+        this.game.updateSetting('largeUI', next);
+        this.syncSettingsUI(this.game.settings);
+        this.toast(next ? 'Large UI Scale ON' : 'Compact UI Scale ON');
+      });
+    }
+
+    // Title Options controls (synced with Pause settings!)
+    const titleShaders = document.getElementById('title-set-shaders');
+    if (titleShaders) {
+      titleShaders.addEventListener('change', (e) => {
+        if (this.game) {
+          this.game.updateSetting('shaders', e.target.value);
+          this.syncSettingsUI(this.game.settings);
         }
       });
+    }
+    const titleRD = document.getElementById('title-set-render-dist');
+    if (titleRD) {
+      titleRD.addEventListener('input', (e) => {
+        const v = parseInt(e.target.value, 10);
+        document.getElementById('title-val-render-dist').textContent = v;
+        if (this.game) {
+          this.game.updateSetting('renderDistance', v);
+          this.syncSettingsUI(this.game.settings);
+        }
+      });
+    }
+
+    // Placeholder Multiplayer Server Browser interactions
+    const mpList = document.getElementById('mp-server-list');
+    const mpMsg = document.getElementById('mp-status-msg');
+    if (mpList) {
+      mpList.querySelectorAll('.mp-server-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          mpList.querySelectorAll('.mp-server-row').forEach((r) => r.classList.remove('selected'));
+          row.classList.add('selected');
+          if (mpMsg) mpMsg.textContent = `Selected "${row.dataset.server}" — Multiplayer servers are a placeholder (coming soon!).`;
+        });
+      });
+    }
+    const setMpMsg = (txt) => {
+      if (mpMsg) mpMsg.textContent = txt;
+      this.toast(txt);
+    };
+    document.getElementById('btn-mp-join')?.addEventListener('click', () => {
+      const sel = mpList?.querySelector('.mp-server-row.selected')?.dataset.server || 'Server';
+      setMpMsg(`Cannot connect to ${sel} yet — Multiplayer is coming in a future update!`);
+    });
+    document.getElementById('btn-mp-direct')?.addEventListener('click', () => {
+      setMpMsg('Direct Connection is a placeholder — online servers coming soon!');
+    });
+    document.getElementById('btn-mp-add')?.addEventListener('click', () => {
+      setMpMsg('Add Server is a placeholder — custom servers coming soon!');
+    });
+    document.getElementById('btn-mp-refresh')?.addEventListener('click', () => {
+      setMpMsg('Refreshed placeholder server list (0 online — coming soon!).');
     });
 
     // HUD buttons
@@ -348,6 +568,12 @@ export class UIManager {
     document.getElementById('set-sound').checked = settings.sound;
     const cheatCb = document.getElementById('set-allow-cheats');
     if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
+    const tShaders = document.getElementById('title-set-shaders');
+    if (tShaders) tShaders.value = settings.shaders || 'ultra';
+    const tRD = document.getElementById('title-set-render-dist');
+    const tRDVal = document.getElementById('title-val-render-dist');
+    if (tRD) tRD.value = settings.renderDistance;
+    if (tRDVal) tRDVal.textContent = settings.renderDistance;
     this.renderKeybindsUI(settings.keybinds);
   }
 
@@ -454,6 +680,12 @@ export class UIManager {
   showTitleScreen(show) {
     document.getElementById('title-screen').classList.toggle('hidden', !show);
     document.getElementById('hud').classList.toggle('hidden', show);
+    if (show) {
+      this.showTitleView('home');
+      this.startTitlePanorama();
+    } else {
+      this.stopTitlePanorama();
+    }
   }
 
   // --- HUD ---

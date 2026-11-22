@@ -33,6 +33,10 @@ function px(ctx, ox, oy, x, y, color, w = 1, h = 1) {
   ctx.fillRect(ox + x, oy + y, w, h);
 }
 
+function keyIsSolidCubeIcon(key, def) {
+  return Boolean(def && def.isBlock && key !== 'bed');
+}
+
 export class TextureManager {
   constructor() {
     this.tileMap = {}; // name -> { col, row, u0, v0, u1, v1 }
@@ -41,9 +45,15 @@ export class TextureManager {
     this.extrudedGeoCache = {}; // itemKey -> 3D extruded pixel-art BufferGeometry
     this.blockDropGeoCache = {}; // "blockId:size" -> BufferGeometry
     this.mobCoatCache = {}; // key -> THREE.CanvasTexture
+    this.villagerTexCache = {}; // profName -> { headFront, headSide, headTop, nose, robeFront, robeSide, robeBack, hatTop, hatSide, apron, boot }
     this.hudIcons = {}; // name -> dataURL
     this.uiIcons = {}; // name -> dataURL (every UI button pixel art!)
     this.crackTextures = []; // 10 stages (0..9) of pixel-art block breaking cracks
+    this._iconScratch = document.createElement('canvas');
+    this._iconScratch.width = 32;
+    this._iconScratch.height = 32;
+    this._iconCtx = this._iconScratch.getContext('2d');
+    this._iconCtx.imageSmoothingEnabled = false;
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = ATLAS_COLS * TILE_SIZE;
@@ -60,7 +70,7 @@ export class TextureManager {
     this.atlasTexture.colorSpace = THREE.SRGBColorSpace;
     this.atlasTexture.generateMipmaps = false;
 
-    this.buildItemIcons();
+    // Item icons are lazily generated & cached on demand for blazing-fast startup!
     this.buildCrackTextures();
     this.buildHudIcons();
     this.buildUiIcons();
@@ -91,56 +101,144 @@ export class TextureManager {
   }
 
   buildAtlas() {
+    // Helper: Authentic Minecraft Jappa-style stratified stone base (reused by stone & ores!)
+    const drawMinecraftStone = (c, x, y, seed = 7) => {
+      const tones = ['#686868', '#747474', '#7f7f7f', '#898989', '#949494', '#606060'];
+      for (let iy = 0; iy < 16; iy++) {
+        // Horizontal sedimentary rock banding like real Minecraft stone
+        const band = ((iy * 3 + Math.floor(pxHash(0, iy, seed) * 3)) % 4);
+        for (let ix = 0; ix < 16; ix++) {
+          const h = pxHash(ix >> 1, iy, seed + band * 7);
+          const fine = pxHash(ix, iy, seed + 31);
+          let idx = Math.floor(h * 4) + (fine > 0.72 ? 1 : (fine < 0.22 ? -1 : 0));
+          idx = Math.max(0, Math.min(tones.length - 1, idx));
+          px(c, x, y, ix, iy, tones[idx]);
+        }
+      }
+      // Subtle horizontal strata highlights & crevices
+      for (let i = 0; i < 8; i++) {
+        const sx = Math.floor(pxHash(i, 1, seed + 9) * 12);
+        const sy = Math.floor(pxHash(i, 2, seed + 9) * 16);
+        px(c, x, y, sx, sy, i % 2 === 0 ? '#5c5c5c' : '#9c9c9c', 3, 1);
+      }
+    };
+
+    // Helper: Authentic Minecraft warm clumpy dirt with tiny grey pebble flecks!
+    const drawMinecraftDirt = (c, x, y, seed = 3) => {
+      const browns = ['#593d29', '#6e4b32', '#7d563a', '#8c6244', '#9c6f4d'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, seed);
+          const fine = pxHash(ix, iy, seed + 17);
+          if (fine > 0.935) {
+            px(c, x, y, ix, iy, '#8f8b85'); // authentic Minecraft little stone pebble in dirt!
+          } else {
+            const idx = Math.min(4, Math.max(0, Math.floor((clump * 0.6 + fine * 0.4) * 5)));
+            px(c, x, y, ix, iy, browns[idx]);
+          }
+        }
+      }
+    };
+
+    // Authentic Minecraft Lush Grass Top (rich mottled meadow green!)
     this.addTile('grass_top', (c, x, y) => {
-      fillNoise(c, x, y, '#5da135', 18, 1);
-      for (let i = 0; i < 24; i++) {
-        px(c, x, y, Math.floor(pxHash(i, 1, 2) * 16), Math.floor(pxHash(i, 2, 2) * 16), '#4a8528');
-      }
-    });
-
-    this.addTile('dirt', (c, x, y) => {
-      fillNoise(c, x, y, '#865b36', 18, 3);
-      for (let i = 0; i < 18; i++) {
-        px(c, x, y, Math.floor(pxHash(i, 3, 4) * 16), Math.floor(pxHash(i, 4, 4) * 16), '#6b4728');
-      }
-    });
-
-    this.addTile('grass_side', (c, x, y) => {
-      fillNoise(c, x, y, '#865b36', 16, 5);
-      for (let ix = 0; ix < 16; ix++) {
-        const drop = 3 + Math.floor(pxHash(ix, 1, 6) * 4);
-        for (let iy = 0; iy < drop; iy++) {
-          px(c, x, y, ix, iy, iy < 2 ? '#5da135' : '#4d8a2b');
+      const greens = ['#4e802d', '#5b9235', '#68a43e', '#75b548', '#81c251'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 1);
+          const fine = pxHash(ix, iy, 2);
+          const idx = Math.min(4, Math.max(0, Math.floor((clump * 0.55 + fine * 0.45) * 5)));
+          px(c, x, y, ix, iy, greens[idx]);
         }
       }
     });
 
-    this.addTile('stone', (c, x, y) => {
-      fillNoise(c, x, y, '#80848a', 16, 7);
-      for (let i = 0; i < 14; i++) {
-        px(c, x, y, Math.floor(pxHash(i, 5, 8) * 14), Math.floor(pxHash(i, 6, 8) * 16), '#686c73', 2, 1);
+    this.addTile('dirt', (c, x, y) => drawMinecraftDirt(c, x, y, 3));
+
+    // Authentic Minecraft Grass Side: hanging irregular grass overhang + dark edge shadow over dirt!
+    this.addTile('grass_side', (c, x, y) => {
+      drawMinecraftDirt(c, x, y, 5);
+      const fringe = [4, 5, 3, 4, 6, 4, 3, 5, 4, 3, 5, 6, 4, 3, 4, 5];
+      for (let ix = 0; ix < 16; ix++) {
+        const drop = fringe[ix];
+        for (let iy = 0; iy < drop; iy++) {
+          const h = pxHash(ix, iy, 6);
+          const col = iy === 0 ? (h > 0.5 ? '#75b548' : '#68a43e')
+            : (iy === drop - 1 ? '#457326' : (h > 0.5 ? '#5b9235' : '#4e802d'));
+          px(c, x, y, ix, iy, col);
+        }
+        // Subtle dark soil shadow tucked directly under the grass lip
+        if (drop < 16) px(c, x, y, ix, drop, '#4f3522');
       }
     });
 
+    this.addTile('stone', (c, x, y) => drawMinecraftStone(c, x, y, 7));
+
+    // Authentic Minecraft Cobblestone (interlocking rounded masonry stones with bevel highlights & crevices!)
     this.addTile('cobblestone', (c, x, y) => {
-      fillNoise(c, x, y, '#73777d', 22, 9);
-      c.fillStyle = '#4e5157';
-      for (let iy = 0; iy < 16; iy += 4) px(c, x, y, 0, iy, '#4e5157', 16, 1);
-      for (let iy = 0; iy < 16; iy += 4) {
-        const off = (iy % 8 === 0) ? 0 : 4;
-        for (let ix = off; ix < 16; ix += 8) px(c, x, y, ix, iy, '#4e5157', 1, 4);
+      c.fillStyle = '#474747';
+      c.fillRect(x, y, 16, 16);
+      const stones = [
+        [0, 0, 7, 4], [8, 0, 8, 5],
+        [0, 5, 4, 4], [5, 5, 6, 5], [12, 6, 4, 4],
+        [0, 10, 6, 5], [7, 11, 5, 4], [13, 11, 3, 4]
+      ];
+      stones.forEach(([sx, sy, sw, sh], i) => {
+        const base = i % 3 === 0 ? '#7d7d7d' : (i % 3 === 1 ? '#8a8a8a' : '#707070');
+        const hi = i % 2 === 0 ? '#9e9e9e' : '#a8a8a8';
+        const lo = '#5c5c5c';
+        px(c, x, y, sx, sy, base, sw, sh);
+        px(c, x, y, sx, sy, hi, Math.max(1, sw - 1), 1);
+        px(c, x, y, sx, sy, hi, 1, Math.max(1, sh - 1));
+        px(c, x, y, sx, sy + sh - 1, lo, sw, 1);
+        px(c, x, y, sx + sw - 1, sy + 1, lo, 1, Math.max(1, sh - 1));
+      });
+    });
+
+    this.addTile('bedrock', (c, x, y) => {
+      const cols = ['#1f1f23', '#2e2e33', '#42424a', '#575761', '#141417'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const h = pxHash(ix >> 1, iy, 11);
+          const f = pxHash(ix, iy, 12);
+          px(c, x, y, ix, iy, cols[Math.floor((h * 0.65 + f * 0.35) * 5)]);
+        }
       }
     });
 
-    this.addTile('bedrock', (c, x, y) => fillNoise(c, x, y, '#383a3f', 32, 11));
-    this.addTile('sand', (c, x, y) => fillNoise(c, x, y, '#dfd09c', 14, 12));
-    this.addTile('gravel', (c, x, y) => fillNoise(c, x, y, '#8a8583', 28, 13));
+    // Authentic Minecraft Warm Wind-Rippled Sand!
+    this.addTile('sand', (c, x, y) => {
+      const sands = ['#d5c48c', '#dfd19c', '#e6daa8', '#ede3b4', '#c9b77d'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const wave = Math.sin((ix * 0.55 + iy * 0.9)) * 0.5 + 0.5;
+          const h = pxHash(ix, iy, 12);
+          const idx = Math.min(4, Math.max(0, Math.floor((wave * 0.5 + h * 0.5) * 5)));
+          px(c, x, y, ix, iy, sands[idx]);
+        }
+      }
+    });
 
-    this.addTile('sandstone_top', (c, x, y) => fillNoise(c, x, y, '#d8c78d', 10, 14));
+    this.addTile('gravel', (c, x, y) => {
+      const cols = ['#63605e', '#787472', '#8a8684', '#9e9a97', '#54514f'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          px(c, x, y, ix, iy, cols[Math.floor(pxHash(ix, iy, 13) * 5)]);
+        }
+      }
+    });
+
+    this.addTile('sandstone_top', (c, x, y) => {
+      fillNoise(c, x, y, '#dfd19c', 9, 14);
+      px(c, x, y, 0, 0, '#c7b57c', 16, 1);
+      px(c, x, y, 0, 15, '#c7b57c', 16, 1);
+    });
     this.addTile('sandstone_side', (c, x, y) => {
-      fillNoise(c, x, y, '#d4c184', 10, 15);
-      px(c, x, y, 0, 3, '#b8a369', 16, 1);
-      px(c, x, y, 0, 10, '#bfa96e', 16, 1);
+      fillNoise(c, x, y, '#d9c88c', 9, 15);
+      px(c, x, y, 0, 0, '#e8dca8', 16, 2);
+      px(c, x, y, 0, 3, '#baa568', 16, 1);
+      px(c, x, y, 0, 10, '#c2ad6f', 16, 1);
+      px(c, x, y, 0, 14, '#b39d62', 16, 2);
     });
 
     this.addTile('water', (c, x, y) => {
@@ -151,206 +249,271 @@ export class TextureManager {
       }
     });
 
-    // Logs & Planks
-    const drawLogSide = (c, x, y, base, bark, s) => {
-      fillNoise(c, x, y, base, 12, s);
-      for (let ix = 0; ix < 16; ix += 3) px(c, x, y, ix, 0, bark, 1, 16);
+    // Authentic Minecraft Logs (vertical grooved bark!), Ringed Log Tops, Detailed Wood Planks & Lush Leaves
+    const drawLogSide = (c, x, y, base, dark, light, s) => {
+      fillNoise(c, x, y, base, 9, s);
+      for (let ix = 0; ix < 16; ix++) {
+        if (ix % 4 === 0) {
+          for (let iy = 0; iy < 16; iy++) {
+            px(c, x, y, ix, iy, pxHash(ix, iy, s + 3) > 0.25 ? dark : base);
+          }
+        } else if (ix % 4 === 2) {
+          for (let iy = 0; iy < 16; iy++) {
+            if (pxHash(ix, iy, s + 5) > 0.45) px(c, x, y, ix, iy, light);
+          }
+        }
+      }
     };
-    const drawLogTop = (c, x, y, bark, inner, s) => {
-      fillNoise(c, x, y, bark, 10, s);
+    const drawLogTop = (c, x, y, bark, mid, inner, s) => {
+      fillNoise(c, x, y, bark, 8, s);
       px(c, x, y, 2, 2, inner, 12, 12);
-      px(c, x, y, 4, 4, bark, 8, 8);
-      px(c, x, y, 6, 6, inner, 4, 4);
+      px(c, x, y, 3, 3, mid, 10, 10);
+      px(c, x, y, 4, 4, inner, 8, 8);
+      px(c, x, y, 6, 6, mid, 4, 4);
+      px(c, x, y, 7, 7, bark, 2, 2);
     };
-    const drawPlanks = (c, x, y, base, line, s) => {
-      fillNoise(c, x, y, base, 10, s);
-      for (let iy = 0; iy < 16; iy += 4) px(c, x, y, 0, iy, line, 16, 1);
-      px(c, x, y, 7, 0, line, 1, 4);
-      px(c, x, y, 13, 4, line, 1, 4);
-      px(c, x, y, 4, 8, line, 1, 4);
-      px(c, x, y, 10, 12, line, 1, 4);
+    const drawPlanks = (c, x, y, base, hi, lo, line, s) => {
+      for (let iy = 0; iy < 16; iy++) {
+        const isSeam = (iy % 4 === 0);
+        const isTop = (iy % 4 === 1);
+        const isBot = (iy % 4 === 3);
+        for (let ix = 0; ix < 16; ix++) {
+          if (isSeam) {
+            px(c, x, y, ix, iy, line);
+          } else {
+            const h = pxHash(ix >> 1, iy, s);
+            const col = isTop ? (h > 0.4 ? hi : base) : (isBot ? (h > 0.4 ? lo : base) : (h > 0.65 ? hi : (h < 0.25 ? lo : base)));
+            px(c, x, y, ix, iy, col);
+          }
+        }
+      }
+      // Staggered plank vertical end-joints
+      px(c, x, y, 7, 0, line, 1, 4); px(c, x, y, 8, 1, hi, 1, 2);
+      px(c, x, y, 13, 4, line, 1, 4); px(c, x, y, 14, 5, hi, 1, 2);
+      px(c, x, y, 4, 8, line, 1, 4); px(c, x, y, 5, 9, hi, 1, 2);
+      px(c, x, y, 10, 12, line, 1, 4); px(c, x, y, 11, 13, hi, 1, 2);
     };
-    const drawLeaves = (c, x, y, c1, c2, s) => {
+    const drawLeaves = (c, x, y, hi, mid, lo, s) => {
       for (let iy = 0; iy < 16; iy++) {
         for (let ix = 0; ix < 16; ix++) {
-          const r = pxHash(ix, iy, s);
-          if (r > 0.22) {
-            px(c, x, y, ix, iy, r > 0.62 ? c1 : c2);
+          const clump = pxHash(ix >> 1, iy >> 1, s);
+          const fine = pxHash(ix, iy, s + 9);
+          const v = clump * 0.5 + fine * 0.5;
+          if (v > 0.22) {
+            px(c, x, y, ix, iy, v > 0.72 ? hi : (v > 0.42 ? mid : lo));
           }
         }
       }
     };
 
-    this.addTile('oak_log_side', (c, x, y) => drawLogSide(c, x, y, '#6b5134', '#4d3923', 20));
-    this.addTile('oak_log_top', (c, x, y) => drawLogTop(c, x, y, '#634a2e', '#b59262', 21));
-    this.addTile('oak_planks', (c, x, y) => drawPlanks(c, x, y, '#b58d59', '#8a693e', 22));
-    this.addTile('oak_leaves', (c, x, y) => drawLeaves(c, x, y, '#478c2b', '#336b1d', 23));
+    this.addTile('oak_log_side', (c, x, y) => drawLogSide(c, x, y, '#6b5134', '#4a351e', '#826543', 20));
+    this.addTile('oak_log_top', (c, x, y) => drawLogTop(c, x, y, '#594228', '#99774d', '#ba9665', 21));
+    this.addTile('oak_planks', (c, x, y) => drawPlanks(c, x, y, '#b58d59', '#c7a069', '#9e7747', '#6e502c', 22));
+    this.addTile('oak_leaves', (c, x, y) => drawLeaves(c, x, y, '#5ca834', '#438525', '#2a5916', 23));
 
     this.addTile('birch_log_side', (c, x, y) => {
-      fillNoise(c, x, y, '#e0ddd5', 10, 24);
-      for (let i = 0; i < 12; i++) {
-        px(c, x, y, Math.floor(pxHash(i, 1, 25) * 13), Math.floor(pxHash(i, 2, 25) * 16), '#3a3a3a', 3, 1);
+      fillNoise(c, x, y, '#e6e3db', 8, 24);
+      const knots = [[1,2,4],[9,5,5],[3,8,3],[11,11,4],[2,13,5],[7,1,3],[12,7,3]];
+      for (const [kx, ky, kw] of knots) {
+        px(c, x, y, kx, ky, '#343638', kw, 1);
+        px(c, x, y, kx + 1, ky + 1, '#6b6d70', Math.max(1, kw - 2), 1);
       }
     });
-    this.addTile('birch_log_top', (c, x, y) => drawLogTop(c, x, y, '#dad6cc', '#cfb98c', 26));
-    this.addTile('birch_planks', (c, x, y) => drawPlanks(c, x, y, '#d6c18f', '#ad996b', 27));
-    this.addTile('birch_leaves', (c, x, y) => drawLeaves(c, x, y, '#64a33b', '#4d822a', 28));
+    this.addTile('birch_log_top', (c, x, y) => drawLogTop(c, x, y, '#d8d4ca', '#bfa77a', '#d6c194', 26));
+    this.addTile('birch_planks', (c, x, y) => drawPlanks(c, x, y, '#d4c08d', '#e3d1a1', '#bfa977', '#8c7950', 27));
+    this.addTile('birch_leaves', (c, x, y) => drawLeaves(c, x, y, '#79ba47', '#5c9933', '#3e6e20', 28));
 
-    this.addTile('spruce_log_side', (c, x, y) => drawLogSide(c, x, y, '#473322', '#2e2014', 29));
-    this.addTile('spruce_log_top', (c, x, y) => drawLogTop(c, x, y, '#422e1d', '#876542', 30));
-    this.addTile('spruce_planks', (c, x, y) => drawPlanks(c, x, y, '#7a5837', '#593e24', 31));
-    this.addTile('spruce_leaves', (c, x, y) => drawLeaves(c, x, y, '#2f613b', '#1e4228', 32));
+    this.addTile('spruce_log_side', (c, x, y) => drawLogSide(c, x, y, '#473322', '#2b1d12', '#5c432d', 29));
+    this.addTile('spruce_log_top', (c, x, y) => drawLogTop(c, x, y, '#3d2a1b', '#6e5033', '#8c6945', 30));
+    this.addTile('spruce_planks', (c, x, y) => drawPlanks(c, x, y, '#785535', '#8c6642', '#634428', '#452e1a', 31));
+    this.addTile('spruce_leaves', (c, x, y) => drawLeaves(c, x, y, '#3f784c', '#2c5937', '#1a3b23', 32));
 
     // Cactus, Snow, Ice
     this.addTile('cactus_side', (c, x, y) => {
-      fillNoise(c, x, y, '#3f8a33', 12, 33);
-      px(c, x, y, 3, 0, '#2a6321', 1, 16);
-      px(c, x, y, 8, 0, '#2a6321', 1, 16);
-      px(c, x, y, 13, 0, '#2a6321', 1, 16);
+      fillNoise(c, x, y, '#3f8a33', 10, 33);
+      for (const cx of [3, 8, 13]) {
+        px(c, x, y, cx, 0, '#296120', 1, 16);
+        px(c, x, y, cx + 1, 0, '#54a644', 1, 16);
+      }
+      for (const [sx, sy] of [[2,3],[7,9],[12,5],[2,12],[12,13]]) px(c, x, y, sx, sy, '#193b14');
     });
     this.addTile('cactus_top', (c, x, y) => {
-      fillNoise(c, x, y, '#4ca13d', 12, 34);
+      fillNoise(c, x, y, '#4ca13d', 10, 34);
       px(c, x, y, 3, 3, '#2d6b23', 10, 10);
+      px(c, x, y, 5, 5, '#5bb54a', 6, 6);
     });
-    this.addTile('snow', (c, x, y) => fillNoise(c, x, y, '#eef5fa', 8, 35));
+    this.addTile('snow', (c, x, y) => {
+      fillNoise(c, x, y, '#f0f7fc', 6, 35);
+      for (let i = 0; i < 10; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 36) * 14), Math.floor(pxHash(i, 2, 36) * 16), '#d9ebf7', 2, 1);
+      }
+    });
     this.addTile('ice', (c, x, y) => {
       c.fillStyle = 'rgba(135, 200, 250, 0.78)';
       c.fillRect(x, y, 16, 16);
-      px(c, x, y, 2, 2, 'rgba(255,255,255,0.55)', 5, 1);
-      px(c, x, y, 9, 10, 'rgba(255,255,255,0.45)', 5, 1);
+      px(c, x, y, 2, 2, 'rgba(255,255,255,0.65)', 5, 1);
+      px(c, x, y, 3, 3, 'rgba(255,255,255,0.45)', 3, 1);
+      px(c, x, y, 9, 10, 'rgba(255,255,255,0.55)', 5, 1);
+      px(c, x, y, 10, 11, 'rgba(255,255,255,0.35)', 3, 1);
     });
 
-    // Ores
-    const drawOre = (c, x, y, speck, s) => {
-      fillNoise(c, x, y, '#7f838a', 15, s);
-      const pts = [[3,3],[4,4],[10,2],[11,3],[6,8],[7,9],[12,11],[11,12],[3,12],[4,11]];
-      for (const [ox, oy] of pts) px(c, x, y, ox, oy, speck, 2, 2);
+    // Authentic Minecraft Crystalline Ores Embedded in Stratified Stone!
+    const drawOre = (c, x, y, dark, mid, hi, s) => {
+      drawMinecraftStone(c, x, y, s);
+      const clusters = [[2,3],[10,2],[6,7],[11,11],[3,11]];
+      for (const [ox, oy] of clusters) {
+        px(c, x, y, ox, oy + 1, '#525252', 3, 2); // stone recess shadow
+        px(c, x, y, ox, oy, dark, 3, 2);
+        px(c, x, y, ox, oy, mid, 2, 2);
+        px(c, x, y, ox, oy, hi, 1, 1);
+      }
     };
-    this.addTile('coal_ore', (c, x, y) => drawOre(c, x, y, '#232428', 40));
-    this.addTile('iron_ore', (c, x, y) => drawOre(c, x, y, '#d8b291', 41));
-    this.addTile('gold_ore', (c, x, y) => drawOre(c, x, y, '#f5d033', 42));
-    this.addTile('diamond_ore', (c, x, y) => drawOre(c, x, y, '#4de3e8', 43));
+    this.addTile('coal_ore', (c, x, y) => drawOre(c, x, y, '#141518', '#25272e', '#454954', 40));
+    this.addTile('iron_ore', (c, x, y) => drawOre(c, x, y, '#8f674b', '#d4a685', '#f2d5bc', 41));
+    this.addTile('gold_ore', (c, x, y) => drawOre(c, x, y, '#b57b12', '#f5c731', '#fff59d', 42));
+    this.addTile('diamond_ore', (c, x, y) => drawOre(c, x, y, '#149ba6', '#3ee6ed', '#d4feff', 43));
 
     // Utility blocks
     this.addTile('craft_top', (c, x, y) => {
-      fillNoise(c, x, y, '#b58852', 10, 44);
-      px(c, x, y, 0, 0, '#6e4d26', 16, 1);
-      px(c, x, y, 0, 15, '#6e4d26', 16, 1);
-      px(c, x, y, 0, 0, '#6e4d26', 1, 16);
-      px(c, x, y, 15, 0, '#6e4d26', 1, 16);
-      px(c, x, y, 5, 1, '#5c3f1e', 1, 14);
-      px(c, x, y, 10, 1, '#5c3f1e', 1, 14);
-      px(c, x, y, 1, 5, '#5c3f1e', 14, 1);
-      px(c, x, y, 1, 10, '#5c3f1e', 14, 1);
+      fillNoise(c, x, y, '#b58852', 9, 44);
+      px(c, x, y, 0, 0, '#6e4d26', 16, 1); px(c, x, y, 0, 15, '#6e4d26', 16, 1);
+      px(c, x, y, 0, 0, '#6e4d26', 1, 16); px(c, x, y, 15, 0, '#6e4d26', 1, 16);
+      px(c, x, y, 5, 1, '#543819', 1, 14); px(c, x, y, 10, 1, '#543819', 1, 14);
+      px(c, x, y, 1, 5, '#543819', 14, 1); px(c, x, y, 1, 10, '#543819', 14, 1);
+      px(c, x, y, 2, 2, '#cfa36b', 2, 1); px(c, x, y, 7, 7, '#cfa36b', 2, 1);
     });
     this.addTile('craft_side', (c, x, y) => {
-      drawPlanks(c, x, y, '#a87d4a', '#73532c', 45);
-      px(c, x, y, 0, 0, '#6e4d26', 16, 2);
-      px(c, x, y, 3, 4, '#cfd6df', 2, 6); // saw
-      px(c, x, y, 10, 5, '#5c4122', 2, 6); // hammer
+      drawPlanks(c, x, y, '#a87d4a', '#bd925c', '#8c6538', '#5e4120', 45);
+      px(c, x, y, 0, 0, '#61411d', 16, 2);
+      px(c, x, y, 3, 4, '#2b2e33', 3, 7); px(c, x, y, 4, 4, '#d8e0e8', 2, 6); // saw
+      px(c, x, y, 10, 4, '#3b2410', 3, 7); px(c, x, y, 11, 5, '#784e26', 1, 5); px(c, x, y, 9, 4, '#b8c0cc', 4, 2); // hammer
     });
     this.addTile('furnace_top', (c, x, y) => {
-      fillNoise(c, x, y, '#7c8087', 14, 46);
-      px(c, x, y, 0, 0, '#55585e', 16, 1);
-      px(c, x, y, 0, 15, '#55585e', 16, 1);
+      drawMinecraftStone(c, x, y, 46);
+      px(c, x, y, 0, 0, '#4f5258', 16, 1); px(c, x, y, 0, 15, '#4f5258', 16, 1);
+      px(c, x, y, 0, 0, '#4f5258', 1, 16); px(c, x, y, 15, 0, '#4f5258', 1, 16);
     });
     this.addTile('furnace_front', (c, x, y) => {
-      fillNoise(c, x, y, '#7c8087', 14, 47);
-      px(c, x, y, 3, 3, '#222', 10, 4);
-      px(c, x, y, 4, 10, '#222', 8, 4);
-      px(c, x, y, 5, 11, '#ff7b29', 6, 2);
+      drawMinecraftStone(c, x, y, 47);
+      px(c, x, y, 2, 2, '#3d3f45', 12, 5); px(c, x, y, 3, 3, '#1a1a1e', 10, 3);
+      px(c, x, y, 3, 9, '#3d3f45', 10, 5); px(c, x, y, 4, 10, '#1a1a1e', 8, 3);
+      px(c, x, y, 5, 11, '#ff7b29', 6, 2); px(c, x, y, 6, 11, '#ffe066', 4, 1);
     });
     this.addTile('chest_top', (c, x, y) => {
-      fillNoise(c, x, y, '#a67638', 12, 48);
-      px(c, x, y, 0, 0, '#4f3718', 16, 1);
-      px(c, x, y, 0, 15, '#4f3718', 16, 1);
-      px(c, x, y, 0, 0, '#4f3718', 1, 16);
-      px(c, x, y, 15, 0, '#4f3718', 1, 16);
+      drawPlanks(c, x, y, '#a87838', '#bd8c4a', '#8c6129', '#4a3112', 48);
+      px(c, x, y, 0, 0, '#4a3112', 16, 1); px(c, x, y, 0, 15, '#4a3112', 16, 1);
+      px(c, x, y, 0, 0, '#4a3112', 1, 16); px(c, x, y, 15, 0, '#4a3112', 1, 16);
     });
     this.addTile('chest_front', (c, x, y) => {
-      fillNoise(c, x, y, '#a67638', 12, 49);
-      px(c, x, y, 0, 6, '#3b2911', 16, 1);
-      px(c, x, y, 6, 4, '#e6e6e6', 4, 4);
-      px(c, x, y, 7, 5, '#8a8a8a', 2, 2);
+      drawPlanks(c, x, y, '#a87838', '#bd8c4a', '#8c6129', '#4a3112', 49);
+      px(c, x, y, 0, 0, '#4a3112', 16, 1); px(c, x, y, 0, 15, '#4a3112', 16, 1);
+      px(c, x, y, 0, 6, '#36230c', 16, 1);
+      px(c, x, y, 6, 4, '#2b2b2b', 4, 5);
+      px(c, x, y, 7, 5, '#e8ecf0', 2, 3);
+      px(c, x, y, 7, 7, '#8f96a0', 2, 1);
     });
 
     // Building & Decorative
     this.addTile('glass', (c, x, y) => {
-      c.fillStyle = 'rgba(205, 238, 255, 0.28)';
+      c.fillStyle = 'rgba(205, 238, 255, 0.24)';
       c.fillRect(x, y, 16, 16);
-      px(c, x, y, 0, 0, '#b5dced', 16, 1);
-      px(c, x, y, 0, 15, '#b5dced', 16, 1);
-      px(c, x, y, 0, 0, '#b5dced', 1, 16);
-      px(c, x, y, 15, 0, '#b5dced', 1, 16);
-      px(c, x, y, 3, 3, 'rgba(255,255,255,0.75)', 2, 1);
-      px(c, x, y, 2, 4, 'rgba(255,255,255,0.75)', 1, 2);
+      px(c, x, y, 0, 0, '#b8e0f2', 16, 1); px(c, x, y, 0, 15, '#b8e0f2', 16, 1);
+      px(c, x, y, 0, 0, '#b8e0f2', 1, 16); px(c, x, y, 15, 0, '#b8e0f2', 1, 16);
+      px(c, x, y, 3, 2, 'rgba(255,255,255,0.8)', 2, 1);
+      px(c, x, y, 2, 3, 'rgba(255,255,255,0.8)', 1, 2);
+      px(c, x, y, 12, 12, 'rgba(255,255,255,0.65)', 2, 1);
     });
     this.addTile('bricks', (c, x, y) => {
-      fillNoise(c, x, y, '#a14b3c', 16, 50);
-      for (let iy = 0; iy < 16; iy += 4) px(c, x, y, 0, iy, '#c8c4bc', 16, 1);
+      fillNoise(c, x, y, '#9c4a3b', 12, 50);
+      for (let iy = 0; iy < 16; iy += 4) {
+        px(c, x, y, 0, iy, '#c8c4bc', 16, 1);
+        px(c, x, y, 0, iy + 1, '#b55c4a', 16, 1);
+      }
       for (let iy = 0; iy < 16; iy += 4) {
         const off = (iy % 8 === 0) ? 0 : 4;
         for (let ix = off; ix < 16; ix += 8) px(c, x, y, ix, iy, '#c8c4bc', 1, 4);
       }
     });
     this.addTile('tnt_top', (c, x, y) => {
-      fillNoise(c, x, y, '#b83227', 12, 51);
+      fillNoise(c, x, y, '#b83227', 10, 51);
+      for (let ix = 0; ix < 16; ix += 4) px(c, x, y, ix, 0, '#8c2219', 1, 16);
       px(c, x, y, 5, 5, '#2b2b2b', 6, 6);
+      px(c, x, y, 7, 7, '#6b6b6b', 2, 2);
     });
     this.addTile('tnt_side', (c, x, y) => {
-      fillNoise(c, x, y, '#c9382b', 12, 52);
-      px(c, x, y, 0, 5, '#f0ece4', 16, 6);
+      fillNoise(c, x, y, '#c9382b', 10, 52);
+      for (let ix = 0; ix < 16; ix += 4) px(c, x, y, ix, 0, '#94251c', 1, 16);
+      px(c, x, y, 0, 5, '#f2eee6', 16, 6);
+      px(c, x, y, 0, 10, '#d4cfc5', 16, 1);
       px(c, x, y, 2, 6, '#1a1a1a', 3, 1); px(c, x, y, 3, 7, '#1a1a1a', 1, 3);
       px(c, x, y, 6, 6, '#1a1a1a', 1, 4); px(c, x, y, 7, 7, '#1a1a1a', 1, 1); px(c, x, y, 8, 6, '#1a1a1a', 1, 4);
       px(c, x, y, 10, 6, '#1a1a1a', 3, 1); px(c, x, y, 11, 7, '#1a1a1a', 1, 3);
     });
     this.addTile('torch', (c, x, y) => {
-      px(c, x, y, 7, 6, '#875c34', 2, 10);
-      px(c, x, y, 6, 3, '#ff9800', 4, 4);
-      px(c, x, y, 7, 2, '#fff176', 2, 3);
+      px(c, x, y, 7, 6, '#7a522d', 2, 10);
+      px(c, x, y, 7, 6, '#9e6d3d', 1, 10);
+      px(c, x, y, 6, 4, '#e65100', 4, 3);
+      px(c, x, y, 6, 3, '#ff9800', 4, 3);
+      px(c, x, y, 7, 2, '#fff59d', 2, 3);
+      px(c, x, y, 7, 2, '#ffffff', 1, 1);
     });
     this.addTile('bookshelf', (c, x, y) => {
-      drawPlanks(c, x, y, '#a67e4d', '#755630', 53);
-      const colors = ['#c62828', '#1565c0', '#2e7d32', '#f9a825', '#6a1b9a', '#d84315'];
-      for (let shelf of [2, 9]) {
+      drawPlanks(c, x, y, '#b08652', '#c49b66', '#8f6a3c', '#5e4221', 53);
+      const colors = ['#c62828', '#1565c0', '#2e7d32', '#f9a825', '#6a1b9a', '#d84315', '#00838f'];
+      for (const shelf of [2, 9]) {
         px(c, x, y, 1, shelf, '#261b12', 14, 5);
         for (let ix = 1; ix < 15; ix += 2) {
-          px(c, x, y, ix, shelf + 1, colors[(ix + shelf) % colors.length], 2, 4);
+          const col = colors[(ix + shelf) % colors.length];
+          px(c, x, y, ix, shelf + 1, col, 2, 4);
+          px(c, x, y, ix, shelf + 2, '#f5ecd7', 2, 1); // gold/white spine stripe
         }
       }
     });
 
-    this.addTile('wool_white', (c, x, y) => fillNoise(c, x, y, '#eceef0', 12, 60));
-    this.addTile('wool_red', (c, x, y) => fillNoise(c, x, y, '#c73434', 14, 61));
-    this.addTile('wool_blue', (c, x, y) => fillNoise(c, x, y, '#325cc7', 14, 62));
-    this.addTile('wool_green', (c, x, y) => fillNoise(c, x, y, '#3c8f3c', 14, 63));
-    this.addTile('wool_yellow', (c, x, y) => fillNoise(c, x, y, '#e6c832', 14, 64));
+    this.addTile('wool_white', (c, x, y) => fillNoise(c, x, y, '#eceef0', 10, 60));
+    this.addTile('wool_red', (c, x, y) => fillNoise(c, x, y, '#c73434', 12, 61));
+    this.addTile('wool_blue', (c, x, y) => fillNoise(c, x, y, '#325cc7', 12, 62));
+    this.addTile('wool_green', (c, x, y) => fillNoise(c, x, y, '#3c8f3c', 12, 63));
+    this.addTile('wool_yellow', (c, x, y) => fillNoise(c, x, y, '#e6c832', 12, 64));
 
-    this.addTile('obsidian', (c, x, y) => fillNoise(c, x, y, '#231930', 18, 65));
+    this.addTile('obsidian', (c, x, y) => {
+      fillNoise(c, x, y, '#1b1429', 14, 65);
+      for (let i = 0; i < 12; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 65) * 14), Math.floor(pxHash(i, 2, 65) * 14), '#3b245e', 2, 2);
+      }
+    });
     this.addTile('glowstone', (c, x, y) => {
-      fillNoise(c, x, y, '#e0b84c', 28, 66);
-      for (let i = 0; i < 16; i++) {
-        px(c, x, y, Math.floor(pxHash(i, 1, 67) * 14), Math.floor(pxHash(i, 2, 67) * 14), '#fff5b5', 2, 2);
+      fillNoise(c, x, y, '#d4a33b', 22, 66);
+      for (let i = 0; i < 18; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 67) * 14), Math.floor(pxHash(i, 2, 67) * 14), i % 3 === 0 ? '#8c5e16' : '#fff5b5', 2, 2);
       }
     });
 
+    // Authentic Minecraft Tall Grass, Poppy & Oxeye Daisy/Dandelion!
     this.addTile('tall_grass', (c, x, y) => {
-      const blades = [2, 5, 7, 10, 13];
-      for (const bx of blades) {
-        const h = 6 + Math.floor(pxHash(bx, 1, 70) * 7);
-        px(c, x, y, bx, 16 - h, '#4d9632', 2, h);
-        px(c, x, y, bx, 16 - h, '#74bf47', 1, 3);
+      const blades = [[2,9],[4,11],[6,13],[8,10],[10,12],[12,8],[14,10]];
+      for (const [bx, h] of blades) {
+        px(c, x, y, bx, 16 - h, '#4c8f2f', 2, h);
+        px(c, x, y, bx, 16 - h, '#78c449', 1, Math.min(5, h));
+        px(c, x, y, bx + 1, 16 - Math.floor(h * 0.5), '#386e20', 1, Math.floor(h * 0.5));
       }
     });
     this.addTile('flower_red', (c, x, y) => {
-      px(c, x, y, 7, 8, '#3f8a29', 2, 8);
-      px(c, x, y, 5, 4, '#e53935', 6, 5);
-      px(c, x, y, 7, 5, '#2b2b2b', 2, 2);
+      px(c, x, y, 7, 8, '#3a8224', 2, 8);
+      px(c, x, y, 5, 11, '#58a836', 2, 2); px(c, x, y, 9, 10, '#58a836', 2, 2);
+      px(c, x, y, 5, 3, '#b81d1d', 6, 6);
+      px(c, x, y, 6, 4, '#ef3b3b', 4, 4);
+      px(c, x, y, 5, 4, '#ff6b6b', 2, 2);
+      px(c, x, y, 7, 5, '#261a1a', 2, 2);
     });
     this.addTile('flower_yellow', (c, x, y) => {
-      px(c, x, y, 7, 8, '#3f8a29', 2, 8);
-      px(c, x, y, 5, 4, '#fdd835', 6, 5);
-      px(c, x, y, 7, 5, '#f57f17', 2, 2);
+      // Crisp Minecraft Meadow Daisy / Dandelion cluster!
+      px(c, x, y, 7, 8, '#3a8224', 2, 8);
+      px(c, x, y, 5, 11, '#58a836', 2, 2); px(c, x, y, 9, 12, '#58a836', 2, 2);
+      px(c, x, y, 5, 3, '#f5c71a', 6, 6);
+      px(c, x, y, 6, 2, '#fff59d', 4, 8);
+      px(c, x, y, 4, 4, '#fff59d', 8, 4);
+      px(c, x, y, 7, 5, '#e68a00', 2, 2);
     });
 
     this.addTile('bed_top', (c, x, y) => {
@@ -414,81 +577,130 @@ export class TextureManager {
     });
   }
 
-  buildItemIcons() {
-    const tmp = document.createElement('canvas');
-    tmp.width = 32;
-    tmp.height = 32;
-    const ctx = tmp.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
-
-    for (const [key, def] of Object.entries(ITEMS)) {
-      ctx.clearRect(0, 0, 32, 32);
-      if (def.isBlock && key !== 'bed') {
-        const faceName = def.faces.side || def.faces.all || def.faces.top;
-        const tile = this.getUV(faceName);
-        ctx.drawImage(this.canvas, tile.ox, tile.oy, TILE_SIZE, TILE_SIZE, 2, 2, 28, 28);
-        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(2, 2, 28, 28);
-      } else {
-        this.drawPixelItem(ctx, key, def);
-      }
-      this.itemIcons[key] = tmp.toDataURL();
+  // Lazy on-demand 16x16 (32x32) icon caching — cuts initial startup time dramatically!
+  getIcon(itemKey) {
+    if (this.itemIcons[itemKey]) return this.itemIcons[itemKey];
+    const def = ITEMS[itemKey];
+    if (!def) return '';
+    const ctx = this._iconCtx;
+    ctx.clearRect(0, 0, 32, 32);
+    if (def.isBlock && keyIsSolidCubeIcon(itemKey, def)) {
+      const faceName = def.faces.side || def.faces.all || def.faces.top;
+      const tile = this.getUV(faceName);
+      ctx.drawImage(this.canvas, tile.ox, tile.oy, TILE_SIZE, TILE_SIZE, 2, 2, 28, 28);
+      ctx.strokeStyle = 'rgba(0,0,0,0.48)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(2, 2, 28, 28);
+    } else {
+      this.drawPixelItem(ctx, itemKey, def);
     }
+    const url = this._iconScratch.toDataURL();
+    this.itemIcons[itemKey] = url;
+    return url;
   }
 
-  // Strict 16x16 Integer Pixel-Art Grid (every item coherent, crisp 1px dark outline, rich shading!)
+  // Hand-Crafted 16x16 Minecraft / Reforge-Grade Pixel-Art Matrix Sprites (scale 2x -> 32x32)!
   drawPixelItem(c, key, def) {
-    const p = (x, y, col, w = 1, h = 1) => {
-      c.fillStyle = col;
-      c.fillRect(Math.round(x) * 2, Math.round(y) * 2, Math.round(w) * 2, Math.round(h) * 2);
+    const drawGrid = (rows, pal) => {
+      for (let y = 0; y < 16; y++) {
+        const row = rows[y];
+        if (!row) continue;
+        for (let x = 0; x < 16; x++) {
+          const col = pal[row[x]];
+          if (col) {
+            c.fillStyle = col;
+            c.fillRect(x * 2, y * 2, 2, 2);
+          }
+        }
+      }
     };
 
     const tierPal = {
-      wooden:  { out: '#2b1a0c', base: '#a6743c', hi: '#cfa063', lo: '#6e4920' },
-      stone:   { out: '#1e2024', base: '#8e949e', hi: '#c2c8d1', lo: '#5e636b' },
-      iron:    { out: '#181c22', base: '#d8dfe8', hi: '#ffffff', lo: '#8c96a6' },
-      diamond: { out: '#0b2c36', base: '#3be3eb', hi: '#b5fcff', lo: '#189ca8' },
-      leather: { out: '#261409', base: '#9e5d30', hi: '#c9824f', lo: '#6b3b1b' }
+      wooden:  { O: '#2b1a0c', D: '#6b4720', M: '#9c6b36', L: '#c99757', H: '#e3b878', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      stone:   { O: '#1c1e22', D: '#575c63', M: '#878d96', L: '#b2b8c2', H: '#d8dee6', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      iron:    { O: '#1b1f26', D: '#7c8594', M: '#bac4d1', L: '#e3eaf2', H: '#ffffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      diamond: { O: '#092a36', D: '#128996', M: '#2ad1db', L: '#7ef3fa', H: '#e3ffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      leather: { O: '#291509', D: '#693a1a', M: '#9c5a2d', L: '#c47a45', H: '#de9864', S: '#7d5225', s: '#a6743c', d: '#4f3215' }
     };
 
     if (def.toolType) {
       const pal = tierPal[key.split('_')[0]] || tierPal.iron;
-      // Crisp 1px-outlined diagonal oak stick handle
-      const stickLen = def.toolType === 'sword' ? 4 : 9;
-      for (let i = 0; i < stickLen; i++) {
-        const sx = 2 + i, sy = 13 - i;
-        p(sx - 1, sy, '#29180a'); p(sx + 1, sy, '#29180a');
-        p(sx, sy - 1, '#29180a'); p(sx, sy + 1, '#29180a');
-      }
-      for (let i = 0; i < stickLen; i++) {
-        const sx = 2 + i, sy = 13 - i;
-        p(sx, sy, i % 2 === 0 ? '#9c6b36' : '#7d5225');
-      }
-      if (def.toolType === 'pickaxe') {
-        p(4, 1, pal.out, 8, 4); p(10, 3, pal.out, 4, 4); p(11, 5, pal.out, 4, 6);
-        p(5, 2, pal.hi, 6, 1); p(6, 3, pal.base, 5, 1); p(11, 3, pal.hi, 2, 2);
-        p(12, 5, pal.base, 2, 5); p(13, 6, pal.lo, 1, 4); p(10, 4, pal.lo, 1, 1);
+      if (def.toolType === 'sword') {
+        drawGrid([
+          '............OOO.',
+          '...........OHHO.',
+          '..........OHLMO.',
+          '.........OHLMDO.',
+          '........OHLMDO..',
+          '.......OHLMDO...',
+          '......OHLMDO....',
+          '..OO.OHLMDO.....',
+          '..OHOOLMDO......',
+          '...ODHMDO.......',
+          '....ODHO........',
+          '...OdSOHO.......',
+          '..OdSO.OO.......',
+          '.OdsO...........',
+          '.ODO............',
+          '..O.............'
+        ], pal);
+      } else if (def.toolType === 'pickaxe') {
+        drawGrid([
+          '................',
+          '.....OOOOO......',
+          '....OHHLLMO.....',
+          '...OMMMLLHMO....',
+          '...OO..OOHMO....',
+          '........OsMO....',
+          '.......OsOOMO...',
+          '......OsO.OMO...',
+          '.....OsO..OMO...',
+          '....OsO...ODO...',
+          '...OsO....ODO...',
+          '..OsO......O....',
+          '.OsO............',
+          '.dO.............',
+          '................',
+          '................'
+        ], pal);
       } else if (def.toolType === 'axe') {
-        p(6, 1, pal.out, 7, 6); p(8, 6, pal.out, 5, 4);
-        p(7, 2, pal.hi, 5, 2); p(7, 4, pal.base, 5, 2);
-        p(9, 6, pal.base, 3, 2); p(10, 8, pal.lo, 2, 1); p(11, 3, pal.lo, 1, 4);
-      } else if (def.toolType === 'shovel') {
-        p(9, 1, pal.out, 6, 6);
-        p(10, 2, pal.hi, 4, 2); p(10, 4, pal.base, 4, 2); p(13, 3, pal.lo, 1, 3);
-      } else if (def.toolType === 'sword') {
-        // Crossguard
-        p(2, 8, '#29180a', 5, 2); p(5, 10, '#29180a', 3, 4);
-        p(3, 9, pal.lo, 3, 1); p(6, 10, pal.lo, 1, 3); p(5, 9, pal.hi, 2, 2);
-        // Razor diagonal blade
-        for (let i = 0; i < 8; i++) {
-          p(6 + i, 8 - i, pal.out, 3, 3);
-        }
-        for (let i = 0; i < 8; i++) {
-          p(7 + i, 8 - i, pal.base, 1, 2);
-          p(7 + i, 8 - i, pal.hi, 1, 1);
-        }
-        p(13, 1, pal.out, 2, 2); p(13, 2, pal.hi, 1, 1);
+        drawGrid([
+          '................',
+          '.......OOOO.....',
+          '......OHHLLOO...',
+          '.....OHLLMMMO...',
+          '.....OMMMDsMO...',
+          '......OODsMMO...',
+          '.......OsODMO...',
+          '......OsO.OO....',
+          '.....OsO........',
+          '....OsO.........',
+          '...OsO..........',
+          '..OsO...........',
+          '.OsO............',
+          '.dO.............',
+          '................',
+          '................'
+        ], pal);
+      } else { // shovel
+        drawGrid([
+          '................',
+          '..........OOOO..',
+          '.........OHLLMO.',
+          '........OHLLMMO.',
+          '........OLMMMDO.',
+          '........OMMMDO..',
+          '.......OsODDO...',
+          '......OsO.OO....',
+          '.....OsO........',
+          '....OsO.........',
+          '...OsO..........',
+          '..OsO...........',
+          '.OsO............',
+          '.dO.............',
+          '................',
+          '................'
+        ], pal);
       }
       return;
     }
@@ -496,213 +708,700 @@ export class TextureManager {
     if (def.armorSlot !== undefined) {
       const pal = tierPal[key.split('_')[0]] || tierPal.iron;
       if (def.armorSlot === 0) { // Helmet
-        p(3, 3, pal.out, 10, 9);
-        p(4, 4, pal.base, 8, 7); p(5, 4, pal.hi, 6, 2);
-        p(4, 8, pal.lo, 2, 3); p(10, 8, pal.lo, 2, 3);
-        p(6, 7, pal.out, 4, 5); p(6, 8, '#1a1e28', 4, 4);
+        drawGrid([
+          '................',
+          '................',
+          '....OOOOOOOO....',
+          '...OHHLLLLMMO...',
+          '..OHHLLMMMMDMO..',
+          '..OHLLMMMMMDMO..',
+          '..OLMOOOOOODMO..',
+          '..OLMO....ODMO..',
+          '..OMMO....ODMO..',
+          '..ODMO....ODMO..',
+          '..ODDO....ODDO..',
+          '...OO......OO...',
+          '................',
+          '................',
+          '................',
+          '................'
+        ], pal);
       } else if (def.armorSlot === 1) { // Chestplate
-        p(1, 2, pal.out, 14, 5); p(3, 5, pal.out, 10, 9);
-        p(2, 3, pal.hi, 4, 3); p(10, 3, pal.base, 4, 3);
-        p(4, 5, pal.base, 8, 8); p(5, 5, pal.hi, 6, 2);
-        p(4, 10, pal.lo, 8, 3); p(6, 2, '#1a1e28', 4, 3);
+        drawGrid([
+          '................',
+          '..OOOO....OOOO..',
+          '.OHLLMO..OMMMDO.',
+          '.OHLLMO..OMMMDO.',
+          '.OLMMMOOOOOMMDO.',
+          '.OMMHHLLLLMMMDO.',
+          '.ODOMHLLMMMMODO.',
+          '..O.OLMMMMMO.O..',
+          '....OMMMMMDO....',
+          '....OMMMMDDO....',
+          '....OMMMMDDO....',
+          '....ODDDDDDO....',
+          '....OODDDDOO....',
+          '......OOOO......',
+          '................',
+          '................'
+        ], pal);
       } else if (def.armorSlot === 2) { // Leggings
-        p(3, 2, pal.out, 10, 5); p(3, 6, pal.out, 4, 8); p(9, 6, pal.out, 4, 8);
-        p(4, 3, pal.hi, 8, 2); p(4, 5, pal.base, 8, 2);
-        p(4, 7, pal.base, 2, 6); p(10, 7, pal.base, 2, 6);
-        p(5, 10, pal.lo, 1, 3); p(11, 10, pal.lo, 1, 3);
+        drawGrid([
+          '................',
+          '...OOOOOOOOOO...',
+          '..OHHLLLLMMMMO..',
+          '..OLMMMMMMMMDO..',
+          '..OMMMOOOOOMDO..',
+          '..OMMO....OMDO..',
+          '..OLMO....OMDO..',
+          '..OMMO....OMDO..',
+          '..OMMO....OMDO..',
+          '..OMDO....ODDO..',
+          '..OMDO....ODDO..',
+          '..ODDO....ODDO..',
+          '..ODDO....ODDO..',
+          '...OO......OO...',
+          '................',
+          '................'
+        ], pal);
       } else { // Boots
-        p(2, 6, pal.out, 5, 8); p(9, 6, pal.out, 5, 8);
-        p(3, 7, pal.hi, 3, 2); p(10, 7, pal.hi, 3, 2);
-        p(3, 9, pal.base, 3, 3); p(10, 9, pal.base, 3, 3);
-        p(2, 12, pal.lo, 4, 1); p(10, 12, pal.lo, 4, 1);
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '................',
+          '................',
+          '..OOOO....OOOO..',
+          '..OHLO....OHLO..',
+          '..OLMO....OLMO..',
+          '..OMMO....OMMO..',
+          '.OHLMO....OMLHO.',
+          '.OLMMO....OMMLO.',
+          '.ODDDDO..ODDDDO.',
+          '.OOOOOO..OOOOOO.',
+          '................',
+          '................',
+          '................'
+        ], pal);
       }
       return;
     }
 
-    // Strict 16x16 Pixel-Art Materials, Bed & Animal Foods
+    // Authentic Hand-Crafted 16x16 Pixel-Art Foods, Gems, Ingots, Materials & Bed!
     switch (key) {
-      case 'bed':
-        // Iconic 16x16 Minecraft Red Bed item!
-        p(1, 5, '#24140a', 14, 8);
-        p(2, 4, '#24140a', 12, 1);
-        p(2, 12, '#24140a', 2, 2); p(12, 12, '#24140a', 2, 2);
-        // Oak frame & legs
-        p(2, 10, '#8f6032', 12, 2); p(2, 12, '#6b4520', 2, 2); p(12, 12, '#6b4520', 2, 2);
-        // White pillow
-        p(2, 5, '#ffffff', 4, 4); p(2, 8, '#cbd5e1', 4, 1);
-        // White folded sheet + crimson quilted blanket
-        p(6, 5, '#edf2f7', 2, 5);
-        p(8, 5, '#e03535', 6, 5); p(8, 5, '#ff6b6b', 6, 1); p(8, 9, '#a31c1c', 6, 1);
-        break;
-      case 'stick':
-        for (let i = 0; i < 10; i++) {
-          p(2 + i, 13 - i, '#29180a', 3, 3);
-        }
-        for (let i = 0; i < 10; i++) {
-          p(3 + i, 13 - i, i % 2 === 0 ? '#a8753e' : '#7d5225', 1, 2);
-        }
-        break;
-      case 'coal':
-        p(4, 2, '#111216', 8, 12); p(2, 4, '#111216', 12, 8);
-        p(3, 5, '#252830', 10, 6); p(5, 3, '#2d313b', 6, 10);
-        p(5, 4, '#4c5261', 3, 3); p(6, 5, '#687082', 1, 1); p(8, 9, '#191b21', 3, 3);
-        break;
-      case 'raw_iron':
-        p(3, 3, '#2b1e16', 10, 10); p(2, 5, '#2b1e16', 12, 6);
-        p(4, 4, '#b88b68', 8, 8); p(3, 6, '#cfa482', 10, 4);
-        p(5, 5, '#f0d2b8', 3, 2); p(8, 8, '#875f42', 3, 3); p(9, 5, '#d9e0e8', 2, 2);
-        break;
-      case 'iron_ingot':
-        p(1, 5, '#1b1f26', 14, 7); p(3, 3, '#1b1f26', 10, 9);
-        p(2, 6, '#b8c2cf', 12, 5); p(4, 4, '#e6ecf2', 8, 4);
-        p(5, 4, '#ffffff', 6, 2); p(3, 9, '#7f8996', 10, 2);
-        break;
-      case 'gold_ingot':
-        p(1, 5, '#362306', 14, 7); p(3, 3, '#362306', 10, 9);
-        p(2, 6, '#e6ae1e', 12, 5); p(4, 4, '#ffd94a', 8, 4);
-        p(5, 4, '#fff6a6', 6, 2); p(3, 9, '#b57c0c', 10, 2);
-        break;
-      case 'diamond':
-        p(5, 1, '#092a33', 6, 14); p(3, 3, '#092a33', 10, 10); p(2, 5, '#092a33', 12, 6);
-        p(6, 2, '#4eeef5', 4, 12); p(4, 4, '#36d6de', 8, 8); p(3, 6, '#22b7c2', 10, 4);
-        p(5, 3, '#c7feff', 4, 3); p(5, 4, '#ffffff', 2, 2); p(8, 9, '#128996', 3, 3);
-        break;
-      case 'emerald':
-        p(4, 1, '#0a2914', 8, 14); p(3, 3, '#0a2914', 10, 10);
-        p(5, 2, '#1ed460', 6, 12); p(4, 4, '#15ad4c', 8, 8);
-        p(6, 3, '#8cffb3', 3, 5); p(6, 3, '#dcffe8', 2, 2); p(8, 9, '#0d7834', 3, 4);
-        break;
       case 'apple':
-        p(7, 1, '#261409', 2, 3); p(7, 1, '#754824', 1, 3);
-        p(9, 1, '#1d4714', 4, 3); p(9, 2, '#5cc73c', 3, 1);
-        p(4, 4, '#290909', 8, 11); p(2, 6, '#290909', 12, 7);
-        p(3, 6, '#d92626', 10, 7); p(5, 5, '#e83838', 6, 9);
-        p(4, 6, '#ff8a80', 2, 3); p(5, 6, '#ffd6d2', 1, 1); p(9, 10, '#9e1515', 3, 3);
+        drawGrid([
+          '........OO......',
+          '.......ObO.OO...',
+          '.......ObOGgGO..',
+          '....OOOOboGGO...',
+          '...OrrrrrOOrrO..',
+          '..OrhWrrrrrrrRO.',
+          '..OrWWrrrrrrrrO.',
+          '..OrhrrrrrrrrRO.',
+          '..OrrrrrrrrrrRO.',
+          '..OrrrrrrrrrrDO.',
+          '..ORrrrrrrrrrDO.',
+          '...ORrrrrrrrDO..',
+          '...ODRrrrrrDDO..',
+          '....ODDRRRDDO...',
+          '.....OOODDOO....',
+          '........OO......'
+        ], { O: '#300b0d', b: '#6e421f', o: '#4a2a11', G: '#2f8a28', g: '#6bd94a', W: '#ffd9d6', h: '#ff7a75', r: '#e32626', R: '#b81818', D: '#7d0f14' });
         break;
-      case 'bread':
-        p(1, 5, '#331d08', 14, 7); p(3, 3, '#331d08', 10, 9);
-        p(2, 6, '#c78834', 12, 5); p(4, 4, '#e6b25c', 8, 4);
-        p(5, 4, '#f7d594', 2, 2); p(9, 4, '#f7d594', 2, 2);
-        p(7, 5, '#8a5219', 1, 4); p(11, 6, '#8a5219', 1, 3); p(3, 10, '#965c1f', 10, 1);
-        break;
-      case 'raw_porkchop':
-        p(2, 4, '#361015', 12, 8); p(4, 3, '#361015', 8, 10);
-        p(3, 5, '#fad4d4', 10, 6); p(5, 4, '#f29ca4', 6, 8);
-        p(4, 6, '#e06c7a', 8, 4); p(5, 7, '#c74c5b', 5, 2); p(6, 5, '#ffe8e8', 3, 1);
-        p(10, 6, '#fff5eb', 2, 2);
-        break;
-      case 'cooked_porkchop':
-        p(2, 4, '#241106', 12, 8); p(4, 3, '#241106', 8, 10);
-        p(3, 5, '#d99e6c', 10, 6); p(5, 4, '#b8723d', 6, 8);
-        p(4, 6, '#9c5a29', 8, 4); p(5, 5, '#6e3914', 1, 5); p(9, 5, '#6e3914', 1, 5);
-        p(11, 6, '#f0cc9c', 2, 2);
-        break;
-      case 'raw_beef':
-        p(2, 3, '#29080a', 12, 10); p(1, 5, '#29080a', 14, 6);
-        p(3, 4, '#c72a34', 10, 8); p(2, 6, '#b01e29', 12, 4);
-        p(4, 5, '#f7dede', 4, 1); p(8, 8, '#f7dede', 4, 1); p(5, 6, '#eb5460', 3, 2);
-        p(9, 9, '#8c141d', 3, 2);
-        break;
-      case 'steak':
-        p(2, 3, '#1a0a04', 12, 10); p(1, 5, '#1a0a04', 14, 6);
-        p(3, 4, '#70351c', 10, 8); p(2, 6, '#5c2913', 12, 4);
-        p(4, 5, '#a65c36', 4, 2); p(6, 8, '#bd7248', 3, 1);
-        p(8, 5, '#3b180a', 1, 5); p(11, 6, '#3b180a', 1, 4);
-        break;
-      case 'raw_chicken':
-        p(1, 10, '#29201a', 5, 5); p(2, 11, '#f7f3eb', 3, 3); p(4, 9, '#29201a', 3, 3); p(4, 10, '#e8dfd1', 2, 2);
-        p(5, 2, '#361818', 9, 9); p(6, 3, '#f2b5a8', 7, 7);
-        p(7, 4, '#ffd9cf', 3, 2); p(10, 7, '#d48779', 3, 3);
-        break;
-      case 'cooked_chicken':
-        p(1, 10, '#29201a', 5, 5); p(2, 11, '#f7f3eb', 3, 3); p(4, 9, '#29201a', 3, 3); p(4, 10, '#e8dfd1', 2, 2);
-        p(5, 2, '#291206', 9, 9); p(6, 3, '#c7772a', 7, 7);
-        p(7, 4, '#f0b25d', 3, 2); p(10, 7, '#874411', 3, 3);
-        break;
-      case 'raw_mutton':
-        p(2, 5, '#300e13', 10, 9); p(3, 6, '#d94552', 8, 7);
-        p(4, 7, '#f58c96', 4, 3); p(9, 2, '#292420', 5, 6);
-        p(10, 3, '#f7f4ed', 3, 4); p(6, 10, '#fce8e8', 4, 1);
-        break;
-      case 'cooked_mutton':
-        p(2, 5, '#210e06', 10, 9); p(3, 6, '#874422', 8, 7);
-        p(4, 7, '#b5673b', 4, 3); p(9, 2, '#292420', 5, 6);
-        p(10, 3, '#f7f4ed', 3, 4); p(5, 10, '#592811', 4, 1);
-        break;
-      case 'raw_venison':
-        p(2, 4, '#24070b', 12, 8); p(4, 3, '#24070b', 8, 10);
-        p(3, 5, '#9e1a2b', 10, 6); p(5, 4, '#bd263b', 6, 8);
-        p(5, 5, '#e8586c', 4, 2); p(8, 9, '#f2d8d8', 4, 1);
-        break;
-      case 'cooked_venison':
-        p(2, 4, '#1a0a05', 12, 8); p(4, 3, '#1a0a05', 8, 10);
-        p(3, 5, '#5e2713', 10, 6); p(5, 4, '#78361c', 6, 8);
-        p(5, 5, '#a65734', 4, 2); p(6, 8, '#5ec244', 1, 1); p(10, 6, '#5ec244', 1, 1);
-        break;
-      case 'raw_rabbit':
-        p(4, 3, '#331715', 9, 9); p(2, 7, '#331715', 7, 6);
-        p(5, 4, '#eba396', 7, 7); p(3, 8, '#f7c5bb', 5, 4);
-        p(10, 10, '#f7f4ed', 2, 2); p(6, 5, '#ffded6', 3, 2);
-        break;
-      case 'cooked_rabbit':
-        p(4, 3, '#261208', 9, 9); p(2, 7, '#261208', 7, 6);
-        p(5, 4, '#ba6b2b', 7, 7); p(3, 8, '#d98d48', 5, 4);
-        p(10, 10, '#f7f4ed', 2, 2); p(6, 5, '#f2b872', 3, 2);
-        break;
-      case 'raw_salmon':
-        p(1, 5, '#122429', 3, 6); p(2, 6, '#486b73', 2, 4);
-        p(3, 3, '#122429', 12, 10);
-        p(4, 4, '#3e6e6c', 10, 4); p(4, 8, '#e36e62', 10, 4);
-        p(6, 5, '#78adaa', 6, 1); p(6, 9, '#f79c92', 5, 1);
-        p(12, 5, '#ffffff', 1, 2); p(13, 6, '#111111', 1, 1);
-        break;
-      case 'cooked_salmon':
-        p(1, 5, '#261208', 3, 6); p(2, 6, '#7d4728', 2, 4);
-        p(3, 3, '#261208', 12, 10);
-        p(4, 4, '#b85a2c', 10, 4); p(4, 8, '#eb8d4d', 10, 4);
-        p(6, 5, '#ffd4a3', 1, 6); p(9, 5, '#ffd4a3', 1, 6); p(12, 6, '#fff2d6', 1, 1);
-        break;
-      case 'gunpowder':
-        p(4, 4, '#1c1d21', 8, 8); p(3, 6, '#1c1d21', 10, 5);
-        p(5, 5, '#4b4e57', 6, 6); p(4, 7, '#5c606b', 8, 3);
-        p(6, 5, '#8a909e', 2, 2); p(9, 8, '#30333b', 2, 2);
-        break;
-      case 'bone':
-        p(1, 10, '#2b2926', 5, 5); p(10, 1, '#2b2926', 5, 5);
-        for (let i = 0; i < 8; i++) p(3 + i, 10 - i, '#2b2926', 3, 3);
-        p(2, 11, '#f5f2eb', 3, 3); p(11, 2, '#f5f2eb', 3, 3);
-        for (let i = 0; i < 8; i++) {
-          p(4 + i, 11 - i, '#e6e1d5', 1, 2);
-          p(4 + i, 10 - i, '#ffffff', 1, 1);
-        }
-        break;
-      case 'leather':
-        p(2, 2, '#2e1809', 12, 12);
-        p(3, 3, '#9e5b2c', 10, 10); p(4, 4, '#bd733e', 6, 6);
-        p(5, 5, '#d98f57', 3, 3); p(9, 9, '#733e1a', 3, 3);
-        break;
-      case 'feather':
-        for (let i = 0; i < 10; i++) p(2 + i, 12 - i, '#2c333d', 3, 3);
-        for (let i = 1; i < 10; i++) {
-          p(3 + i, 12 - i, '#dce3eb', 2, 2);
-          p(4 + i, 11 - i, '#ffffff', 1, 1);
-        }
-        p(2, 13, '#6e7682', 2, 1);
-        break;
-      case 'wheat':
-        for (let i = 0; i < 10; i++) p(2 + i, 12 - i, '#42320b', 3, 3);
-        for (let i = 0; i < 10; i++) {
-          p(3 + i, 12 - i, i % 2 === 0 ? '#e6be42' : '#c99b24', 2, 1);
-          p(4 + i, 11 - i, '#fff099', 1, 1);
-        }
-        break;
-      default:
-        p(3, 3, '#222', 10, 10); p(4, 4, '#999', 8, 8);
-    }
-  }
 
-  getIcon(itemKey) {
-    return this.itemIcons[itemKey] || '';
+      case 'bread':
+        drawGrid([
+          '................',
+          '................',
+          '.........OOOOO..',
+          '.......OOHHLLCO.',
+          '......OHHLcCLcO.',
+          '.....OHLccLLCDO.',
+          '....OHLcLLcCCDO.',
+          '...OHLccLLCCDO..',
+          '..OHLcLLcCCDO...',
+          '.OHLLcLLCCDO....',
+          '.OLcLLLCCDO.....',
+          '.OCCCCCDDO......',
+          '.ODDDDDDO.......',
+          '..OOOOOO........',
+          '................',
+          '................'
+        ], { O: '#361e09', H: '#fae09e', L: '#e8b95b', C: '#c98a32', c: '#8f5519', D: '#784414' });
+        break;
+
+      case 'raw_porkchop':
+        drawGrid([
+          '................',
+          '................',
+          '.......OOOOOO...',
+          '.....OOWWWFFFO..',
+          '....OWWFFpppFMO.',
+          '...OWFppMMppMDO.',
+          '..OWFppMMMWpMDO.',
+          '..OFppMMMMppMDO.',
+          '.OWFppMMWWpMDO..',
+          '.OFppMMMMppMDO..',
+          '.OFpMMMMppMDO...',
+          '..OFFFFFFDDO....',
+          '...ODDDDDDO.....',
+          '....OOOOOO......',
+          '................',
+          '................'
+        ], { O: '#42151c', W: '#fff5f0', F: '#fad2d2', p: '#f2949d', M: '#db5c6c', D: '#ad3b4b' });
+        break;
+
+      case 'cooked_porkchop':
+        drawGrid([
+          '................',
+          '................',
+          '.......OOOOOO...',
+          '.....OOHHLLLLO..',
+          '....OHHLLmmLLMO.',
+          '...OHLmMMGGMMDO.',
+          '..OHLmMMLLmMMDO.',
+          '..OLmMMGGMMmMDO.',
+          '.OHLmMMLLmMMDO..',
+          '.OLmMMGGMMmMDO..',
+          '.OLmMMMMmmMDO...',
+          '..OLLLLLLDDO....',
+          '...ODDDDDDO.....',
+          '....OOOOOO......',
+          '................',
+          '................'
+        ], { O: '#2b1307', H: '#f5cc90', L: '#d99957', m: '#bd7539', M: '#9c5624', G: '#633110', D: '#54290c' });
+        break;
+
+      case 'raw_beef':
+        drawGrid([
+          '................',
+          '........OOOOO...',
+          '......OORRRRRO..',
+          '.....ORhhWRRRRO.',
+          '....ORhWWRRrRDO.',
+          '...ORhRRRRWWrrO.',
+          '..ORrRRWWrrrRDO.',
+          '..ORrRRRRrrrRDO.',
+          '.ORrRRRWWrrRDO..',
+          '.ORrRRRRrrRDO...',
+          '.ORrRRWrrRDO....',
+          '.ORrrrrRRDO.....',
+          '..ODDDDDDO......',
+          '...OOOOOO.......',
+          '................',
+          '................'
+        ], { O: '#33080d', W: '#fce8e8', h: '#f56c78', R: '#d42c38', r: '#b01c28', D: '#7a1019' });
+        break;
+
+      case 'steak':
+        drawGrid([
+          '................',
+          '........OOOOO...',
+          '......OOMMMMMO..',
+          '.....OMHHLMGSMO.',
+          '....OMHLMMGSmDO.',
+          '...OMLMMGGmMMDO.',
+          '..OMmMMGGLmmMDO.',
+          '..OMmMMMMMmmMDO.',
+          '.OMmMMGGLmmMDO..',
+          '.OMmMMMMmmMDO...',
+          '.OMmMMGmmMDO....',
+          '.OMmmmmMMDO.....',
+          '..ODDDDDDO......',
+          '...OOOOOO.......',
+          '................',
+          '................'
+        ], { O: '#1f0b05', H: '#c97e50', L: '#a85f36', M: '#824020', m: '#662e14', G: '#3d1909', S: '#9c522c', D: '#331507' });
+        break;
+
+      case 'raw_chicken':
+        drawGrid([
+          '................',
+          '.......OOOOO....',
+          '......OHHLLPO...',
+          '.....OHHLLPPPO..',
+          '.....OLLPPPPDO..',
+          '.....OLPPPPPDO..',
+          '.....OPPPPPDDO..',
+          '.....OOPPPDDO...',
+          '....OWbOODDO....',
+          '...OWbO..OO.....',
+          '..OWbO..........',
+          '.OOWbO..........',
+          '.OWWWO..........',
+          '..OWWO..........',
+          '...OO...........',
+          '................'
+        ], { O: '#3d1c1b', H: '#ffe6de', L: '#fac4b6', P: '#eb9f8f', D: '#c47466', W: '#fffaf2', b: '#d9cfc1' });
+        break;
+
+      case 'cooked_chicken':
+        drawGrid([
+          '................',
+          '.......OOOOO....',
+          '......OHHLLMO...',
+          '.....OHHLLMMMO..',
+          '.....OLLMMMMDO..',
+          '.....OLMMMMMDO..',
+          '.....OMMMMMDDO..',
+          '.....OOMMMDDO...',
+          '....OWbOODDO....',
+          '...OWbO..OO.....',
+          '..OWbO..........',
+          '.OOWbO..........',
+          '.OWWWO..........',
+          '..OWWO..........',
+          '...OO...........',
+          '................'
+        ], { O: '#2b1306', H: '#f7c873', L: '#de983c', M: '#bd6d22', D: '#854010', W: '#fffaf2', b: '#d9cfc1' });
+        break;
+
+      case 'raw_mutton':
+        drawGrid([
+          '................',
+          '..........OOO...',
+          '.........OWWBO..',
+          '........OWBOOO..',
+          '.......OWBO.....',
+          '....OOOOObo.....',
+          '...OFRRhhRRO....',
+          '..OFWRhRRRRDO...',
+          '..OFRRRRRRRDO...',
+          '..ORRRWWRRRDO...',
+          '..ORRRRRRRDDO...',
+          '..ORRRWWWRDO....',
+          '...ODDDDDDO.....',
+          '....OOOOOO......',
+          '................',
+          '................'
+        ], { O: '#360d14', W: '#fff8f2', B: '#d9cfc3', b: '#c2b6a8', o: '#360d14', F: '#fad6d9', h: '#f57c88', R: '#d93848', D: '#941c2a' });
+        break;
+
+      case 'cooked_mutton':
+        drawGrid([
+          '................',
+          '..........OOO...',
+          '.........OWWBO..',
+          '........OWBOOO..',
+          '.......OWBO.....',
+          '....OOOOObo.....',
+          '...OLMMHHMMO....',
+          '..OLMHMMMMMDO...',
+          '..OLMMGGMMMDO...',
+          '..OMMMMMMMMDO...',
+          '..OMMGGMMMDDO...',
+          '..OMMMMMMMDO....',
+          '...ODDDDDDO.....',
+          '....OOOOOO......',
+          '................',
+          '................'
+        ], { O: '#240f06', W: '#fff8f2', B: '#d9cfc3', b: '#c2b6a8', o: '#240f06', H: '#d48750', L: '#b06435', M: '#87421e', G: '#4d200c', D: '#57260f' });
+        break;
+
+      case 'raw_venison':
+        drawGrid([
+          '................',
+          '................',
+          '.....OOOOOOO....',
+          '...OORhWWrrRO...',
+          '..ORhhRRRRrrRO..',
+          '..ORhRRRRWrrDO..',
+          '.ORrRRRRWWrrDO..',
+          '.ORrRRRRrrrrDO..',
+          '.ORrRRWrrrrRDO..',
+          '..ORrrrrrrrDO...',
+          '..ODRrrrrrDDO...',
+          '...ODDDDDDDO....',
+          '.....OOOOO......',
+          '................',
+          '................',
+          '................'
+        ], { O: '#29070c', W: '#f5dede', h: '#e8586c', R: '#b81d32', r: '#941427', D: '#610a17' });
+        break;
+
+      case 'cooked_venison':
+        drawGrid([
+          '................',
+          '................',
+          '.....OOOOOOO....',
+          '...OOMHLLmmMO...',
+          '..OMHHMMGmmMMO..',
+          '..OMHMMGGmggDO..',
+          '.OMmMMggMMmmDO..',
+          '.OMmMMMMmmmmDO..',
+          '.OMmMMGGmmmMDO..',
+          '..OMmmmmmmmDO...',
+          '..ODmmmmmmDDO...',
+          '...ODDDDDDDO....',
+          '.....OOOOO......',
+          '................',
+          '................',
+          '................'
+        ], { O: '#1c0a05', H: '#c26f44', L: '#9c4f2b', M: '#783419', m: '#5c2410', G: '#3b1507', g: '#5ec947', D: '#381408' });
+        break;
+
+      case 'raw_rabbit':
+        drawGrid([
+          '................',
+          '................',
+          '......OOOOOO....',
+          '.....OHHLLPPO...',
+          '....OHLPPPPPDO..',
+          '....OLPPPPPPDO..',
+          '...OOPPPPPDDO...',
+          '..OHLPPPPDDO....',
+          '..OLPPPPDDO.....',
+          '..OPPPDDWO......',
+          '...ODDDWWO......',
+          '....OOOWO.......',
+          '................',
+          '................',
+          '................',
+          '................'
+        ], { O: '#381616', H: '#ffe4dc', L: '#fabbb0', P: '#e89387', D: '#bf6b60', W: '#f7f3eb' });
+        break;
+
+      case 'cooked_rabbit':
+        drawGrid([
+          '................',
+          '................',
+          '......OOOOOO....',
+          '.....OHHLLMMO...',
+          '....OHLMMMMMDO..',
+          '....OLMMMMMMDO..',
+          '...OOMMMMMDDO...',
+          '..OHLMMMMDDO....',
+          '..OLMMMMDDO.....',
+          '..OMMMMDWO......',
+          '...ODDDWWO......',
+          '....OOOWO.......',
+          '................',
+          '................',
+          '................',
+          '................'
+        ], { O: '#291207', H: '#f7c374', L: '#de8f40', M: '#b86524', D: '#7d3e11', W: '#f7f3eb' });
+        break;
+
+      case 'raw_salmon':
+        drawGrid([
+          '................',
+          '...........OOO..',
+          '..........OttiO.',
+          '.........OttiO..',
+          '......OOOttOO...',
+          '....OOttHTtO....',
+          '...OtlHTTtSO....',
+          '..OtlHTTSSpO....',
+          '..OWeTTSSppO....',
+          '..OTTTSSppO.....',
+          '...OSSSSpO......',
+          '..OOSppOO.......',
+          '..OStOO.........',
+          '...OO...........',
+          '................',
+          '................'
+        ], { O: '#13262b', T: '#3d706e', t: '#5a9491', H: '#8ec4c1', l: '#6ca3a0', i: '#2a4f4e', S: '#e36b5f', p: '#f79c92', W: '#ffffff', e: '#141418' });
+        break;
+
+      case 'cooked_salmon':
+        drawGrid([
+          '................',
+          '...........OOO..',
+          '..........ObbiO.',
+          '.........ObbiO..',
+          '......OOOddOO...',
+          '....OOddHLdO....',
+          '...OdmHLdSO.....',
+          '..OdmHLSSpO.....',
+          '..OdHSSppO......',
+          '..OddSSppO......',
+          '...OSSSSpO......',
+          '..OOSppOO.......',
+          '..OSdOO.........',
+          '...OO...........',
+          '................',
+          '................'
+        ], { O: '#291107', d: '#9c451f', b: '#783416', i: '#59230c', H: '#ffdba8', L: '#f2a45a', m: '#c4602b', S: '#e67e3e', p: '#f7b277' });
+        break;
+
+      case 'diamond':
+        drawGrid([
+          '................',
+          '.....OOOOOO.....',
+          '...OOHHLLLLOO...',
+          '..OHWWLLCCCCLO..',
+          '.OHWWLCCCCCCCMO.',
+          '.OHLLCCCCCCCMDO.',
+          '.OLLCCCCCCCCDDO.',
+          '.OLCCCCCCCCDDDO.',
+          '..OCCCCCCCCDDO..',
+          '..OMCCCCCCDDDO..',
+          '...OMCCCCDDDO...',
+          '....OMCCDDDO....',
+          '.....OMDDDO.....',
+          '......OOOO......',
+          '................',
+          '................'
+        ], { O: '#082c36', W: '#ffffff', H: '#d6feff', L: '#7ef3fa', C: '#32d8e0', M: '#1aa6b3', D: '#0e7482' });
+        break;
+
+      case 'emerald':
+        drawGrid([
+          '................',
+          '.....OOOOOO.....',
+          '....OHHLLGGO....',
+          '...OHWLLGGGMO...',
+          '..OHWLLGGGGDMO..',
+          '..OHLLGGGGGDMO..',
+          '..OLLGGGGGGDMO..',
+          '..OLGGGGGGGDMO..',
+          '..OGGGGGGGGDMO..',
+          '..OGGGGGGGDDMO..',
+          '..OMGGGGGGDDMO..',
+          '...OMGGGGDDMO...',
+          '....OMGGDDMO....',
+          '.....OOOOOO.....',
+          '................',
+          '................'
+        ], { O: '#092914', W: '#e0ffeb', H: '#94ffba', L: '#45eb7d', G: '#17bd53', M: '#0e8f3c', D: '#086328' });
+        break;
+
+      case 'iron_ingot':
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '.......OOOOOO...',
+          '.....OOHHLLLLOO.',
+          '....OHHLLLLMMMO.',
+          '...OHHLLLLMMMMO.',
+          '..OHHLLLLMMMMDO.',
+          '.OHLLLLMMMMMDDO.',
+          '.OLMMMMMMMDDDDO.',
+          '.OMMMMMDDDDDDO..',
+          '.ODDDDDDDDDDO...',
+          '..OOOOOOOOOO....',
+          '................',
+          '................',
+          '................'
+        ], { O: '#1d2129', H: '#ffffff', L: '#dde4ed', M: '#aeb8c7', D: '#76808f' });
+        break;
+
+      case 'gold_ingot':
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '.......OOOOOO...',
+          '.....OOHHLLLLOO.',
+          '....OHHLLLLMMMO.',
+          '...OHHLLLLMMMMO.',
+          '..OHHLLLLMMMMDO.',
+          '.OHLLLLMMMMMDDO.',
+          '.OLMMMMMMMDDDDO.',
+          '.OMMMMMDDDDDDO..',
+          '.ODDDDDDDDDDO...',
+          '..OOOOOOOOOO....',
+          '................',
+          '................',
+          '................'
+        ], { O: '#3b2406', H: '#fff9b8', L: '#ffe052', M: '#eba91c', D: '#b06d09' });
+        break;
+
+      case 'coal':
+        drawGrid([
+          '................',
+          '................',
+          '.....OOOOOO.....',
+          '...OOHHMMMMO....',
+          '..OHHMMMMMMDO...',
+          '..OMMMMMMMMDDO..',
+          '.OMMHHMMMMMDDO..',
+          '.OMMMMMMMMMDDO..',
+          '.OMMMMMMMDDDDO..',
+          '.ODMMMMMDDDDDO..',
+          '..ODMMMDDDDDO...',
+          '...ODDDDDDDO....',
+          '....OOOOOOO.....',
+          '................',
+          '................',
+          '................'
+        ], { O: '#0d0e12', H: '#596070', M: '#2e323b', D: '#1b1d24' });
+        break;
+
+      case 'raw_iron':
+        drawGrid([
+          '................',
+          '................',
+          '.....OOOOOO.....',
+          '...OOHHLLMMO....',
+          '..OHHLLMMSSDO...',
+          '..OLLMMMSSSDDO..',
+          '.OLMHHMMSSMDDO..',
+          '.OMMMSSMMMMDDO..',
+          '.OMMMMSSMMDDDO..',
+          '.ODMMMMDDDDDDO..',
+          '..ODMMDDDDDDO...',
+          '...ODDDDDDDO....',
+          '....OOOOOOO.....',
+          '................',
+          '................',
+          '................'
+        ], { O: '#2b1d14', H: '#f7dec8', L: '#d9b08c', M: '#b3825f', S: '#cdd6e0', D: '#785138' });
+        break;
+
+      case 'bed':
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '................',
+          '..OOOO..........',
+          '.OWWWWO.OOOOOO..',
+          '.OWWPPWOhhhhhhO.',
+          '.OWPPPWOrrrrrrO.',
+          '.OWPPPWOrrrrrrO.',
+          '.OWWWWWORRRRRRO.',
+          '.ObbbbbbbbbbbbO.',
+          '.OddddddddddddO.',
+          '.OddO......OddO.',
+          '.OddO......OddO.',
+          '..OO........OO..',
+          '................'
+        ], { O: '#24140a', W: '#ffffff', P: '#d2dce6', h: '#ff6b6b', r: '#db2c2c', R: '#9e1919', b: '#a87542', d: '#6b4520' });
+        break;
+
+      case 'stick':
+        drawGrid([
+          '................',
+          '................',
+          '...........OO...',
+          '..........OLMO..',
+          '.........OLMDO..',
+          '........OLMDO...',
+          '.......OLMDO....',
+          '......OLMDO.....',
+          '.....OLMDO......',
+          '....OLMDO.......',
+          '...OLMDO........',
+          '..OLMDO.........',
+          '..OMDO..........',
+          '...OO...........',
+          '................',
+          '................'
+        ], { O: '#29180a', L: '#c28e53', M: '#966532', D: '#6b441d' });
+        break;
+
+      case 'wheat':
+        drawGrid([
+          '................',
+          '...........OO...',
+          '.........OOHLO..',
+          '........OHLMO...',
+          '.......OHLMO....',
+          '......OHLMOO....',
+          '.....OHLMHLO....',
+          '....OHLMLMO.....',
+          '...OOGGMO.......',
+          '..OOGgGO........',
+          '..OLMO..........',
+          '.OLMDO..........',
+          '.OMDO...........',
+          '..OO............',
+          '................',
+          '................'
+        ], { O: '#3d2d09', H: '#fff099', L: '#edc645', M: '#c49621', D: '#8c6612', G: '#4a8f29', g: '#74c445' });
+        break;
+
+      case 'bone':
+        drawGrid([
+          '................',
+          '..........OOO...',
+          '.........OWWWO..',
+          '.........OWWWO..',
+          '........OWWBOO..',
+          '.......OWWBO....',
+          '......OWWBO.....',
+          '.....OWWBO......',
+          '....OWWBO.......',
+          '...OWWBO........',
+          '..OOWBO.........',
+          '.OWWWBO.........',
+          '.OWWWBO.........',
+          '..OOBO..........',
+          '...OO...........',
+          '................'
+        ], { O: '#2b2824', W: '#ffffff', B: '#d9d3c5' });
+        break;
+
+      case 'feather':
+        drawGrid([
+          '................',
+          '..........OOO...',
+          '........OOWWWO..',
+          '.......OWWWLLO..',
+          '......OWWLLWWO..',
+          '.....OWWLLLWWO..',
+          '....OWWLLLWWOO..',
+          '...OWWLLLWWO....',
+          '...OWLLLWOO.....',
+          '..OWLLWOO.......',
+          '..OLLO..........',
+          '.OSSO...........',
+          '.OSO............',
+          '..O.............',
+          '................',
+          '................'
+        ], { O: '#2a313b', W: '#ffffff', L: '#d6dee8', S: '#7c8694' });
+        break;
+
+      case 'leather':
+        drawGrid([
+          '................',
+          '................',
+          '..OOOO....OOOO..',
+          '.OHLLMO..OMMMDO.',
+          '.OHLLLMOOMMMMDO.',
+          '..OLMMMMMMMMDO..',
+          '..OMMMMMMMMMDO..',
+          '..OMMMMMMMMDDO..',
+          '..OMMMMMMMMDDO..',
+          '.OHMMMMMMMMMDDO.',
+          '.OLMMMMMMMMMDDO.',
+          '..OMMMDDDDDDDO..',
+          '...OOO....OOO...',
+          '................',
+          '................',
+          '................'
+        ], { O: '#2e1608', H: '#d98f57', L: '#bd723d', M: '#995528', D: '#6b3817' });
+        break;
+
+      case 'gunpowder':
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '.....OOOOOO.....',
+          '...OOHHMMMMO....',
+          '..OHHMMMMMMDO...',
+          '..OMMHHMMMMDDO..',
+          '.OMMMMMMMMMDDDO.',
+          '.OMMMHHMMMDDDDO.',
+          '.ODMMMMMMDDDDDO.',
+          '..ODDDDDDDDDDO..',
+          '...OOOOOOOOOO...',
+          '................',
+          '................',
+          '................',
+          '................'
+        ], { O: '#181a1f', H: '#949ba8', M: '#5c616e', D: '#33363f' });
+        break;
+
+      default:
+        c.fillStyle = '#222'; c.fillRect(6, 6, 20, 20);
+        c.fillStyle = '#999'; c.fillRect(8, 8, 16, 16);
+    }
   }
 
   // Crisp 3D Three.js CanvasTexture for dropped pixel-art items & foods!
@@ -973,6 +1672,166 @@ export class TextureManager {
     tex.generateMipmaps = false;
     this.mobCoatCache[key] = tex;
     return tex;
+  }
+
+  // Ultra-Detailed 16x16 Pixel-Art Villager Face, Nose, Embroidered Robe & Hat Texture Suite!
+  getVillagerTextures(profName = 'Farmer') {
+    if (this.villagerTexCache[profName]) return this.villagerTexCache[profName];
+
+    const makeTex16 = (drawFn) => {
+      const c = document.createElement('canvas');
+      c.width = 16;
+      c.height = 16;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      drawFn(ctx, (x, y, col, w = 1, h = 1) => {
+        ctx.fillStyle = col;
+        ctx.fillRect(x, y, w, h);
+      });
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.generateMipmaps = false;
+      return tex;
+    };
+
+    const skinPal = {
+      hi: '#e6b793', base: '#d9a47c', mid: '#c9926b', lo: '#ad7955', brow: '#472d1b', browHi: '#613f26',
+      mouth: '#8c5a3c', white: '#f5f7fa', eyeG: '#258a48', eyeHi: '#5be383', eyeDk: '#134d26'
+    };
+
+    // 1. Iconic Expressive Minecraft Villager Face (16x16!)
+    const headFront = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, skinPal.base, 7, 201);
+      // Forehead highlight & subtle wrinkle crease
+      p(2, 1, skinPal.hi, 12, 3);
+      p(4, 3, skinPal.mid, 8, 1);
+      // Side temple shading for 3D facial contour
+      p(0, 0, skinPal.mid, 1, 16); p(15, 0, skinPal.mid, 1, 16);
+      p(0, 14, skinPal.lo, 16, 2);
+      // Iconic thick expressive unibrow!
+      p(2, 5, skinPal.brow, 12, 2);
+      p(3, 5, skinPal.browHi, 10, 1);
+      // Shadow directly under brow
+      p(2, 7, skinPal.lo, 12, 1);
+      // Left & Right Gleaming Emerald Eyes (sclera + green iris + dark pupil + white catchlight)
+      p(2, 8, skinPal.white, 4, 2);
+      p(4, 8, skinPal.eyeG, 2, 2); p(4, 8, skinPal.eyeHi, 1, 1); p(5, 9, skinPal.eyeDk, 1, 1);
+      p(10, 8, skinPal.white, 4, 2);
+      p(10, 8, skinPal.eyeG, 2, 2); p(10, 8, skinPal.eyeHi, 1, 1); p(11, 9, skinPal.eyeDk, 1, 1);
+      // Subtle cheek blush & nose bridge shadow
+      p(1, 10, '#cf8e72', 3, 2); p(12, 10, '#cf8e72', 3, 2);
+      p(6, 9, skinPal.lo, 4, 4);
+      // Gentle calm villager mouth crease
+      p(5, 13, skinPal.mouth, 6, 1);
+      p(6, 14, skinPal.mid, 4, 1);
+    });
+
+    const headSide = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, skinPal.base, 7, 202);
+      p(0, 0, skinPal.mid, 16, 2);
+      p(0, 14, skinPal.lo, 16, 2);
+      // Subtle sculpted ear detail
+      p(6, 7, skinPal.lo, 3, 4);
+      p(7, 8, skinPal.hi, 1, 2);
+      // Hairline tuft on back half
+      p(10, 0, '#4f3522', 6, 7);
+      p(12, 7, '#4f3522', 4, 4);
+    });
+
+    const headBack = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, skinPal.base, 7, 203);
+      p(0, 0, '#4f3522', 16, 9);
+      p(2, 9, '#3d2818', 12, 2);
+      p(0, 14, skinPal.lo, 16, 2);
+    });
+
+    const headTop = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, skinPal.hi, 6, 204);
+      p(0, 10, '#4f3522', 16, 6);
+    });
+
+    const nose = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, skinPal.base, 6, 205);
+      p(2, 0, skinPal.hi, 12, 6);
+      p(0, 12, skinPal.lo, 16, 4);
+      p(3, 13, '#7d4f34', 3, 2); p(10, 13, '#7d4f34', 3, 2); // nostrils on bottom edge!
+    });
+
+    // Profession Color Palettes (authentic Minecraft Village & Pillage style!)
+    const profStyles = {
+      Farmer:     { robe: '#8c5e34', dark: '#5e3c1f', hi: '#ad7a49', trim: '#d9b54a', sash: '#4a3019', badge: '#34d159', seed: 210 },
+      Blacksmith: { robe: '#4a4e57', dark: '#2a2d33', hi: '#6a707d', trim: '#9aa3b0', sash: '#241b16', badge: '#f5b324', seed: 211 },
+      Librarian:  { robe: '#9e2828', dark: '#6b1616', hi: '#c24040', trim: '#f0c846', sash: '#f0e8d5', badge: '#38d9f5', seed: 212 },
+      Cleric:     { robe: '#6b2c91', dark: '#461863', hi: '#8d4ab8', trim: '#f5cc42', sash: '#35124d', badge: '#ff52e8', seed: 213 }
+    };
+    const st = profStyles[profName] || profStyles.Farmer;
+
+    // 2. Detailed Embroidered Profession Robe Front (with V-collar, center seam, belt, buckle & level gem!)
+    const robeFront = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, st.robe, 9, st.seed);
+      // Vertical cloth folds & shading
+      p(0, 0, st.dark, 2, 16); p(14, 0, st.dark, 2, 16);
+      p(3, 2, st.hi, 2, 12); p(11, 2, st.hi, 2, 12);
+      // Center coat opening & embroidered gold/trim lapel
+      p(7, 0, st.dark, 2, 16);
+      p(6, 0, st.trim, 1, 15); p(9, 0, st.trim, 1, 15);
+      // Collar V-neck
+      p(4, 0, st.sash, 8, 2); p(6, 2, st.sash, 4, 2);
+      // Stitched leather belt + metal buckle + profession Emerald/Gold Gem Badge!
+      p(0, 9, st.sash, 16, 2);
+      p(6, 9, '#f2cc4c', 4, 2);
+      p(7, 9, '#5e4314', 2, 1);
+      p(11, 9, '#241b12', 3, 3);
+      p(12, 10, st.badge, 1, 1);
+      // Embroidered bottom hem border
+      p(0, 14, st.trim, 16, 1);
+      p(0, 15, st.dark, 16, 1);
+    });
+
+    const robeSide = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, st.robe, 9, st.seed + 5);
+      p(0, 0, st.dark, 1, 16); p(15, 0, st.dark, 1, 16);
+      p(6, 0, st.hi, 4, 14);
+      p(0, 9, st.sash, 16, 2);
+      p(0, 14, st.trim, 16, 1);
+      p(0, 15, st.dark, 16, 1);
+    });
+
+    const robeBack = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, st.robe, 9, st.seed + 9);
+      p(0, 0, st.dark, 2, 16); p(14, 0, st.dark, 2, 16);
+      p(2, 0, st.trim, 12, 3); // shoulder hood/cape drape
+      p(3, 1, st.robe, 10, 2);
+      p(0, 9, st.sash, 16, 2);
+      p(0, 14, st.trim, 16, 1);
+      p(0, 15, st.dark, 16, 1);
+    });
+
+    // Woven Straw Hat Texture (Farmer)
+    const strawTex = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, '#e3c159', 10, 220);
+      for (let y = 0; y < 16; y += 2) {
+        for (let x = 0; x < 16; x += 2) {
+          p(x, y, ((x + y) % 4 === 0) ? '#f5dd84' : '#bd9834', 2, 1);
+        }
+      }
+      p(0, 0, '#a37e24', 16, 1); p(0, 15, '#a37e24', 16, 1);
+    });
+
+    // Blacksmith Riveted Leather Apron Texture
+    const apronTex = makeTex16((c, p) => {
+      fillNoise(c, 0, 0, '#2a2626', 8, 221);
+      p(0, 0, '#171515', 16, 1); p(0, 15, '#171515', 16, 1);
+      p(2, 2, '#9ca6b5', 2, 2); p(12, 2, '#9ca6b5', 2, 2); // iron rivets
+      p(2, 10, '#453e3e', 12, 3); // front tool pocket
+      p(4, 11, '#c9d2de', 2, 2); // pocket tongs
+    });
+
+    const set = { headFront, headSide, headBack, headTop, nose, robeFront, robeSide, robeBack, strawTex, apronTex, style: st };
+    this.villagerTexCache[profName] = set;
+    return set;
   }
 
   // Unified Coherent 16x16 Pixel-Art HUD Icons (Hearts, Food, Water Bubbles, Armor — exact same 16x16 density as all UI!)
@@ -1567,10 +2426,10 @@ export class TextureManager {
       p(1, 3, '#1e293b', 12, 5); p(3, 6, '#1e293b', 11, 5); p(5, 9, '#1e293b', 8, 4);
       p(2, 4, '#ffffff', 10, 3); p(4, 7, '#cbd5e1', 9, 3); p(6, 10, '#94a3b8', 6, 2);
     });
-    this.uiIcons.axe = this.itemIcons.iron_axe || this.uiIcons.mine;
-    this.uiIcons.pickaxe = this.itemIcons.diamond_pickaxe || this.uiIcons.mine;
-    this.uiIcons.torch = this.itemIcons.torch || this.uiIcons.flame;
-    this.uiIcons.tnt = this.itemIcons.tnt || this.uiIcons.place;
+    this.uiIcons.axe = this.getIcon('iron_axe') || this.uiIcons.mine;
+    this.uiIcons.pickaxe = this.getIcon('diamond_pickaxe') || this.uiIcons.mine;
+    this.uiIcons.torch = this.getIcon('torch') || this.uiIcons.flame;
+    this.uiIcons.tnt = this.getIcon('tnt') || this.uiIcons.place;
     this.uiIcons.heart = this.hudIcons.heart_full;
 
     // 21. ARMOR SLOT SILHOUETTE PLACEHOLDERS (Pixel Art, No Emojis!)
@@ -1592,7 +2451,7 @@ export class TextureManager {
       p(3, 7, '#6b7280', 3, 6); p(10, 7, '#6b7280', 3, 6);
     });
 
-    // 22. NEW 16x16 SETTINGS, KEYBINDS, CHEATS, POTION EFFECTS & BED ICONS!
+    // 22. NEW 16x16 SETTINGS, KEYBINDS, CHEATS, POTION EFFECTS, BED & JAVA MAIN MENU ICONS!
     this.uiIcons.keybind = make((p) => {
       p(1, 3, '#14171f', 14, 10);
       p(2, 4, '#64748b', 12, 8);
@@ -1601,7 +2460,6 @@ export class TextureManager {
       p(4, 9, '#e2e8f0', 8, 2);
     });
     this.uiIcons.cheat = make((p) => {
-      // Golden command crown / key
       p(2, 5, '#2b1b05', 12, 8);
       p(2, 3, '#2b1b05', 3, 4); p(6, 2, '#2b1b05', 4, 5); p(11, 3, '#2b1b05', 3, 4);
       p(3, 4, '#ffd54f', 1, 3); p(7, 3, '#fff176', 2, 4); p(12, 4, '#ffd54f', 1, 3);
@@ -1609,13 +2467,55 @@ export class TextureManager {
       p(5, 9, '#ef4444', 2, 2); p(9, 9, '#38bdf8', 2, 2);
     });
     this.uiIcons.potion = make((p) => {
-      // Glowing cyan/violet potion bottle (for /effect!)
       p(6, 1, '#1e1626', 4, 3); p(7, 2, '#b8864b', 2, 2);
       p(5, 4, '#1e1626', 6, 2); p(6, 4, '#e2e8f0', 4, 1);
       p(3, 6, '#1e1626', 10, 8); p(4, 14, '#1e1626', 8, 1);
       p(4, 7, '#a855f7', 8, 6); p(5, 8, '#d8b4fe', 3, 3);
       p(5, 8, '#ffffff', 1, 2); p(8, 11, '#7e22ce', 3, 2);
     });
-    this.uiIcons.bed = this.itemIcons.bed || this.uiIcons.place;
+    this.uiIcons.bed = this.getIcon('bed') || this.uiIcons.place;
+
+    // Multiplayer / Server / Globe / Accessibility Person / Settings Gear (Java Main Menu!)
+    this.uiIcons.multiplayer = make((p) => {
+      // Two side-by-side voxel players
+      p(2, 2, '#14171f', 5, 5); p(3, 3, '#e0ac84', 3, 3); p(3, 3, '#4f3522', 3, 1);
+      p(1, 7, '#14171f', 7, 7); p(2, 8, '#28a7b8', 5, 5);
+      p(9, 2, '#14171f', 5, 5); p(10, 3, '#f0c4a0', 3, 3); p(10, 3, '#a66d2e', 3, 1);
+      p(8, 7, '#14171f', 7, 7); p(9, 8, '#54b848', 5, 5);
+    });
+    this.uiIcons.server = make((p) => {
+      p(2, 2, '#14171f', 12, 5); p(3, 3, '#7b8494', 10, 3); p(4, 4, '#52e052', 2, 1); p(10, 4, '#cbd5e1', 2, 1);
+      p(2, 9, '#14171f', 12, 5); p(3, 10, '#626a78', 10, 3); p(4, 11, '#ffd54f', 2, 1); p(10, 11, '#cbd5e1', 2, 1);
+    });
+    this.uiIcons.globe = make((p) => {
+      p(4, 1, '#0f2036', 8, 14); p(2, 3, '#0f2036', 12, 10); p(1, 5, '#0f2036', 14, 6);
+      p(5, 2, '#3b82f6', 6, 12); p(3, 4, '#2563eb', 10, 8); p(2, 6, '#38bdf8', 12, 4);
+      p(4, 4, '#52c44d', 4, 4); p(9, 7, '#52c44d', 4, 4); p(6, 10, '#3a9c36', 3, 2);
+      p(4, 3, '#bae6fd', 2, 1);
+    });
+    this.uiIcons.person = make((p) => {
+      p(6, 1, '#14171f', 4, 4); p(7, 2, '#ffffff', 2, 2);
+      p(2, 5, '#14171f', 12, 3); p(3, 6, '#ffffff', 10, 1);
+      p(5, 7, '#14171f', 6, 4); p(6, 7, '#ffffff', 4, 3);
+      p(5, 11, '#14171f', 3, 4); p(8, 11, '#14171f', 3, 4);
+      p(6, 11, '#ffffff', 1, 3); p(9, 11, '#ffffff', 1, 3);
+    });
+    this.uiIcons.settings = make((p) => {
+      p(6, 1, '#14171f', 4, 14); p(1, 6, '#14171f', 14, 4); p(3, 3, '#14171f', 10, 10);
+      p(7, 2, '#cbd5e1', 2, 12); p(2, 7, '#cbd5e1', 12, 2); p(4, 4, '#94a3b8', 8, 8);
+      p(6, 6, '#14171f', 4, 4); p(7, 7, '#475569', 2, 2);
+    });
+    this.uiIcons.signal_on = make((p) => {
+      p(2, 10, '#142914', 3, 5); p(3, 11, '#52e052', 1, 3);
+      p(6, 7, '#142914', 3, 8); p(7, 8, '#52e052', 1, 6);
+      p(10, 3, '#142914', 3, 12); p(11, 4, '#52e052', 1, 10);
+    });
+    this.uiIcons.signal_off = make((p) => {
+      p(2, 10, '#1f242d', 3, 5); p(3, 11, '#64748b', 1, 3);
+      p(6, 7, '#1f242d', 3, 8); p(7, 8, '#475569', 1, 6);
+      p(10, 3, '#1f242d', 3, 12); p(11, 4, '#334155', 1, 10);
+      p(2, 2, '#ef4444', 2, 2); p(4, 4, '#ef4444', 2, 2); p(6, 6, '#ef4444', 2, 2);
+      p(6, 2, '#ef4444', 2, 2); p(2, 6, '#ef4444', 2, 2);
+    });
   }
 }
