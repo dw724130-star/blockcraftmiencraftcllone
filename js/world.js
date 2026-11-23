@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
+import { LodWorkerPool } from './lod-mesher.js';
 
 export const CHUNK_SIZE = 16;
 export const CHUNK_HEIGHT = 96;
@@ -439,75 +440,184 @@ export class World {
       );
     };
 
-    // 1b. Distant Horizons 64-Chunk LOD Terrain Material (matches BSL Opaque Terrain lighting & fog seamlessly!)
-    this.lodMat = new THREE.MeshLambertMaterial({
-      vertexColors: true
-    });
-    this.lodMat.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, {
-        uShaderOn: this.shaderUniforms.uShaderOn,
-        uSunDir: this.shaderUniforms.uSunDir,
-        uSunColor: this.shaderUniforms.uSunColor,
-        uHorizonColor: this.shaderUniforms.uHorizonColor,
-        uSunsetColor: this.shaderUniforms.uSunsetColor,
-        uDayFactor: this.shaderUniforms.uDayFactor,
-        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
-        uFogNear: this.shaderUniforms.uFogNear,
-        uFogFar: this.shaderUniforms.uFogFar,
-        uLodInnerCenter: this.shaderUniforms.uLodInnerCenter,
-        uLodInnerRadiusSq: this.shaderUniforms.uLodInnerRadiusSq
+    // 1b. Distant Horizons 512-Chunk High-Detail LOD Terrain Materials
+    // Dual-material iPad/Apple TBDR optimization:
+    // - `this.lodMat` (with circular cutout discard) ONLY on innermost ring tiles overlapping full-detail chunks (~24 meshes)
+    // - `this.lodMatOuter` (ZERO `discard`!) on 90%+ of outer LOD tiles -> keeps hardware Early-Z / Apple HSR enabled!
+    const buildLodMat = (withInnerCutout) => {
+      const mat = new THREE.MeshLambertMaterial({
+        vertexColors: true
       });
-      shader.vertexShader = `
-        varying vec3 vWorldPos;
-        varying vec3 vWorldNorm;
-      ` + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         vWorldPos = position;
-         vWorldNorm = normal;`
-      );
-      shader.fragmentShader = `
-        uniform float uShaderOn;
-        uniform vec3 uSunDir;
-        uniform vec3 uSunColor;
-        uniform vec3 uHorizonColor;
-        uniform vec3 uSunsetColor;
-        uniform float uDayFactor;
-        uniform float uSunsetFactor;
-        uniform float uFogNear;
-        uniform float uFogFar;
-        uniform vec2 uLodInnerCenter;
-        uniform float uLodInnerRadiusSq;
-        varying vec3 vWorldPos;
-        varying vec3 vWorldNorm;
-      ` + shader.fragmentShader;
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <fog_fragment>',
-        `vec2 lodDelta = vWorldPos.xz - uLodInnerCenter;
-         if (dot(lodDelta, lodDelta) < uLodInnerRadiusSq) discard;
-         if (uShaderOn > 0.5) {
+      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v24' : 'lod_outer_v24');
+      mat.onBeforeCompile = (shader) => {
+        const uniforms = {
+          uTime: this.shaderUniforms.uTime,
+          uWaveStrength: this.shaderUniforms.uWaveStrength,
+          uShaderOn: this.shaderUniforms.uShaderOn,
+          uSunDir: this.shaderUniforms.uSunDir,
+          uSunColor: this.shaderUniforms.uSunColor,
+          uTopColor: this.shaderUniforms.uTopColor,
+          uMidColor: this.shaderUniforms.uMidColor,
+          uHorizonColor: this.shaderUniforms.uHorizonColor,
+          uSunsetColor: this.shaderUniforms.uSunsetColor,
+          uDayFactor: this.shaderUniforms.uDayFactor,
+          uSunsetFactor: this.shaderUniforms.uSunsetFactor,
+          uRainFactor: this.shaderUniforms.uRainFactor,
+          uFogNear: this.shaderUniforms.uFogNear,
+          uFogFar: this.shaderUniforms.uFogFar
+        };
+        if (withInnerCutout) {
+          uniforms.uLodInnerCenter = this.shaderUniforms.uLodInnerCenter;
+          uniforms.uLodInnerRadiusSq = this.shaderUniforms.uLodInnerRadiusSq;
+        }
+        Object.assign(shader.uniforms, uniforms);
+        shader.vertexShader = `
+          attribute float aMat;
+          varying vec3 vWorldPos;
+          varying vec3 vWorldNorm;
+          varying float vMat;
+        ` + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+           vWorldNorm = normal;
+           vMat = aMat;`
+        );
+        shader.fragmentShader = `
+          uniform float uTime;
+          uniform float uWaveStrength;
+          uniform float uShaderOn;
+          uniform vec3 uSunDir;
+          uniform vec3 uSunColor;
+          uniform vec3 uTopColor;
+          uniform vec3 uMidColor;
+          uniform vec3 uHorizonColor;
+          uniform vec3 uSunsetColor;
+          uniform float uDayFactor;
+          uniform float uSunsetFactor;
+          uniform float uRainFactor;
+          uniform float uFogNear;
+          uniform float uFogFar;
+          ${withInnerCutout ? 'uniform vec2 uLodInnerCenter;\nuniform float uLodInnerRadiusSq;' : ''}
+          varying vec3 vWorldPos;
+          varying vec3 vWorldNorm;
+          varying float vMat;
+        ` + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <fog_fragment>',
+          `${withInnerCutout ? 'vec2 lodDelta = vWorldPos.xz - uLodInnerCenter;\nif (dot(lodDelta, lodDelta) < uLodInnerRadiusSq) discard;' : ''}
+
            vec3 viewVec = vWorldPos - cameraPosition;
            float dist = length(viewVec);
            vec3 viewDir = viewVec / max(dist, 0.001);
            vec3 N = normalize(vWorldNorm);
            vec3 L = normalize(uSunDir);
-           float sunLit = smoothstep(-0.2, 0.55, dot(N, L));
-           vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
-           vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
-           gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
 
-           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist);
-           float sa = max(0.0, dot(viewDir, L));
-           float sunAlign = sa * sa * sa;
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
-         } else {
-           #include <fog_fragment>
-         }`
-      );
+           // Crisp 1-block (1m) procedural Minecraft voxel detail & rock strata (early-exits beyond 680m!)
+           float detailFade = 1.0 - smoothstep(140.0, 680.0, dist);
+           if (detailFade > 0.01 && (vMat < 0.15 || vMat > 0.37)) {
+             vec3 bCoord = floor(vWorldPos - N * 0.05);
+             vec3 h3 = fract(bCoord * vec3(0.1031, 0.1030, 0.0973));
+             h3 += dot(h3, h3.yzx + 33.33);
+             float blockRand = fract((h3.x + h3.y) * h3.z);
+
+             if (vMat > 0.85) {
+               float strata = sin(vWorldPos.y * 1.45 + blockRand * 1.5) * 0.08;
+               gl_FragColor.rgb *= (0.93 + blockRand * 0.14 + strata) * detailFade + (1.0 - detailFade);
+             } else if (vMat > 0.37 && vMat < 0.62) {
+               gl_FragColor.rgb *= 1.0 + (blockRand - 0.5) * 0.24 * detailFade;
+             } else if (vMat > 0.62) {
+               gl_FragColor.rgb *= 1.0 + (blockRand - 0.5) * 0.07 * detailFade;
+             } else {
+               gl_FragColor.rgb *= 1.0 + (blockRand - 0.5) * 0.14 * detailFade;
+               if (abs(N.y) < 0.5) {
+                 float strataSoil = 0.94 + 0.09 * fract(vWorldPos.y * 0.5);
+                 gl_FragColor.rgb *= mix(1.0, strataSoil, detailFade);
+               }
+             }
+           }
+
+           if (uShaderOn > 0.5) {
+             bool isWater = (vMat > 0.15 && vMat < 0.37);
+             if (isWater && N.y > 0.5) {
+               // Live BSL Reflective Sky-Mirror Water (fast analytic path beyond 1.4km for 512-chunk iPad speed!)
+               vec3 V = -viewDir;
+               vec3 wN = vec3(0.0, 1.0, 0.0);
+               float rippleMul = 0.78;
+               bool nearWater = dist < 1400.0;
+               if (nearWater) {
+                 vec2 wp = vWorldPos.xz;
+                 float wt = uTime;
+                 float wA = sin(wp.x * 1.35 + wt * 1.7 + wp.y * 0.65);
+                 float wB = cos(wp.y * 1.55 - wt * 1.4 - wp.x * 0.55);
+                 float wAmp = mix(0.015, 0.078, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(120.0, 1350.0, dist) * 0.85);
+                 wN = normalize(vec3(wA * wAmp, 1.0, wB * wAmp));
+                 rippleMul = 0.76 + 0.14 * wA * wB * uDayFactor;
+               }
+
+               float NoV = max(0.0, dot(wN, V));
+               float omv = 1.0 - NoV;
+               float fresnel = clamp(0.14 + 0.82 * omv * omv * omv, 0.14, 0.94);
+
+               vec3 R = reflect(-V, wN);
+               float rY = clamp(abs(R.y), 0.02, 1.0);
+               vec3 reflCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.38, rY));
+               reflCol = mix(reflCol, uTopColor, smoothstep(0.28, 0.92, rY));
+               float rSun = max(0.0, dot(normalize(R), L));
+               float rSun2 = rSun * rSun;
+               float rSun4 = rSun2 * rSun2;
+               reflCol = mix(reflCol, uSunsetColor, (1.0 - rY) * (0.28 + 0.52 * rSun2) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+               reflCol += uSunColor * (rSun4 * rSun4 * 0.42) * smoothstep(-0.1, 0.06, L.y) * (1.0 - uRainFactor * 0.8);
+
+               gl_FragColor.rgb = mix(gl_FragColor.rgb * rippleMul, reflCol, fresnel);
+
+               if (nearWater) {
+                 vec3 H = normalize(V + L);
+                 float nh = max(0.0, dot(wN, H));
+                 float nh2 = nh * nh;
+                 float nh4 = nh2 * nh2;
+                 float nh16 = nh4 * nh4 * nh4 * nh4;
+                 float nh64 = nh16 * nh16 * nh16 * nh16;
+                 float sunUp = smoothstep(-0.08, 0.08, L.y) * (1.0 - uRainFactor * 0.85);
+                 gl_FragColor.rgb += uSunColor * (nh64 * 1.9 + nh16 * 0.28) * sunUp;
+               }
+             } else {
+               float sunLit = smoothstep(-0.2, 0.55, dot(N, L));
+               vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
+               vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
+               gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
+               gl_FragColor.rgb += uHorizonColor * 0.032 * uDayFactor * (1.0 - sunLit * 0.7);
+
+               if (vMat > 0.37 && vMat < 0.62) {
+                 float saF = max(0.0, dot(viewDir, L));
+                 float sss = (saF * saF * saF) * 0.22 * uDayFactor;
+                 gl_FragColor.rgb += gl_FragColor.rgb * uSunColor * sss;
+               } else if (vMat > 0.62 && vMat < 0.85) {
+                 vec3 H = normalize(-viewDir + L);
+                 float nh = max(0.0, dot(N, H));
+                 float nh2 = nh * nh;
+                 float nh8 = nh2 * nh2 * nh2 * nh2;
+                 gl_FragColor.rgb += uSunColor * (nh8 * 0.18 * sunLit * uDayFactor);
+               }
+             }
+
+             // Volumetric Sun-Aligned Atmospheric Aerial Perspective Haze out to 512 chunks!
+             float hazeFactor = smoothstep(uFogNear * 0.45, uFogFar, dist);
+             float sa = max(0.0, dot(viewDir, L));
+             float sunAlign = sa * sa * sa;
+             vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
+             atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
+             gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
+           } else {
+             #include <fog_fragment>
+           }`
+        );
+      };
+      return mat;
     };
+    this.lodMat = buildLodMat(true);
+    this.lodMatOuter = buildLodMat(false);
 
     // 2. Cutout Foliage Material — Root-anchored Wind Sway + Sunlit Backlighting + Atmospheric Haze
     this.cutoutMat = new THREE.MeshLambertMaterial({
@@ -767,12 +877,17 @@ export class World {
     this.group = new THREE.Group();
     this.scene.add(this.group);
 
-    // Distant Horizons 64-Chunk LOD Terrain Group (streams out to 1,024 blocks at 120 FPS!)
+    // Distant Horizons 512-Chunk 6-Tier Quadtree LOD Group (Web Worker Pool + Greedy Meshing + Apple HSR!)
     this.lodGroup = new THREE.Group();
     this.scene.add(this.lodGroup);
-    this.lodRegions = new Map(); // numeric key -> { rx, rz, tier, mesh }
+    this.lodRegions = new Map(); // key -> { rx, rz, tier, mesh, retiring }
     this.maxDetailRadius = options.maxDetailRadius || 10;
     this._lodQueue = [];
+    this._lodActiveKeys = new Set();
+    this._lodInnerKeys = new Set(); // innermost tiles needing circular cutout `lodMat` (rest use HSR `lodMatOuter`!)
+    this._lodRetiringKeys = new Set();
+    this._lodPool = null;
+    this._lodMaxWorkers = this.maxDetailRadius <= 6 ? 2 : 4;
     this._lastLodRx = 1e9;
     this._lastLodRz = 1e9;
     this._lastLodRD = -1;
@@ -2567,7 +2682,7 @@ export class World {
     }
   }
 
-  updateChunksAround(px, pz, maxBuildsPerFrame = 2, budgetMs = 4.0) {
+  updateChunksAround(px, pz, maxBuildsPerFrame = 2, budgetMs = 4.0, camDirX = 0, camDirZ = -1) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const fullRD = this.renderDistance;
@@ -2686,235 +2801,88 @@ export class World {
       this._shadowNeedsUpdate = true;
     }
 
-    // 4. Distant Horizons 64-Chunk LOD Ring (streams ultra-lightweight distant mountains & oceans up to 1,024 blocks!)
+    // 4. Distant Horizons 128-Chunk 4-Tier Quadtree LOD Ring (off-thread Web Workers + Greedy Meshing!)
     // Update GPU circular cutout so LOD NEVER overlaps or z-fights with full-detail chunks or caves!
     this.shaderUniforms.uLodInnerCenter.value.set(px, pz);
     const innerCutBlocks = Math.max(0, (r - 1.15) * CHUNK_SIZE);
     this.shaderUniforms.uLodInnerRadiusSq.value = innerCutBlocks * innerCutBlocks;
-    this.updateLodAround(pcx, pcz, r, fullRD, Math.max(1.4, budgetMs * 0.48));
+    this.updateLodAround(pcx, pcz, r, fullRD, Math.max(1.2, budgetMs * 0.42), camDirX, camDirZ);
   }
 
-  // Build one Crisp Stepped VOXEL BLOCK Multi-Tier Distant Horizons LOD Region (real Minecraft block silhouettes up to 128 chunks!)
-  _buildLodRegionMesh(rx, rz, tier = 1) {
-    const step = tier === 1 ? 4 : (tier === 2 ? 8 : 16);
-    const cells = 16; // 16x16 stepped voxel columns -> Tier 1 = 4x4 chunks (64m), Tier 2 = 8x8 chunks (128m), Tier 3 = 16x16 chunks (256m)
-    const pad = cells + 2; // 18x18 padded grid so vertical cliff walls at region edges are 100% exact!
-    const regionBlocks = cells * step;
-    const ox = rx * regionBlocks;
-    const oz = rz * regionBlocks;
-    const isFlat = this.worldType === 'flat';
-
-    const colTopY = new Int16Array(pad * pad);
-    const colBaseH = new Int16Array(pad * pad);
-    const colTopR = new Float32Array(pad * pad);
-    const colTopG = new Float32Array(pad * pad);
-    const colTopB = new Float32Array(pad * pad);
-    const colSideR = new Float32Array(pad * pad);
-    const colSideG = new Float32Array(pad * pad);
-    const colSideB = new Float32Array(pad * pad);
-
-    // Pass 1: Sample integer voxel column heights & crisp per-block Minecraft colors (with blocky 3D voxel tree crowns!)
-    for (let pz = 0; pz < pad; pz++) {
-      const wz = oz + (pz - 1) * step;
-      for (let px = 0; px < pad; px++) {
-        const wx = ox + (px - 1) * step;
-        const col = this.sampleColumn(wx, wz);
-        const h = Math.floor(col.height);
-        const biome = col.biome;
-        const idx = px + pz * pad;
-        const isWater = !isFlat && h < SEA_LEVEL;
-        colBaseH[idx] = h;
-
-        let yTop = isWater ? SEA_LEVEL : h;
-        let tr, tg, tb, sr, sg, sb;
-        const blockHash = coordHash(Math.floor(wx / step), Math.floor(wz / step), this.seed + 713);
-        const vVar = 0.93 + coordHash(Math.floor(wx / step), Math.floor(wz / step), this.seed + 888) * 0.14;
-
-        if (isWater) {
-          if (biome === 'Snowy Taiga') {
-            tr = 0.68; tg = 0.85; tb = 0.98;
-            sr = 0.56; sg = 0.74; sb = 0.88;
-          } else {
-            const depth = Math.min(1, (SEA_LEVEL - h) / 14);
-            tr = 0.14 - depth * 0.07; tg = 0.50 - depth * 0.18; tb = 0.76 - depth * 0.15;
-            sr = tr * 0.82; sg = tg * 0.82; sb = tb * 0.88;
-          }
-        } else if (biome === 'Desert') {
-          tr = 0.86; tg = 0.79; tb = 0.55;
-          sr = 0.78; sg = 0.71; sb = 0.48;
-        } else if (!isFlat && h <= SEA_LEVEL + 1) {
-          // Sandy beach / riverbank block
-          tr = 0.84; tg = 0.78; tb = 0.56;
-          sr = 0.76; sg = 0.70; sb = 0.49;
-        } else if (h >= 58 || (biome === 'Snowy Taiga' && h >= SEA_LEVEL + 2)) {
-          if (biome === 'Snowy Taiga' && h < 57 && blockHash > 0.52) {
-            // Crisp blocky spruce tree voxel crown!
-            yTop = h + Math.max(3, Math.round(step * 0.5));
-            tr = 0.19; tg = 0.35; tb = 0.24;
-            sr = 0.15; sg = 0.29; sb = 0.19;
-          } else {
-            tr = 0.93; tg = 0.96; tb = 1.0;
-            sr = 0.54; sg = 0.56; sb = 0.60; // Alpine stone cliff below snow cap
-          }
-        } else if (h >= 52) {
-          // Crisp granite alpine mountain rock block!
-          tr = 0.52; tg = 0.54; tb = 0.57;
-          sr = 0.46; sg = 0.48; sb = 0.51;
-        } else if (biome === 'Forest') {
-          if (blockHash > 0.34) {
-            // Crisp blocky oak forest canopy voxel!
-            yTop = h + Math.max(3, Math.round(step * 0.55));
-            tr = 0.19; tg = 0.45; tb = 0.15;
-            sr = 0.16; sg = 0.38; sb = 0.13;
-          } else {
-            tr = 0.32; tg = 0.56; tb = 0.22;
-            sr = 0.46; sg = 0.34; sb = 0.23; // Dirt side under grass
-          }
-        } else if (biome === 'Birch Forest') {
-          if (blockHash > 0.40) {
-            yTop = h + Math.max(3, Math.round(step * 0.5));
-            tr = 0.34; tg = 0.58; tb = 0.23;
-            sr = 0.28; sg = 0.50; sb = 0.19;
-          } else {
-            tr = 0.38; tg = 0.61; tb = 0.26;
-            sr = 0.48; sg = 0.36; sb = 0.24;
-          }
-        } else {
-          // Plains grass block (with occasional blocky oak grove)
-          if (!isFlat && blockHash > 0.87) {
-            yTop = h + Math.max(3, Math.round(step * 0.45));
-            tr = 0.22; tg = 0.48; tb = 0.17;
-            sr = 0.18; sg = 0.40; sb = 0.14;
-          } else {
-            tr = 0.39; tg = 0.64; tb = 0.24;
-            sr = 0.48; sg = 0.35; sb = 0.23; // Classic grass-over-dirt side!
-          }
-        }
-
-        colTopY[idx] = yTop;
-        colTopR[idx] = Math.min(1, tr * vVar);
-        colTopG[idx] = Math.min(1, tg * vVar);
-        colTopB[idx] = Math.min(1, tb * vVar);
-        colSideR[idx] = Math.min(1, sr * vVar);
-        colSideG[idx] = Math.min(1, sg * vVar);
-        colSideB[idx] = Math.min(1, sb * vVar);
-      }
+  _ensureLodPool() {
+    if (!this._lodPool) {
+      this._lodPool = new LodWorkerPool(this.seed, this.worldType, this._lodMaxWorkers);
     }
+    return this._lodPool;
+  }
 
-    // Pass 2: Emit flat-shaded stepped Minecraft voxel columns (top face + vertical step cliff faces ONLY where y > neighborY!)
-    const maxQuads = cells * cells * 5;
-    const pos = new Float32Array(maxQuads * 12);
-    const norm = new Float32Array(maxQuads * 12);
-    const col = new Float32Array(maxQuads * 12);
-    const idxBuf = new Uint16Array(maxQuads * 6);
-    let vCount = 0;
-    let iCount = 0;
-
-    const pushLodQuad = (
-      x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3,
-      nx, ny, nz, r, g, b
-    ) => {
-      const base = vCount;
-      const p = base * 3;
-      pos[p] = x0; pos[p + 1] = y0; pos[p + 2] = z0;
-      pos[p + 3] = x1; pos[p + 4] = y1; pos[p + 5] = z1;
-      pos[p + 6] = x2; pos[p + 7] = y2; pos[p + 8] = z2;
-      pos[p + 9] = x3; pos[p + 10] = y3; pos[p + 11] = z3;
-
-      norm[p] = nx; norm[p + 1] = ny; norm[p + 2] = nz;
-      norm[p + 3] = nx; norm[p + 4] = ny; norm[p + 5] = nz;
-      norm[p + 6] = nx; norm[p + 7] = ny; norm[p + 8] = nz;
-      norm[p + 9] = nx; norm[p + 10] = ny; norm[p + 11] = nz;
-
-      col[p] = r; col[p + 1] = g; col[p + 2] = b;
-      col[p + 3] = r; col[p + 4] = g; col[p + 5] = b;
-      col[p + 6] = r; col[p + 7] = g; col[p + 8] = b;
-      col[p + 9] = r; col[p + 10] = g; col[p + 11] = b;
-
-      idxBuf[iCount] = base; idxBuf[iCount + 1] = base + 1; idxBuf[iCount + 2] = base + 2;
-      idxBuf[iCount + 3] = base; idxBuf[iCount + 4] = base + 2; idxBuf[iCount + 5] = base + 3;
-      vCount += 4;
-      iCount += 6;
-    };
-
-    for (let gz = 0; gz < cells; gz++) {
-      const wz0 = oz + gz * step;
-      const wz1 = wz0 + step;
-      const pz = gz + 1;
-      for (let gx = 0; gx < cells; gx++) {
-        const wx0 = ox + gx * step;
-        const wx1 = wx0 + step;
-        const px = gx + 1;
-        const ci = px + pz * pad;
-
-        const yTop = colTopY[ci];
-        const yDraw = yTop + 1.0; // Exact Minecraft block top Y!
-        const tr = colTopR[ci], tg = colTopG[ci], tb = colTopB[ci];
-
-        // 1. Flat Crisp Block Top Face (+Y)
-        pushLodQuad(
-          wx0, yDraw, wz1,
-          wx1, yDraw, wz1,
-          wx1, yDraw, wz0,
-          wx0, yDraw, wz0,
-          0, 1, 0, tr, tg, tb
-        );
-
-        // 2. Vertical Stepped Cliff / Block Side Faces where higher than cardinal neighbor!
-        const yPX = colTopY[ci + 1];
-        const yNX = colTopY[ci - 1];
-        const yPZ = colTopY[ci + pad];
-        const yNZ = colTopY[ci - pad];
-
-        // Steep tall cliffs (>3 blocks drop) expose granite stone rock!
-        const sideColForDrop = (drop, shade) => {
-          if (drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci]) {
-            return [0.50 * shade, 0.52 * shade, 0.55 * shade];
-          }
-          return [colSideR[ci] * shade, colSideG[ci] * shade, colSideB[ci] * shade];
-        };
-
-        if (yTop > yPX) {
-          const yBot = yPX + 1.0;
-          const [sr, sg, sb] = sideColForDrop(yTop - yPX, 0.88);
-          pushLodQuad(wx1, yBot, wz1, wx1, yBot, wz0, wx1, yDraw, wz0, wx1, yDraw, wz1, 1, 0, 0, sr, sg, sb);
-        }
-        if (yTop > yNX) {
-          const yBot = yNX + 1.0;
-          const [sr, sg, sb] = sideColForDrop(yTop - yNX, 0.88);
-          pushLodQuad(wx0, yBot, wz0, wx0, yBot, wz1, wx0, yDraw, wz1, wx0, yDraw, wz0, -1, 0, 0, sr, sg, sb);
-        }
-        if (yTop > yPZ) {
-          const yBot = yPZ + 1.0;
-          const [sr, sg, sb] = sideColForDrop(yTop - yPZ, 0.80);
-          pushLodQuad(wx0, yBot, wz1, wx1, yBot, wz1, wx1, yDraw, wz1, wx0, yDraw, wz1, 0, 0, 1, sr, sg, sb);
-        }
-        if (yTop > yNZ) {
-          const yBot = yNZ + 1.0;
-          const [sr, sg, sb] = sideColForDrop(yTop - yNZ, 0.80);
-          pushLodQuad(wx1, yBot, wz0, wx0, yBot, wz0, wx0, yDraw, wz0, wx1, yDraw, wz0, 0, 0, -1, sr, sg, sb);
-        }
-      }
-    }
-
+  // Zero-copy mount of a compact worker-built LOD BufferGeometry (19 bytes/vert!)
+  _mountLodResult(res, useInnerCutout = false) {
+    if (!res || res.vCount === 0) return null;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos.slice(0, vCount * 3), 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(norm.slice(0, vCount * 3), 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col.slice(0, vCount * 3), 3));
-    geo.setIndex(new THREE.BufferAttribute(idxBuf.slice(0, iCount), 1));
+    geo.setAttribute('position', new THREE.BufferAttribute(res.pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(res.norm, 3, true));
+    geo.setAttribute('color', new THREE.BufferAttribute(res.col, 3, true));
+    geo.setAttribute('aMat', new THREE.BufferAttribute(res.mat, 1, true));
+    geo.setIndex(new THREE.BufferAttribute(res.idx, 1));
 
-    const mesh = new THREE.Mesh(geo, this.lodMat);
+    const mesh = new THREE.Mesh(geo, useInnerCutout ? this.lodMat : this.lodMatOuter);
     mesh.frustumCulled = true;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
-    // Slight per-tier vertical drop eliminates any z-fighting along tier boundaries!
-    mesh.position.y = tier === 1 ? -0.35 : (tier === 2 ? -0.75 : -1.25);
+    // Tiny 3cm tier bias prevents z-fighting during 2-frame parent/child swaps while keeping 512-chunk oceans flat!
+    mesh.position.y = -0.03 * res.tier;
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
     return mesh;
   }
 
-  updateLodAround(pcx, pcz, detailR, fullRD, budgetMs = 1.8) {
+  _sweepRetiringLods(forceAll = false) {
+    if (this._lodRetiringKeys.size === 0) return;
+    const active = this._lodActiveKeys;
+    for (const key of this._lodRetiringKeys) {
+      const rec = this.lodRegions.get(key);
+      if (!rec) {
+        this._lodRetiringKeys.delete(key);
+        continue;
+      }
+      let canRemove = forceAll;
+      if (!canRemove) {
+        const { tier, rx, rz } = rec;
+        // Check if replaced by coarser parent (merged)
+        if (tier < 5) {
+          const pKey = `${tier + 1}:${rx >> 1},${rz >> 1}`;
+          if (active.has(pKey) && this.lodRegions.has(pKey)) canRemove = true;
+        }
+        // Check if replaced by 4 finer children (split)
+        if (!canRemove && tier > 0) {
+          const cx0 = rx * 2;
+          const cz0 = rz * 2;
+          const cTier = tier - 1;
+          let allReady = true;
+          let anyActive = false;
+          for (let dz = 0; dz < 2; dz++) {
+            for (let dx = 0; dx < 2; dx++) {
+              const ck = `${cTier}:${cx0 + dx},${cz0 + dz}`;
+              if (active.has(ck)) {
+                anyActive = true;
+                if (!this.lodRegions.has(ck)) allReady = false;
+              }
+            }
+          }
+          if (anyActive && allReady) canRemove = true;
+        }
+      }
+      if (canRemove) {
+        this.lodGroup.remove(rec.mesh);
+        rec.mesh.geometry.dispose();
+        this.lodRegions.delete(key);
+        this._lodRetiringKeys.delete(key);
+      }
+    }
+  }
+
+  updateLodAround(pcx, pcz, detailR, fullRD, budgetMs = 1.6, camDirX = 0, camDirZ = -1) {
     if (fullRD <= detailR) {
       if (this.lodRegions.size > 0) {
         for (const rec of this.lodRegions.values()) {
@@ -2922,92 +2890,197 @@ export class World {
           rec.mesh.geometry.dispose();
         }
         this.lodRegions.clear();
+        this._lodRetiringKeys.clear();
+        this._lodActiveKeys.clear();
+        this._lodInnerKeys.clear();
         this._lodQueue.length = 0;
+        this._lastLodRD = -1;
+      }
+      if (this._lodPool) {
+        this._lodPool.clearQueue();
       }
       return;
     }
 
-    // Re-evaluate cascaded 3-tier LOD rings when player crosses a 4-chunk boundary or changes renderDistance!
-    const prx = Math.floor(pcx / 4);
-    const prz = Math.floor(pcz / 4);
+    const pool = this._ensureLodPool();
+    const isTouchLOD = this.maxDetailRadius <= 6;
+
+    // Re-evaluate zero-overlap 6-tier Quadtree LOD partition every 2 chunks or on renderDistance change!
+    // T0=2m (4x4ch), T1=4m (8x8ch), T2=8m (16x16ch), T3=16m (32x32ch), T4=32m (64x64ch), T5=64m (128x128ch -> 512ch!)
+    const prx = pcx >> 1;
+    const prz = pcz >> 1;
 
     if (prx !== this._lastLodRx || prz !== this._lastLodRz || fullRD !== this._lastLodRD) {
       this._lastLodRx = prx;
       this._lastLodRz = prz;
       this._lastLodRD = fullRD;
 
-      const t1End = Math.min(fullRD, 28);
-      const t2End = Math.min(fullRD, 68);
-      const t3End = Math.min(fullRD, 128);
+      const TIER_CHUNKS = [4, 8, 16, 32, 64, 128];
+      // Logarithmic split thresholds: ultra-lean ~80 frustum draw calls on iPad even at 512 chunks!
+      const SPLIT_DIST = isTouchLOD
+        ? [0, 14, 34, 76, 164, 316]
+        : [0, 22, 52, 108, 216, 368];
+      const clampedRD = Math.min(512, fullRD);
+      const maxDistLimit = clampedRD + 2;
+      const innerCullDist = Math.max(0, detailR - 1.35);
+      const innerCutoutCheck = detailR + 2.5;
+      const rootTier = clampedRD > 128 ? 5 : 3;
+      const rootSpan = TIER_CHUNKS[rootTier];
+
+      const pxC = pcx + 0.5;
+      const pzC = pcz + 0.5;
+      const dirLen = Math.hypot(camDirX, camDirZ) || 1;
+      const ldx = camDirX / dirLen;
+      const ldz = camDirZ / dirLen;
 
       const activeKeys = new Set();
+      const innerKeys = new Set();
       const needed = [];
 
-      const queueTier = (tier, regChunks, minChunkDist, maxChunkDist) => {
-        if (maxChunkDist <= minChunkDist) return;
-        const pRegX = Math.floor(pcx / regChunks);
-        const pRegZ = Math.floor(pcz / regChunks);
-        const radRegs = Math.ceil(maxChunkDist / regChunks);
-        const halfSpan = regChunks * 0.5;
-        const minAllow = Math.max(0, minChunkDist - halfSpan * 0.75);
-        const maxAllow = maxChunkDist + halfSpan * 0.9;
+      const visitNode = (tier, rx, rz) => {
+        const span = TIER_CHUNKS[tier];
+        const cX0 = rx * span;
+        const cZ0 = rz * span;
+        const cX1 = cX0 + span;
+        const cZ1 = cZ0 + span;
 
-        for (let dz = -radRegs; dz <= radRegs; dz++) {
-          for (let dx = -radRegs; dx <= radRegs; dx++) {
-            const rx = pRegX + dx;
-            const rz = pRegZ + dz;
-            const centerCx = rx * regChunks + halfSpan;
-            const centerCz = rz * regChunks + halfSpan;
-            const distChunks = Math.hypot(centerCx - pcx, centerCz - pcz);
-            if (distChunks < minAllow || distChunks > maxAllow) continue;
+        // Exact closest & farthest chunk distances from player to this quadtree tile
+        const clX = pxC < cX0 ? cX0 : (pxC > cX1 ? cX1 : pxC);
+        const clZ = pzC < cZ0 ? cZ0 : (pzC > cZ1 ? cZ1 : pzC);
+        const minDist = Math.hypot(pxC - clX, pzC - clZ);
+        if (minDist > maxDistLimit) return;
 
-            // Unique key encoding (tier, rx, rz)
-            const key = `${tier}:${rx},${rz}`;
-            activeKeys.add(key);
-            const existing = this.lodRegions.get(key);
-            if (existing) {
-              existing.mesh.visible = true;
-            } else {
-              needed.push({ rx, rz, tier, key, dist: distChunks });
-            }
+        const farDx = Math.max(Math.abs(pxC - cX0), Math.abs(pxC - cX1));
+        const farDz = Math.max(Math.abs(pzC - cZ0), Math.abs(pzC - cZ1));
+        const maxDist = Math.hypot(farDx, farDz);
+        if (maxDist < innerCullDist) return;
+
+        // Subdivide into 4 finer children if close enough!
+        if (tier > 0 && minDist < SPLIT_DIST[tier]) {
+          const cx0 = rx * 2;
+          const cz0 = rz * 2;
+          const nt = tier - 1;
+          visitNode(nt, cx0, cz0);
+          visitNode(nt, cx0 + 1, cz0);
+          visitNode(nt, cx0, cz0 + 1);
+          visitNode(nt, cx0 + 1, cz0 + 1);
+          return;
+        }
+
+        const key = `${tier}:${rx},${rz}`;
+        activeKeys.add(key);
+        const needsCutout = minDist < innerCutoutCheck;
+        if (needsCutout) innerKeys.add(key);
+
+        const existing = this.lodRegions.get(key);
+        if (existing) {
+          existing.retiring = false;
+          this._lodRetiringKeys.delete(key);
+          // Zero-cost material swap so outer tiles always keep Apple TBDR Early-Z / HSR enabled!
+          const targetMat = needsCutout ? this.lodMat : this.lodMatOuter;
+          if (existing.mesh.material !== targetMat) {
+            existing.mesh.material = targetMat;
           }
+        } else {
+          // Camera look-direction + distance priority: tiles right in front of the player build FIRST!
+          const toX = (cX0 + span * 0.5) - pxC;
+          const toZ = (cZ0 + span * 0.5) - pzC;
+          const cDist = Math.hypot(toX, toZ) || 1;
+          const lookDot = (toX * ldx + toZ * ldz) / cDist;
+          const score = minDist * (1.0 - lookDot * 0.44) + tier * 2.5;
+          needed.push({ rx, rz, tier, key, score });
         }
       };
 
-      // Tier 1: High-Detail 4-block stride (detailR .. 28 chunks)
-      queueTier(1, 4, Math.max(2, detailR - 2.5), t1End);
-      // Tier 2: Detailed 8-block stride (28 .. 68 chunks)
-      if (fullRD > 28) queueTier(2, 8, t1End - 2, t2End);
-      // Tier 3: Ultra-Far 16-block stride (68 .. 128 chunks = 2,048 blocks!)
-      if (fullRD > 68) queueTier(3, 16, t2End - 4, t3End);
+      const minRX = Math.floor((pxC - maxDistLimit) / rootSpan);
+      const maxRX = Math.floor((pxC + maxDistLimit) / rootSpan);
+      const minRZ = Math.floor((pzC - maxDistLimit) / rootSpan);
+      const maxRZ = Math.floor((pzC + maxDistLimit) / rootSpan);
 
-      // Stream closest high-detail regions first, then outward to 128 chunks!
-      needed.sort((a, b) => a.dist - b.dist);
+      for (let rz = minRZ; rz <= maxRZ; rz++) {
+        for (let rx = minRX; rx <= maxRX; rx++) {
+          visitNode(rootTier, rx, rz);
+        }
+      }
+
+      this._lodActiveKeys = activeKeys;
+      this._lodInnerKeys = innerKeys;
+      pool.prunePending(activeKeys);
+
+      needed.sort((a, b) => a.score - b.score);
       this._lodQueue = needed;
 
-      // Unload out-of-ring LOD regions cleanly
+      // Immediately dispose far out-of-range tiles; hold tier-transition tiles briefly until replacement arrives!
       for (const [key, rec] of this.lodRegions.entries()) {
         if (!activeKeys.has(key)) {
-          this.lodGroup.remove(rec.mesh);
-          rec.mesh.geometry.dispose();
-          this.lodRegions.delete(key);
+          const span = TIER_CHUNKS[rec.tier];
+          const cX0 = rec.rx * span;
+          const cZ0 = rec.rz * span;
+          const clX = pxC < cX0 ? cX0 : (pxC > cX0 + span ? cX0 + span : pxC);
+          const clZ = pzC < cZ0 ? cZ0 : (pzC > cZ0 + span ? cZ0 + span : pzC);
+          const minDist = Math.hypot(pxC - clX, pzC - clZ);
+          const farDx = Math.max(Math.abs(pxC - cX0), Math.abs(pxC - (cX0 + span)));
+          const farDz = Math.max(Math.abs(pzC - cZ0), Math.abs(pzC - (cZ0 + span)));
+          const maxDist = Math.hypot(farDx, farDz);
+
+          if (minDist > maxDistLimit + 6 || maxDist < innerCullDist - 1.5) {
+            this.lodGroup.remove(rec.mesh);
+            rec.mesh.geometry.dispose();
+            this.lodRegions.delete(key);
+            this._lodRetiringKeys.delete(key);
+          } else {
+            rec.retiring = true;
+            this._lodRetiringKeys.add(key);
+          }
+        }
+      }
+      this._sweepRetiringLods(needed.length === 0 && pool.inFlight.size === 0);
+    }
+
+    // 1. Feed queued regions to the multi-threaded Web Worker pool (or budget-capped sync fallback)
+    if (this._lodQueue.length > 0) {
+      if (pool.useWorkers) {
+        const maxPipe = this._lodMaxWorkers * 4;
+        while (this._lodQueue.length > 0 && pool.inFlight.size < maxPipe) {
+          const item = this._lodQueue.shift();
+          if (!this._lodActiveKeys.has(item.key) || this.lodRegions.has(item.key)) continue;
+          pool.enqueue(item);
+        }
+      } else {
+        const t0 = performance.now();
+        let built = 0;
+        while (this._lodQueue.length > 0 && built < 4) {
+          const item = this._lodQueue.shift();
+          if (!this._lodActiveKeys.has(item.key) || this.lodRegions.has(item.key)) continue;
+          pool.enqueue(item);
+          built++;
+          if (performance.now() - t0 >= budgetMs) break;
         }
       }
     }
 
-    // Stream LOD super-regions under strict sub-2ms frame budget (zero FPS dip even at 128 chunks!)
-    if (this._lodQueue.length > 0) {
-      const t0 = performance.now();
-      let built = 0;
-      while (this._lodQueue.length > 0 && built < 5) {
-        const item = this._lodQueue.shift();
-        if (this.lodRegions.has(item.key)) continue;
-        const mesh = this._buildLodRegionMesh(item.rx, item.rz, item.tier);
-        this.lodGroup.add(mesh);
-        this.lodRegions.set(item.key, { rx: item.rx, rz: item.rz, tier: item.tier, mesh });
-        built++;
-        if (performance.now() - t0 >= budgetMs) break;
+    // 2. Mount completed worker geometries onto scene (paced gently on iPad so WebGL uploads never stutter!)
+    if (pool.readyResults.length > 0) {
+      let mounted = 0;
+      const maxMountPerFrame = isTouchLOD ? 6 : 12;
+      while (pool.readyResults.length > 0 && mounted < maxMountPerFrame) {
+        const res = pool.readyResults.shift();
+        if (!this._lodActiveKeys.has(res.key) || this.lodRegions.has(res.key)) continue;
+        const mesh = this._mountLodResult(res, this._lodInnerKeys.has(res.key));
+        if (mesh) {
+          this.lodGroup.add(mesh);
+          this.lodRegions.set(res.key, { rx: res.rx, rz: res.rz, tier: res.tier, mesh, retiring: false });
+          mounted++;
+        }
       }
+      if (mounted > 0) {
+        this._sweepRetiringLods(false);
+      }
+    }
+
+    // Clean up any leftover multi-step retiring tiles once all pending builds finish (e.g. after teleport!)
+    if (this._lodRetiringKeys.size > 0 && this._lodQueue.length === 0 && pool.inFlight.size === 0 && pool.readyResults.length === 0) {
+      this._sweepRetiringLods(true);
     }
   }
 
@@ -3277,7 +3350,14 @@ export class World {
       rec.mesh.geometry.dispose();
     }
     this.lodRegions.clear();
+    this._lodRetiringKeys.clear();
+    this._lodActiveKeys.clear();
+    this._lodInnerKeys.clear();
     this._lodQueue.length = 0;
+    if (this._lodPool) {
+      this._lodPool.dispose();
+      this._lodPool = null;
+    }
     this.lightSources.clear();
     this._activeLightSources = [];
     this.scene.remove(this.group);

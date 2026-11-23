@@ -343,8 +343,14 @@ export class SkySystem {
 
   setRenderDistance(chunks) {
     const far = Math.max(68, chunks * 16 - 4);
-    this.fog.near = far * 0.42;
+    this.fog.near = far * (chunks > 128 ? 0.36 : 0.42);
     this.fog.far = far;
+    // Keep stars strictly behind distant mountains all the way out to 512 chunks while preserving angular size!
+    if (this.stars && this.starMat) {
+      const starScale = Math.max(1.0, (chunks * 18 + 300) / 2480);
+      this.stars.scale.setScalar(starScale);
+      this.starMat.size = 28.0 * starScale;
+    }
   }
 
   setShaderMode(mode) {

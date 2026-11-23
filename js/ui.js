@@ -4,6 +4,24 @@ import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
 import { DEFAULT_KEYBINDS } from './storage.js';
 
+// Smooth 22-stop non-linear Render Distance scale (2..512 chunks — easy touch precision on iPad!)
+const RD_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512];
+function rdFromIdx(idx) {
+  return RD_STOPS[Math.max(0, Math.min(RD_STOPS.length - 1, idx | 0))];
+}
+function rdToIdx(chunks) {
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < RD_STOPS.length; i++) {
+    const d = Math.abs(RD_STOPS[i] - chunks);
+    if (d < bestDiff) { bestDiff = d; best = i; }
+  }
+  return best;
+}
+function rdLabel(v) {
+  return v > 128 ? `${v} (Ultra LOD)` : (v > 10 ? `${v} (LOD)` : `${v}`);
+}
+
 const KEYBIND_ACTIONS = [
   { id: 'forward', label: 'Move Forward' },
   { id: 'backward', label: 'Move Backward' },
@@ -325,11 +343,10 @@ export class UIManager {
         }
       });
     }
-    const rdLabel = (v) => (v > 10 ? `${v} (LOD)` : `${v}`);
     const titleRD = document.getElementById('title-set-render-dist');
     if (titleRD) {
       titleRD.addEventListener('input', (e) => {
-        const v = parseInt(e.target.value, 10);
+        const v = rdFromIdx(parseInt(e.target.value, 10));
         document.getElementById('title-val-render-dist').textContent = rdLabel(v);
         if (this.game) {
           this.game.updateSetting('renderDistance', v);
@@ -405,8 +422,8 @@ export class UIManager {
 
     // Settings inputs
     document.getElementById('set-render-dist').addEventListener('input', (e) => {
-      const v = parseInt(e.target.value, 10);
-      document.getElementById('val-render-dist').textContent = v > 10 ? `${v} (LOD)` : `${v}`;
+      const v = rdFromIdx(parseInt(e.target.value, 10));
+      document.getElementById('val-render-dist').textContent = rdLabel(v);
       if (this.game) this.game.updateSetting('renderDistance', v);
     });
     document.getElementById('set-sensitivity').addEventListener('input', (e) => {
@@ -576,8 +593,10 @@ export class UIManager {
   }
 
   syncSettingsUI(settings) {
-    document.getElementById('set-render-dist').value = settings.renderDistance;
-    document.getElementById('val-render-dist').textContent = settings.renderDistance;
+    const rdIdx = rdToIdx(settings.renderDistance);
+    const rdText = rdLabel(settings.renderDistance);
+    document.getElementById('set-render-dist').value = rdIdx;
+    document.getElementById('val-render-dist').textContent = rdText;
     document.getElementById('set-sensitivity').value = settings.sensitivity;
     document.getElementById('val-sensitivity').textContent = settings.sensitivity.toFixed(1);
     document.getElementById('set-fov').value = settings.fov;
@@ -593,11 +612,9 @@ export class UIManager {
     if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
     const tShaders = document.getElementById('title-set-shaders');
     if (tShaders) tShaders.value = settings.shaders || 'ultra';
-    const rdText = settings.renderDistance > 10 ? `${settings.renderDistance} (LOD)` : `${settings.renderDistance}`;
-    document.getElementById('val-render-dist').textContent = rdText;
     const tRD = document.getElementById('title-set-render-dist');
     const tRDVal = document.getElementById('title-val-render-dist');
-    if (tRD) tRD.value = settings.renderDistance;
+    if (tRD) tRD.value = rdIdx;
     if (tRDVal) tRDVal.textContent = rdText;
     this.renderKeybindsUI(settings.keybinds);
   }

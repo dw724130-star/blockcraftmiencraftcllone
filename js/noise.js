@@ -20,6 +20,13 @@ export function mulberry32(seed) {
   };
 }
 
+function grad3Fast(hash, x, y, z) {
+  const h = hash & 15;
+  const u = h < 8 ? x : y;
+  const v = h < 4 ? y : (h === 12 || h === 14 ? x : z);
+  return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+}
+
 export class Noise {
   constructor(seed = 1337) {
     const rand = mulberry32(seed);
@@ -58,34 +65,59 @@ export class Noise {
   }
 
   noise2D(x, y) {
-    const X = Math.floor(x) & 255;
-    const Y = Math.floor(y) & 255;
-    const xf = x - Math.floor(x);
-    const yf = y - Math.floor(y);
-    const u = this.fade(xf);
-    const v = this.fade(yf);
+    let xi = x | 0;
+    if (x < xi) xi--;
+    let yi = y | 0;
+    if (y < yi) yi--;
+    const xf = x - xi;
+    const yf = y - yi;
+    const X = xi & 255;
+    const Y = yi & 255;
+    const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10);
+    const v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
 
     const p = this.perm;
-    const aa = p[p[X] + Y];
-    const ab = p[p[X] + Y + 1];
-    const ba = p[p[X + 1] + Y];
-    const bb = p[p[X + 1] + Y + 1];
+    const pX = p[X];
+    const pX1 = p[X + 1];
+    const aa = p[pX + Y] & 7;
+    const ab = p[pX + Y + 1] & 7;
+    const ba = p[pX1 + Y] & 7;
+    const bb = p[pX1 + Y + 1] & 7;
 
-    const x1 = this.lerp(this.grad2(aa, xf, yf), this.grad2(ba, xf - 1, yf), u);
-    const x2 = this.lerp(this.grad2(ab, xf, yf - 1), this.grad2(bb, xf - 1, yf - 1), u);
-    return this.lerp(x1, x2, v) * 0.45;
+    const xf1 = xf - 1;
+    const yf1 = yf - 1;
+
+    // Inlined grad2 for all 4 corners (zero method call overhead!)
+    let uu = aa < 4 ? xf : yf, vv = aa < 4 ? yf : xf;
+    const gAA = ((aa & 1) ? -uu : uu) + ((aa & 2) ? -2.0 * vv : 2.0 * vv);
+    uu = ba < 4 ? xf1 : yf; vv = ba < 4 ? yf : xf1;
+    const gBA = ((ba & 1) ? -uu : uu) + ((ba & 2) ? -2.0 * vv : 2.0 * vv);
+    uu = ab < 4 ? xf : yf1; vv = ab < 4 ? yf1 : xf;
+    const gAB = ((ab & 1) ? -uu : uu) + ((ab & 2) ? -2.0 * vv : 2.0 * vv);
+    uu = bb < 4 ? xf1 : yf1; vv = bb < 4 ? yf1 : xf1;
+    const gBB = ((bb & 1) ? -uu : uu) + ((bb & 2) ? -2.0 * vv : 2.0 * vv);
+
+    const x1 = gAA + u * (gBA - gAA);
+    const x2 = gAB + u * (gBB - gAB);
+    return (x1 + v * (x2 - x1)) * 0.45;
   }
 
   noise3D(x, y, z) {
-    const X = Math.floor(x) & 255;
-    const Y = Math.floor(y) & 255;
-    const Z = Math.floor(z) & 255;
-    const xf = x - Math.floor(x);
-    const yf = y - Math.floor(y);
-    const zf = z - Math.floor(z);
-    const u = this.fade(xf);
-    const v = this.fade(yf);
-    const w = this.fade(zf);
+    let xi = x | 0;
+    if (x < xi) xi--;
+    let yi = y | 0;
+    if (y < yi) yi--;
+    let zi = z | 0;
+    if (z < zi) zi--;
+    const xf = x - xi;
+    const yf = y - yi;
+    const zf = z - zi;
+    const X = xi & 255;
+    const Y = yi & 255;
+    const Z = zi & 255;
+    const u = xf * xf * xf * (xf * (xf * 6 - 15) + 10);
+    const v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
+    const w = zf * zf * zf * (zf * (zf * 6 - 15) + 10);
 
     const p = this.perm;
     const A = p[X] + Y;
@@ -95,15 +127,27 @@ export class Noise {
     const BA = p[B] + Z;
     const BB = p[B + 1] + Z;
 
-    const x1 = this.lerp(this.grad3(p[AA], xf, yf, zf), this.grad3(p[BA], xf - 1, yf, zf), u);
-    const x2 = this.lerp(this.grad3(p[AB], xf, yf - 1, zf), this.grad3(p[BB], xf - 1, yf - 1, zf), u);
-    const y1 = this.lerp(x1, x2, v);
+    const xf1 = xf - 1;
+    const yf1 = yf - 1;
+    const zf1 = zf - 1;
 
-    const x3 = this.lerp(this.grad3(p[AA + 1], xf, yf, zf - 1), this.grad3(p[BA + 1], xf - 1, yf, zf - 1), u);
-    const x4 = this.lerp(this.grad3(p[AB + 1], xf, yf - 1, zf - 1), this.grad3(p[BB + 1], xf - 1, yf - 1, zf - 1), u);
-    const y2 = this.lerp(x3, x4, v);
+    const g000 = grad3Fast(p[AA], xf, yf, zf);
+    const g100 = grad3Fast(p[BA], xf1, yf, zf);
+    const g010 = grad3Fast(p[AB], xf, yf1, zf);
+    const g110 = grad3Fast(p[BB], xf1, yf1, zf);
+    const x1 = g000 + u * (g100 - g000);
+    const x2 = g010 + u * (g110 - g010);
+    const y1 = x1 + v * (x2 - x1);
 
-    return this.lerp(y1, y2, w);
+    const g001 = grad3Fast(p[AA + 1], xf, yf, zf1);
+    const g101 = grad3Fast(p[BA + 1], xf1, yf, zf1);
+    const g011 = grad3Fast(p[AB + 1], xf, yf1, zf1);
+    const g111 = grad3Fast(p[BB + 1], xf1, yf1, zf1);
+    const x3 = g001 + u * (g101 - g001);
+    const x4 = g011 + u * (g111 - g011);
+    const y2 = x3 + v * (x4 - x3);
+
+    return y1 + w * (y2 - y1);
   }
 
   fbm2D(x, y, octaves = 4, lacunarity = 2.0, gain = 0.5) {

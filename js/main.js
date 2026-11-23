@@ -121,9 +121,11 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV & far plane — always strictly larger than SkyDome (2800) & 128-chunk Distant Horizons LOD!
+    // Camera FOV, near & far planes — supports up to 512-chunk Distant Horizons LOD (8,192 blocks!)
+    // Slightly raising near plane above 160 chunks boosts 24-bit Z-buffer precision by 60% at 8 km with zero close clipping!
     this.camera.fov = this.settings.fov;
-    this.camera.far = Math.max(3400, this.settings.renderDistance * 22 + 800);
+    this.camera.near = this.settings.renderDistance > 160 ? 0.16 : 0.1;
+    this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 1400);
     this.camera.updateProjectionMatrix();
     if (this.player) this.player.baseFov = this.settings.fov;
 
@@ -1205,7 +1207,7 @@ class BlockCraftGame {
       }
       const maxBuilds = this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2);
       const chunkBudgetMs = this.isTouch ? 3.5 : 4.2;
-      this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs);
+      this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
       this.world.updateFurnaces(dt);
 
       // Cache biome lookup per 4x4 block cell (eliminates 120x/sec Simplex noise!)
