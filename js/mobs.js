@@ -984,9 +984,11 @@ export class EntityManager {
     this.mobs = [];
     this.drops = [];
     this.spawnTimer = 1.2;
+    this.hostileSpawnTimer = 0.85;
     this.ambienceTimer = 4.0;
     this.initialPopulated = false;
     this._pendingVillageSpawns = [];
+    this.onPickup = null;
 
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -1200,6 +1202,8 @@ export class EntityManager {
       headBaseColor: headMat ? headMat.color.getHex() : (baseColor ?? 0xffffff),
       attackCd: 0,
       fleeTimer: 0,
+      panicZigTimer: 0,
+      panicJumpTimer: 0,
       fuseTimer: 0,
       orbitRadius: 10 + Math.random() * 14,
       orbitAngle: Math.random() * Math.PI * 2,
@@ -1329,14 +1333,17 @@ export class EntityManager {
       kz = dz / d;
     }
 
-    mob.vel.x = kx * 6.8;
-    mob.vel.z = kz * 6.8;
-    mob.vel.y = Math.max(mob.vel.y, 4.8);
+    mob.vel.x = kx * 7.4;
+    mob.vel.z = kz * 7.4;
+    mob.vel.y = Math.max(mob.vel.y, 5.4);
     if (mob.bodyMat) mob.bodyMat.color.setHex(0xff4444);
     if (mob.headMat) mob.headMat.color.setHex(0xff4444);
     if (!mob.def.hostile) {
-      mob.fleeTimer = 4.5;
-      mob.wanderDir = Math.atan2(kx, kz);
+      // Go haywire! Frantic high-speed zig-zagging + repeated jumps to escape!
+      mob.fleeTimer = 5.5 + Math.random() * 2.5;
+      mob.panicZigTimer = 0.22 + Math.random() * 0.28;
+      mob.panicJumpTimer = 0.14 + Math.random() * 0.18;
+      mob.wanderDir = Math.atan2(kx, kz) + (Math.random() - 0.5) * 1.15;
       mob.moving = true;
     }
     this.sound.playHurt();
@@ -1380,10 +1387,57 @@ export class EntityManager {
     this.group.remove(mob.mesh);
   }
 
-  update(dt, player, sky, onExplosion, mods = null) {
+  despawnHostiles() {
+    let removed = 0;
+    for (let i = this.mobs.length - 1; i >= 0; i--) {
+      if (this.mobs[i].def.hostile) {
+        this.group.remove(this.mobs[i].mesh);
+        this.mobs.splice(i, 1);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  _trySpawnCaveHostile(playerPos, pool, biome) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 12 + Math.random() * 22;
+    const sx = Math.floor(playerPos.x + Math.cos(angle) * dist);
+    const sz = Math.floor(playerPos.z + Math.sin(angle) * dist);
+    const surfaceY = this.world.getSurfaceY(sx, sz);
+    if (surfaceY < 16) return 0;
+
+    // Probe dark underground cave floor (solid block below + 2 open AIR blocks above!)
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const cy = 6 + Math.floor(Math.random() * Math.max(1, surfaceY - 12));
+      const below = this.world.getBlock(sx, cy - 1, sz);
+      if (below === BLOCK.AIR || below === BLOCK.WATER || below === BLOCK.BEDROCK) continue;
+      if (this.world.getBlock(sx, cy, sz) === BLOCK.AIR && this.world.getBlock(sx, cy + 1, sz) === BLOCK.AIR) {
+        const hType = pool[Math.floor(Math.random() * pool.length)];
+        const mob = this.spawnMob(hType, sx + 0.5, cy, sz + 0.5, null, biome);
+        return mob ? 1 : 0;
+      }
+    }
+    return 0;
+  }
+
+  update(dt, player, sky, onExplosion, mods = null, gameRules = null) {
     if (!this.initialPopulated) {
       this.populateInitialWildlife(player.pos);
     }
+
+    const DIFF_CFG = {
+      peaceful: { dmgMul: 0, spawnMul: 0, maxHostile: 0 },
+      easy:     { dmgMul: 0.65, spawnMul: 0.95, maxHostile: 14 },
+      normal:   { dmgMul: 1.0,  spawnMul: 1.45, maxHostile: 24 },
+      hard:     { dmgMul: 1.5,  spawnMul: 2.15, maxHostile: 36 }
+    };
+    const difficulty = (gameRules && DIFF_CFG[gameRules.difficulty]) ? gameRules.difficulty : 'normal';
+    const diffCfg = DIFF_CFG[difficulty];
+    const mobRate = (gameRules && typeof gameRules.mobSpawnRate === 'number')
+      ? Math.max(0, Math.min(5, gameRules.mobSpawnRate))
+      : 1.0;
+    const moreMobsMul = (mods && mods.isEnabled('more_mobs')) ? 1.45 : 1.0;
 
     this.ambienceTimer -= dt;
     if (this.ambienceTimer <= 0) {
@@ -1423,13 +1477,21 @@ export class EntityManager {
       }
     }
 
-    // 1. Dynamic Biome-Aware Herd/Horde Wildlife & Hostile Pack Spawning!
-    const maxMobs = (mods && mods.isEnabled('more_mobs')) ? 90 : 64;
+    // 1A. Dynamic Biome-Aware Passive Wildlife Herd Spawning (capped independently from Hostiles!)
+    const isNight = sky.isNight();
+    let passiveCount = 0;
+    let hostileCount = 0;
+    for (let i = 0; i < this.mobs.length; i++) {
+      if (this.mobs[i].def.hostile) hostileCount++;
+      else passiveCount++;
+    }
+
+    const passiveCap = Math.round(52 * moreMobsMul);
+    const totalPassiveCap = passiveCap + hostileCount;
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = (mods && mods.isEnabled('more_mobs')) ? 1.0 : 1.65;
-      if (this.mobs.length < maxMobs) {
-        const isNight = sky.isNight();
+      this.spawnTimer = (mods && mods.isEnabled('more_mobs')) ? 1.1 : 1.75;
+      if (passiveCount < passiveCap) {
         const birdCount = this.mobs.filter((m) => m.type === 'bird').length;
 
         if (!isNight && birdCount < 10 && Math.random() < 0.22) {
@@ -1437,7 +1499,7 @@ export class EntityManager {
           const dist = 16 + Math.random() * 24;
           const bx = player.pos.x + Math.cos(ang) * dist;
           const bz = player.pos.z + Math.sin(ang) * dist;
-          this.spawnHerd('bird', bx, bz, 3 + Math.floor(Math.random() * 2), 'Plains', maxMobs);
+          this.spawnHerd('bird', bx, bz, 3 + Math.floor(Math.random() * 2), 'Plains', totalPassiveCap);
         } else {
           const angle = Math.random() * Math.PI * 2;
           const dist = 15 + Math.random() * 26;
@@ -1451,21 +1513,55 @@ export class EntityManager {
             const waterMobs = this.mobs.filter((m) => m.type === 'fish' || m.type === 'duck').length;
             if (waterMobs < 16) {
               const wType = Math.random() < 0.65 ? 'fish' : 'duck';
-              this.spawnHerd(wType, sx, sz, 3 + Math.floor(Math.random() * 3), biome, maxMobs);
+              this.spawnHerd(wType, sx, sz, 3 + Math.floor(Math.random() * 3), biome, totalPassiveCap);
             }
-          } else if (ground !== BLOCK.AIR) {
-            if (isNight && player.mode === 'survival') {
-              const pool = ['zombie', 'skeleton', 'creeper', 'spider'];
+          } else if (ground === BLOCK.GRASS || ground === BLOCK.SNOW || ground === BLOCK.SAND) {
+            const type = this.pickWildlifeForBiome(biome, ground);
+            if (!(type === 'butterfly' && isNight)) {
+              const herdSize = 3 + Math.floor(Math.random() * 4); // Herds of 3-6 animals!
+              this.spawnHerd(type, sx, sz, herdSize, biome, totalPassiveCap);
+            }
+          }
+        }
+      }
+    }
+
+    // 1B. Dedicated Hostile Mob Spawner (Night Surface Packs + Underground Cave Spawns + Difficulty & Mob Rate!)
+    const hostileCap = (difficulty === 'peaceful' || mobRate <= 0)
+      ? 0
+      : Math.min(56, Math.max(2, Math.round(diffCfg.maxHostile * mobRate * moreMobsMul)));
+    this.hostileSpawnTimer -= dt;
+    if (this.hostileSpawnTimer <= 0) {
+      const effRate = Math.max(0.2, diffCfg.spawnMul * Math.max(0.15, mobRate) * moreMobsMul);
+      this.hostileSpawnTimer = Math.max(0.24, (isNight ? 0.85 : 2.1) / effRate);
+      if (hostileCap > 0 && hostileCount < hostileCap) {
+        const pool = ['zombie', 'skeleton', 'creeper', 'spider'];
+        const maxTotalForHostile = passiveCount + hostileCap;
+        if (isNight) {
+          // Spawn lively hostile packs at night (2 attempts when population is low so nights fill quickly!)
+          const tries = hostileCount < hostileCap * 0.5 ? 2 : 1;
+          for (let t = 0; t < tries && hostileCount < hostileCap; t++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 15 + Math.random() * 24;
+            const sx = Math.floor(player.pos.x + Math.cos(angle) * dist);
+            const sz = Math.floor(player.pos.z + Math.sin(angle) * dist);
+            const sy = this.world.getSurfaceY(sx, sz);
+            const ground = this.world.getBlock(sx, sy - 1, sz);
+            if (ground !== BLOCK.AIR && ground !== BLOCK.WATER) {
+              const biome = this.world.getBiomeAt(sx, sz);
               const hType = pool[Math.floor(Math.random() * pool.length)];
-              const packSize = hType === 'creeper' ? 1 + Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
-              this.spawnHerd(hType, sx, sz, packSize, biome, maxMobs);
-            } else if (ground === BLOCK.GRASS || ground === BLOCK.SNOW || ground === BLOCK.SAND) {
-              const type = this.pickWildlifeForBiome(biome, ground);
-              if (!(type === 'butterfly' && isNight)) {
-                const herdSize = 3 + Math.floor(Math.random() * 4); // Herds of 3-6 animals!
-                this.spawnHerd(type, sx, sz, herdSize, biome, maxMobs);
-              }
+              const packSize = hType === 'creeper'
+                ? (1 + Math.floor(Math.random() * 2))
+                : (2 + Math.floor(Math.random() * 3));
+              hostileCount += this.spawnHerd(hType, sx, sz, packSize, biome, maxTotalForHostile);
             }
+          }
+        } else {
+          // Daytime: populate underground caves with monsters (and shaded spiders/creepers in Swarm mode!)
+          const caveCap = Math.max(2, Math.floor(hostileCap * 0.5));
+          if (hostileCount < caveCap) {
+            const biome = this.world.getBiomeAt(Math.floor(player.pos.x), Math.floor(player.pos.z));
+            hostileCount += this._trySpawnCaveHostile(player.pos, pool, biome);
           }
         }
       }
@@ -1475,6 +1571,10 @@ export class EntityManager {
     const nowSec = performance.now() * 0.001;
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
+      if (difficulty === 'peaceful' && m.def.hostile) {
+        this.removeMob(m);
+        continue;
+      }
       const distToPlayer = m.pos.distanceTo(player.pos);
 
       const despawnDist = (m.def.villager || m.def.golem) ? 115 : 74;
@@ -1600,13 +1700,16 @@ export class EntityManager {
         continue;
       }
 
-      // Daylight burn for undead
+      // Daylight burn for undead ONLY when exposed to open sky (cave zombies/skeletons stay safe!)
       if (m.def.burnsInDay && !sky.isNight() && sky.weather === 'clear') {
-        m.hp -= dt * 2.5;
-        m.hurtFlash = 0.15;
-        if (m.hp <= 0) {
-          this.removeMob(m);
-          continue;
+        const surfY = this.world.getSurfaceY(m.pos.x, m.pos.z);
+        if (m.pos.y >= surfY - 1.2) {
+          m.hp -= dt * 2.5;
+          m.hurtFlash = 0.15;
+          if (m.hp <= 0) {
+            this.removeMob(m);
+            continue;
+          }
         }
       }
 
@@ -1664,19 +1767,24 @@ export class EntityManager {
             moveZ = Math.cos(m.yaw) * m.def.speed;
           } else if (m.attackCd <= 0 && !m.def.creeper) {
             m.attackCd = 1.1;
-            player.takeDamage(m.def.dmg || 3, `Slain by ${m.label || m.type}`);
+            const scaledDmg = Math.max(1, Math.round((m.def.dmg || 3) * diffCfg.dmgMul));
+            player.takeDamage(scaledDmg, `Slain by ${m.label || m.type}`);
           }
         }
       } else {
         m.aiTimer -= dt;
         if (m.fleeTimer > 0) {
-          m.fleeTimer -= dt;
-          const dx = m.pos.x - player.pos.x;
-          const dz = m.pos.z - player.pos.z;
-          const targetYaw = Math.atan2(dx, dz);
-          m.yaw = lerpAngle(m.yaw, targetYaw, Math.min(1, dt * 8));
-          moveX = Math.sin(m.yaw) * m.def.speed * 1.35;
-          moveZ = Math.cos(m.yaw) * m.def.speed * 1.35;
+          // HAYWIRE PANIC ESCAPE! Wild erratic zig-zagging + frantic 2.35x sprinting!
+          m.fleeTimer = Math.max(0, m.fleeTimer - dt);
+          m.panicZigTimer = (m.panicZigTimer || 0) - dt;
+          if (m.panicZigTimer <= 0) {
+            m.panicZigTimer = 0.28 + Math.random() * 0.42;
+            const awayYaw = Math.atan2(m.pos.x - player.pos.x, m.pos.z - player.pos.z);
+            m.wanderDir = awayYaw + (Math.random() - 0.5) * 2.25;
+          }
+          m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 15));
+          moveX = Math.sin(m.yaw) * m.def.speed * 2.35;
+          moveZ = Math.cos(m.yaw) * m.def.speed * 2.35;
         } else {
           if (m.aiTimer <= 0) {
             m.aiTimer = 2.4 + Math.random() * 4.2;
@@ -1714,7 +1822,16 @@ export class EntityManager {
       }
 
       const speedMag = Math.hypot(moveX, moveZ);
-      if (m.def.hopper && speedMag > 0.4 && m.vel.y === 0 && !inWater && Math.random() < dt * 4.5) {
+      // Frantic repeated leaping/hopping when panicking!
+      if (m.fleeTimer > 0 && !inWater) {
+        m.panicJumpTimer = (m.panicJumpTimer || 0) - dt;
+        if (m.panicJumpTimer <= 0 && Math.abs(m.vel.y) <= 0.2) {
+          if (!this.mobCollidesAt(m.pos.x, m.pos.y + 0.9, m.pos.z, m.halfW, m.height)) {
+            m.vel.y = 5.9 + Math.random() * 1.7;
+          }
+          m.panicJumpTimer = 0.24 + Math.random() * 0.36;
+        }
+      } else if (m.def.hopper && speedMag > 0.4 && m.vel.y === 0 && !inWater && Math.random() < dt * 4.5) {
         if (!this.mobCollidesAt(m.pos.x, m.pos.y + 0.8, m.pos.z, m.halfW, m.height)) {
           m.vel.y = 5.6;
         }
@@ -1755,8 +1872,17 @@ export class EntityManager {
         }
       }
 
-      // Anti-spin wall handling: rate-limited turn cooldown + calm graze pause if cornered!
-      if (hitWall && m.knockbackTimer <= 0 && Math.hypot(m.vel.x, m.vel.z) < 0.25) {
+      // Anti-spin wall handling: panicking animals wildly bounce & jump away; calm animals graze if cornered!
+      if (hitWall && m.knockbackTimer <= 0 && m.fleeTimer > 0) {
+        if (m.turnCd <= 0) {
+          m.turnCd = 0.22;
+          m.wanderDir += (Math.random() < 0.5 ? 1 : -1) * (1.2 + Math.random() * 1.15);
+          m.panicZigTimer = 0.35;
+        }
+        if (Math.abs(m.vel.y) <= 0.2 && !inWater) {
+          m.vel.y = 7.4;
+        }
+      } else if (hitWall && m.knockbackTimer <= 0 && Math.hypot(m.vel.x, m.vel.z) < 0.25) {
         m.stuckTimer += dt;
         if (m.turnCd <= 0) {
           m.turnCd = 0.8 + Math.random() * 0.5;
@@ -1826,9 +1952,11 @@ export class EntityManager {
         m.tail.rotation.y = Math.sin(nowSec * (speedMag > 0.2 ? 9 : 4) + m.walkPhase) * 0.28;
       }
       if (m.wings.length === 2 && (m.type === 'duck' || m.type === 'chicken')) {
-        const wFlap = inWater
-          ? Math.sin(nowSec * 4 + m.walkPhase) * 0.08
-          : (speedMag > 0.2 ? Math.sin(m.walkPhase * 1.5) * 0.18 : 0);
+        const wFlap = m.fleeTimer > 0
+          ? Math.sin(nowSec * 34 + m.walkPhase) * 0.95
+          : (inWater
+              ? Math.sin(nowSec * 4 + m.walkPhase) * 0.08
+              : (speedMag > 0.2 ? Math.sin(m.walkPhase * 1.5) * 0.18 : 0));
         m.wings[0].rotation.z = wFlap;
         m.wings[1].rotation.z = -wFlap;
       }
@@ -1873,6 +2001,7 @@ export class EntityManager {
           this.sound.playPop();
           this.group.remove(d.mesh);
           this.drops.splice(i, 1);
+          if (this.onPickup) this.onPickup(d.id, d.count);
           continue;
         }
       }

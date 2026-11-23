@@ -3932,6 +3932,483 @@ body.mc-theme .inv-trash-dropzone {
   text-shadow: 1px 1px 0 #000, -1px -1px 0 #000;
 }
 
+/* ============================================================================
+   AUTHENTIC CLASSIC MINECRAFT INVENTORY (REF 2) & CRAFTING TABLE (REF 1) GUIS
+   + UNIFIED DRAG-AND-DROP ACROSS INVENTORY, CRAFTING, CHEST & FURNACE!
+   ============================================================================ */
+.mc-classic-slot {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, opacity 0.08s ease;
+}
+
+.mc-classic-slot:active {
+  cursor: grabbing;
+}
+
+.mc-classic-slot.dragging-src {
+  opacity: 0.35;
+  transform: scale(0.94);
+}
+
+.mc-classic-slot.picked {
+  background: #a9a9a9;
+  box-shadow: inset 0 0 0 3px #ffe066, inset 2px 2px 0 #373737, inset -2px -2px 0 #ffffff !important;
+}
+
+.mc-classic-slot.drag-over {
+  background: #a5a58d !important;
+  box-shadow: 0 0 0 3px #ffe066, inset 2px 2px 0 #373737, inset -2px -2px 0 #ffffff !important;
+  transform: scale(1.06);
+  z-index: 6;
+}
+
+.mc-classic-slot .slot-placeholder-svg,
+.mc-classic-slot .slot-placeholder-px {
+  width: 66%;
+  height: 66%;
+  opacity: 0.52;
+  pointer-events: none;
+  image-rendering: pixelated;
+  filter: grayscale(1) brightness(0.68);
+}
+
+.mc-classic-slot.mc-craft-ready {
+  box-shadow: inset 2px 2px 0 #2e7d22, inset -2px -2px 0 #a5f598, 0 0 12px rgba(98, 214, 78, 0.55) !important;
+}
+
+.mc-inv-panel,
+.mc-crafting-panel {
+  width: min(508px, 95vw);
+}
+
+/* --- Classic Player Inventory Top Area (Exact Reference Screenshot 2!) --- */
+.mc-inv-top {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 2px 2px 6px;
+}
+
+.mc-inv-character-cluster {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.mc-armor-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mc-armor-col .mc-classic-slot,
+.mc-offhand-slot,
+.mc-craft-grid-2x2 .mc-classic-slot,
+.mc-inv-craft-row > .mc-classic-slot {
+  width: 48px;
+  height: 48px;
+  aspect-ratio: auto;
+}
+
+.mc-player-preview-box {
+  width: 132px;
+  height: 198px;
+  background: #000000;
+  box-shadow: inset 3px 3px 0 #373737, inset -3px -3px 0 #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#inv-steve-canvas {
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.mc-offhand-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.mc-inv-craft-cluster {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding-top: 2px;
+  min-width: 0;
+}
+
+.mc-craft-title {
+  margin-bottom: 4px !important;
+  font-size: 16px;
+  font-weight: 800;
+  color: #3f3f3f;
+  text-shadow: none;
+}
+
+.mc-inv-craft-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mc-craft-grid-2x2 {
+  display: grid;
+  grid-template-columns: repeat(2, 48px);
+  gap: 2px;
+}
+
+.mc-static-arrow-svg {
+  width: 40px;
+  height: 30px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.mc-static-arrow-svg.large {
+  width: 58px;
+  height: 42px;
+}
+
+.mc-inv-book-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.mc-classic-btn {
+  height: 48px;
+  padding: 0 12px;
+  background: #b0b0b0;
+  border: 2px solid #000000;
+  border-radius: 3px;
+  box-shadow: inset 2px 2px 0 #efefef, inset -2px -2px 0 #555555;
+  color: #222222;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mc-classic-btn:hover,
+.mc-classic-btn.active {
+  background: #6da854;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #1f3c14;
+}
+
+.mc-classic-btn.sm {
+  height: 34px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.mc-classic-btn.danger {
+  background: #c44a4a;
+  color: #ffffff;
+}
+
+.mc-classic-trash-slot {
+  width: 48px;
+  height: 48px;
+  background: #a44949;
+  border: 2px solid #3f1818;
+  box-shadow: inset 2px 2px 0 #662424, inset -2px -2px 0 #e69595;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  flex-shrink: 0;
+  transition: transform 0.1s ease, background 0.1s ease, box-shadow 0.1s ease;
+}
+
+.mc-classic-trash-slot.ready-delete,
+.mc-classic-trash-slot.drag-active {
+  background: #c63636;
+  box-shadow: 0 0 12px rgba(255, 70, 70, 0.55), inset 2px 2px 0 #701919, inset -2px -2px 0 #ffb3b3;
+}
+
+.mc-classic-trash-slot.drag-over {
+  background: #e53935 !important;
+  border-color: #ffe066 !important;
+  transform: scale(1.1);
+  box-shadow: 0 0 20px rgba(255, 82, 82, 0.85) !important;
+}
+
+.mc-trash-svg {
+  width: 28px;
+  height: 28px;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.mc-classic-cursor-hint {
+  min-height: 14px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #4f4f4f;
+  margin: 0 0 4px 2px;
+  line-height: 1.2;
+}
+
+.mc-classic-cursor-inline {
+  font-size: 11px;
+  font-weight: 700;
+  color: #555555;
+  margin-left: 8px;
+}
+
+/* --- Classic 3×3 Crafting Table Stage (Exact Reference Screenshot 1!) --- */
+.mc-crafting-stage {
+  display: grid;
+  grid-template-columns: 0.72fr 1.65fr 0.78fr 0.95fr;
+  align-items: center;
+  justify-items: center;
+  padding: 4px 6px 8px;
+  gap: 6px;
+}
+
+.mc-crafting-book-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 22px;
+}
+
+.mc-crafting-grid-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.mc-craft-grid-3x3 {
+  display: grid;
+  grid-template-columns: repeat(3, 48px);
+  gap: 2px;
+}
+
+.mc-craft-grid-3x3 .mc-classic-slot {
+  width: 48px;
+  height: 48px;
+  aspect-ratio: auto;
+}
+
+.mc-crafting-arrow-col,
+.mc-crafting-out-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 22px;
+}
+
+/* --- Collapsible Classic Recipe Book & Creative Left Drawer --- */
+.mc-book-drawer {
+  width: min(300px, 88vw);
+  max-height: 470px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mc-mini-close {
+  width: 26px;
+  height: 26px;
+  background: #a8a8a8;
+  border: 2px solid #373737;
+  color: #222;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mc-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 0;
+  flex: 1;
+}
+
+.mc-classic-search {
+  width: 100%;
+  padding: 7px 10px;
+  background: #555555;
+  border: 2px solid #2b2b2b;
+  box-shadow: inset 2px 2px 0 #373737, inset -1px -1px 0 #999999;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  outline: none;
+}
+
+.mc-classic-search::placeholder {
+  color: #cccccc;
+}
+
+.mc-recipe-book-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  max-height: 365px;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 2px;
+}
+
+.mc-recipe-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #8b8b8b;
+  border: none;
+  box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #ffffff;
+  color: #ffffff;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mc-recipe-row.craftable {
+  background: #5a8f4a;
+}
+
+.mc-recipe-row.disabled {
+  opacity: 0.65;
+}
+
+.mc-recipe-row img {
+  width: 28px;
+  height: 28px;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+
+.mc-recipe-row-name {
+  font-size: 12px;
+  font-weight: 900;
+  text-shadow: 1px 1px 0 #262626;
+}
+
+.mc-recipe-row-cost {
+  font-size: 10px;
+  color: #e8e8e8;
+  line-height: 1.2;
+}
+
+.mc-creative-toprow {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.mc-creative-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mc-creative-cats .cat-chip {
+  padding: 4px 7px;
+  font-size: 11px;
+  border-radius: 3px;
+  background: #8b8b8b;
+  color: #fff;
+  border: 1px solid #373737;
+}
+
+.mc-creative-cats .cat-chip.active {
+  background: #4e8c3f;
+  border-color: #1f3d17;
+}
+
+.mc-classic-subnote {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a4a4a;
+}
+
+.mc-creative-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 280px;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 2px;
+}
+
+.mc-creative-grid .creative-tile {
+  padding: 5px 3px;
+  background: #8b8b8b;
+  border: none;
+  border-radius: 0;
+  box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #ffffff;
+  color: #ffffff;
+  min-height: 58px;
+}
+
+.mc-creative-grid .creative-tile:hover {
+  background: #9f9f9f;
+}
+
+.mc-creative-grid .creative-tile-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.mc-creative-grid .creative-tile-name {
+  font-size: 9px;
+  text-shadow: 1px 1px 0 #262626;
+}
+
+@media (max-width: 720px) {
+  .mc-inv-top {
+    gap: 8px;
+  }
+  .mc-player-preview-box {
+    width: 102px;
+    height: 166px;
+  }
+  .mc-armor-col .mc-classic-slot,
+  .mc-offhand-slot,
+  .mc-craft-grid-2x2 .mc-classic-slot,
+  .mc-inv-craft-row > .mc-classic-slot,
+  .mc-craft-grid-3x3 .mc-classic-slot {
+    width: 40px;
+    height: 40px;
+  }
+  .mc-craft-grid-2x2 {
+    grid-template-columns: repeat(2, 40px);
+  }
+  .mc-craft-grid-3x3 {
+    grid-template-columns: repeat(3, 40px);
+  }
+  .mc-book-drawer {
+    width: min(508px, 95vw);
+    max-height: 210px;
+  }
+}
+
+
 
 
 

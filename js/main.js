@@ -121,9 +121,9 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV & far plane — always strictly larger than SkyDome (1600) & 64-chunk Distant Horizons LOD!
+    // Camera FOV & far plane — always strictly larger than SkyDome (2800) & 128-chunk Distant Horizons LOD!
     this.camera.fov = this.settings.fov;
-    this.camera.far = Math.max(2200, this.settings.renderDistance * 24 + 520);
+    this.camera.far = Math.max(3400, this.settings.renderDistance * 22 + 800);
     this.camera.updateProjectionMatrix();
     if (this.player) this.player.baseFov = this.settings.fov;
 
@@ -220,11 +220,21 @@ class BlockCraftGame {
     this.player = null;
   }
 
-  async startNewWorld({ name, mode, worldType, seed, allowCheats = false }) {
+  async startNewWorld({ name, mode, worldType, seed, allowCheats = false, difficulty = 'normal', mobSpawnRate = 1.0, hungerRate = 1.0 }) {
     if (this._loadingWorld) return;
     this.sound.unlock();
     const id = 'w_' + Date.now();
-    this.worldMeta = { id, name, mode, worldType, seed, allowCheats: Boolean(allowCheats) };
+    this.worldMeta = {
+      id,
+      name,
+      mode,
+      worldType,
+      seed,
+      allowCheats: Boolean(allowCheats),
+      difficulty: ['peaceful', 'easy', 'normal', 'hard'].includes(difficulty) ? difficulty : 'normal',
+      mobSpawnRate: typeof mobSpawnRate === 'number' && Number.isFinite(mobSpawnRate) ? mobSpawnRate : 1.0,
+      hungerRate: typeof hungerRate === 'number' && Number.isFinite(hungerRate) ? hungerRate : 1.0
+    };
     await this.initGameSession(this.worldMeta, null);
     await this.saveCurrentWorld(false);
   }
@@ -243,9 +253,88 @@ class BlockCraftGame {
       mode: data.mode || 'survival',
       worldType: data.worldType || 'infinite',
       seed: data.seed,
-      allowCheats: data.allowCheats !== undefined ? Boolean(data.allowCheats) : Boolean(this.settings.allowCheats)
+      allowCheats: data.allowCheats !== undefined ? Boolean(data.allowCheats) : Boolean(this.settings.allowCheats),
+      difficulty: ['peaceful', 'easy', 'normal', 'hard'].includes(data.difficulty) ? data.difficulty : 'normal',
+      mobSpawnRate: typeof data.mobSpawnRate === 'number' && Number.isFinite(data.mobSpawnRate) ? data.mobSpawnRate : 1.0,
+      hungerRate: typeof data.hungerRate === 'number' && Number.isFinite(data.hungerRate) ? data.hungerRate : 1.0
     };
     await this.initGameSession(this.worldMeta, data);
+  }
+
+  getGameRules() {
+    return {
+      difficulty: this.worldMeta?.difficulty || 'normal',
+      mobSpawnRate: typeof this.worldMeta?.mobSpawnRate === 'number' ? this.worldMeta.mobSpawnRate : 1.0,
+      hungerRate: typeof this.worldMeta?.hungerRate === 'number' ? this.worldMeta.hungerRate : 1.0
+    };
+  }
+
+  setDifficulty(val, silent = false) {
+    const raw = String(val || '').toLowerCase().trim();
+    const map = {
+      peaceful: 'peaceful', p: 'peaceful', '0': 'peaceful',
+      easy: 'easy', e: 'easy', '1': 'easy',
+      normal: 'normal', n: 'normal', '2': 'normal',
+      hard: 'hard', h: 'hard', '3': 'hard'
+    };
+    const next = map[raw];
+    if (!next) return false;
+    if (!this.worldMeta) this.worldMeta = {};
+    this.worldMeta.difficulty = next;
+    if (next === 'peaceful' && this.entities) {
+      this.entities.despawnHostiles();
+    }
+    if (this.ui) {
+      this.ui.syncWorldRulesUI(this.worldMeta);
+      if (!silent) {
+        const lbl = next.charAt(0).toUpperCase() + next.slice(1);
+        this.ui.addChatMessage(`Difficulty set to ${lbl}`);
+        this.ui.toast(`Difficulty: ${lbl}`);
+      }
+    }
+    return true;
+  }
+
+  setMobSpawnRate(val, silent = false) {
+    let rate = typeof val === 'number' ? val : NaN;
+    if (Number.isNaN(rate)) {
+      const raw = String(val || '').toLowerCase().trim();
+      const map = { off: 0, none: 0, low: 0.5, normal: 1.0, default: 1.0, high: 1.8, swarm: 3.0, horde: 3.0, extreme: 4.0 };
+      rate = raw in map ? map[raw] : parseFloat(raw);
+    }
+    if (!Number.isFinite(rate)) return false;
+    rate = Math.max(0, Math.min(5, Math.round(rate * 100) / 100));
+    if (!this.worldMeta) this.worldMeta = {};
+    this.worldMeta.mobSpawnRate = rate;
+    if (this.ui) {
+      this.ui.syncWorldRulesUI(this.worldMeta);
+      if (!silent) {
+        this.ui.addChatMessage(`Mob spawn rate set to ${rate}×`);
+        this.ui.toast(`Mob Spawn Rate: ${rate}×`);
+      }
+    }
+    return true;
+  }
+
+  setHungerRate(val, silent = false) {
+    let rate = typeof val === 'number' ? val : NaN;
+    if (Number.isNaN(rate)) {
+      const raw = String(val || '').toLowerCase().trim();
+      const map = { off: 0, none: 0, slow: 0.5, normal: 1.0, default: 1.0, fast: 1.8, extreme: 3.0 };
+      rate = raw in map ? map[raw] : parseFloat(raw);
+    }
+    if (!Number.isFinite(rate)) return false;
+    rate = Math.max(0, Math.min(5, Math.round(rate * 100) / 100));
+    if (!this.worldMeta) this.worldMeta = {};
+    this.worldMeta.hungerRate = rate;
+    if (this.ui) {
+      this.ui.syncWorldRulesUI(this.worldMeta);
+      if (!silent) {
+        this.ui.addChatMessage(`Hunger drain speed set to ${rate}×`);
+        this.ui.toast(`Hunger Speed: ${rate}×`);
+      }
+    }
+    return true;
   }
 
   async deleteSavedWorld(id) {
@@ -372,6 +461,14 @@ class BlockCraftGame {
       this.ui.showLoadingScreen(true, 0.88, 'Spawning wildlife...', meta.name);
       await yieldFrame();
       this.entities = new EntityManager(this.scene, this.world, this.sound, this.textures);
+      this.entities.onPickup = () => {
+        // Immediately refresh hotbar & any open container UI when collecting dropped blocks/items!
+        this.ui.updateHotbar();
+        if (this.ui.activeModal === 'inventory-modal') this.ui.renderInventoryModal();
+        else if (this.ui.activeModal === 'crafting-modal') this.ui.renderCraftingModal();
+        else if (this.ui.activeModal === 'chest-modal') this.ui.renderChestModal();
+        else if (this.ui.activeModal === 'furnace-modal') this.ui.renderFurnaceModal();
+      };
       this.entities.populateInitialWildlife(this.player.pos);
 
       // Warm shaders & first sky frame BEFORE revealing world (eliminates first-frame GPU stall!)
@@ -383,7 +480,7 @@ class BlockCraftGame {
       this._cachedBiomeBz = Math.floor(this.player.pos.z) >> 2;
       this.sky.update(0.016, this.player.pos, startBiome);
       this.world.updateShaders(0.016, this.sky);
-      this.player.update(0.001, this._emptyInput, this.mods);
+      this.player.update(0.001, this._emptyInput, this.mods, this.getGameRules());
       this.renderer.compile(this.scene, this.camera);
 
       this.running = true;
@@ -391,6 +488,7 @@ class BlockCraftGame {
       this.controls.setFlyingState(this.player.flying);
       this.settings.allowCheats = Boolean(meta.allowCheats);
       this.ui.syncSettingsUI(this.settings);
+      this.ui.syncWorldRulesUI(this.worldMeta);
       this.ui.syncCheatUI(this.areCheatsAllowed());
       this.ui.showTitleScreen(false);
       this.ui.updateHotbar();
@@ -399,7 +497,8 @@ class BlockCraftGame {
       this.ui.updateEffectsHUD(this.player.statusEffects);
       this.ui.updateActionButtons(false, false);
       this.ui.showLoadingScreen(false);
-      this.ui.addChatMessage(`Welcome to ${meta.name}! (${meta.mode.toUpperCase()}${meta.allowCheats ? ' • Cheats ON' : ''})`);
+      const diffLbl = (this.worldMeta.difficulty || 'normal').toUpperCase();
+      this.ui.addChatMessage(`Welcome to ${meta.name}! (${meta.mode.toUpperCase()} • ${diffLbl}${meta.allowCheats ? ' • Cheats ON' : ''})`);
     } finally {
       this._loadingWorld = false;
       this.ui.showLoadingScreen(false);
@@ -415,6 +514,9 @@ class BlockCraftGame {
       worldType: this.worldMeta.worldType,
       seed: this.worldMeta.seed,
       allowCheats: Boolean(this.worldMeta.allowCheats),
+      difficulty: this.worldMeta.difficulty || 'normal',
+      mobSpawnRate: typeof this.worldMeta.mobSpawnRate === 'number' ? this.worldMeta.mobSpawnRate : 1.0,
+      hungerRate: typeof this.worldMeta.hungerRate === 'number' ? this.worldMeta.hungerRate : 1.0,
       time: this.sky.time,
       dayCount: this.sky.dayCount,
       player: {
@@ -737,7 +839,44 @@ class BlockCraftGame {
 
     if (cmd === 'help') {
       const status = this.areCheatsAllowed() ? 'ON' : 'OFF (enable in Settings)';
-      this.ui.addChatMessage(`Cheats: ${status} | /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set <day|sunrise|noon|sunset|night>, /weather <clear|rain>, /gamemode <c|s>, /heal, /tp x y z`);
+      this.ui.addChatMessage(`Cheats: ${status} | /difficulty <peaceful|easy|normal|hard>, /mobrate <off|low|normal|high|swarm|0-5>, /hungerrate <off|slow|normal|fast|extreme|0-5>, /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set <day|night>, /weather <clear|rain>, /gamemode <c|s>, /heal, /tp x y z`);
+      return true;
+    }
+
+    if (cmd === 'difficulty' || cmd === 'diff') {
+      if (!parts[1]) {
+        const cur = (this.worldMeta?.difficulty || 'normal').toUpperCase();
+        this.ui.addChatMessage(`Current difficulty: ${cur} (Usage: /difficulty peaceful|easy|normal|hard)`);
+        return true;
+      }
+      if (!this.setDifficulty(parts[1])) {
+        this.ui.addChatMessage('Usage: /difficulty peaceful|easy|normal|hard');
+        return false;
+      }
+      return true;
+    }
+    if (cmd === 'mobrate' || cmd === 'spawnrate' || cmd === 'mobspawnrate') {
+      if (!parts[1]) {
+        const cur = this.worldMeta?.mobSpawnRate ?? 1.0;
+        this.ui.addChatMessage(`Current mob spawn rate: ${cur}× (Usage: /mobrate off|low|normal|high|swarm or 0..5)`);
+        return true;
+      }
+      if (!this.setMobSpawnRate(parts[1])) {
+        this.ui.addChatMessage('Usage: /mobrate off|low|normal|high|swarm (or a number 0 to 5)');
+        return false;
+      }
+      return true;
+    }
+    if (cmd === 'hungerrate' || cmd === 'hunger' || cmd === 'hungerspeed') {
+      if (!parts[1]) {
+        const cur = this.worldMeta?.hungerRate ?? 1.0;
+        this.ui.addChatMessage(`Current hunger drain speed: ${cur}× (Usage: /hungerrate off|slow|normal|fast|extreme or 0..5)`);
+        return true;
+      }
+      if (!this.setHungerRate(parts[1])) {
+        this.ui.addChatMessage('Usage: /hungerrate off|slow|normal|fast|extreme (or a number 0 to 5)');
+        return false;
+      }
       return true;
     }
 
@@ -833,7 +972,7 @@ class BlockCraftGame {
       }
       return true;
     } else {
-      this.ui.addChatMessage('Commands: /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set day|night, /gamemode creative|survival, /weather rain|clear, /tp x y z, /heal');
+      this.ui.addChatMessage('Commands: /difficulty <peaceful|easy|normal|hard>, /mobrate <off|low|normal|high|swarm|0-5>, /hungerrate <off|slow|normal|fast|extreme|0-5>, /give <item> [n], /effect <speed|jump|regen|nightvision|clear> [sec], /time set day|night, /gamemode creative|survival, /weather rain|clear, /tp x y z, /heal');
       return false;
     }
   }
@@ -1000,8 +1139,9 @@ class BlockCraftGame {
 
     if (this.running && this.world && this.player) {
       const input = this.controls.enabled ? this.controls.poll() : this._emptyInput;
+      const gameRules = this.getGameRules();
 
-      this.player.update(dt, input, this.mods);
+      this.player.update(dt, input, this.mods, gameRules);
       this.ui.setUnderwater(this.player.headInWater);
 
       // Raycast targeted block & Villager / Wildlife (zero Vector3 allocations!)
@@ -1092,7 +1232,7 @@ class BlockCraftGame {
         this.effects.updatePrimedTnts(dt, this.world, (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5));
         this.effects.update(dt, this.player.pos, curBiome, this.sky.isNight());
       }
-      this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods);
+      this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods, gameRules);
 
       // Brief tactile camera shake during nearby TNT / Creeper blasts!
       if (this._shakeTimer > 0) {

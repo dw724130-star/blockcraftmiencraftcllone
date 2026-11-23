@@ -819,7 +819,7 @@ export class World {
     this._activeLightSources = [];
     this.torchLightPool = [];
     for (let i = 0; i < 4; i++) {
-      const pl = new THREE.PointLight(0xffb44c, 0, 28, 1.0);
+      const pl = new THREE.PointLight(0xffb44c, 0, 46, 0.85);
       pl.castShadow = false;
       this.group.add(pl);
       this.torchLightPool.push(pl);
@@ -2694,87 +2694,221 @@ export class World {
     this.updateLodAround(pcx, pcz, r, fullRD, Math.max(1.4, budgetMs * 0.48));
   }
 
-  // Build one Distant Horizons LOD Super-Region (8x8 chunks = 128x128 blocks at 8-block stride -> <0.4ms!)
-  _buildLodRegionMesh(rx, rz) {
-    const step = 8; // 8-block LOD stride (16x16 grid = 256 samples for 64 chunks!)
-    const cells = 16; // 16 * 8 = 128 blocks = 8 chunks
-    const vertsPerSide = cells + 1; // 17
-    const ox = rx * 128;
-    const oz = rz * 128;
+  // Build one Crisp Stepped VOXEL BLOCK Multi-Tier Distant Horizons LOD Region (real Minecraft block silhouettes up to 128 chunks!)
+  _buildLodRegionMesh(rx, rz, tier = 1) {
+    const step = tier === 1 ? 4 : (tier === 2 ? 8 : 16);
+    const cells = 16; // 16x16 stepped voxel columns -> Tier 1 = 4x4 chunks (64m), Tier 2 = 8x8 chunks (128m), Tier 3 = 16x16 chunks (256m)
+    const pad = cells + 2; // 18x18 padded grid so vertical cliff walls at region edges are 100% exact!
+    const regionBlocks = cells * step;
+    const ox = rx * regionBlocks;
+    const oz = rz * regionBlocks;
+    const isFlat = this.worldType === 'flat';
 
-    const heights = new Float32Array(vertsPerSide * vertsPerSide);
-    const colors = new Float32Array(vertsPerSide * vertsPerSide * 3);
-    const positions = new Float32Array(vertsPerSide * vertsPerSide * 3);
+    const colTopY = new Int16Array(pad * pad);
+    const colBaseH = new Int16Array(pad * pad);
+    const colTopR = new Float32Array(pad * pad);
+    const colTopG = new Float32Array(pad * pad);
+    const colTopB = new Float32Array(pad * pad);
+    const colSideR = new Float32Array(pad * pad);
+    const colSideG = new Float32Array(pad * pad);
+    const colSideB = new Float32Array(pad * pad);
 
-    for (let gz = 0; gz < vertsPerSide; gz++) {
-      const wz = oz + gz * step;
-      for (let gx = 0; gx < vertsPerSide; gx++) {
-        const wx = ox + gx * step;
+    // Pass 1: Sample integer voxel column heights & crisp per-block Minecraft colors (with blocky 3D voxel tree crowns!)
+    for (let pz = 0; pz < pad; pz++) {
+      const wz = oz + (pz - 1) * step;
+      for (let px = 0; px < pad; px++) {
+        const wx = ox + (px - 1) * step;
         const col = this.sampleColumn(wx, wz);
-        const h = col.height;
-        const isWater = this.worldType !== 'flat' && h < SEA_LEVEL;
-        const y = isWater ? (SEA_LEVEL + 0.55) : (h + 0.72);
-        const vi = gx + gz * vertsPerSide;
-        heights[vi] = y;
-        positions[vi * 3] = wx;
-        positions[vi * 3 + 1] = y;
-        positions[vi * 3 + 2] = wz;
+        const h = Math.floor(col.height);
+        const biome = col.biome;
+        const idx = px + pz * pad;
+        const isWater = !isFlat && h < SEA_LEVEL;
+        colBaseH[idx] = h;
 
-        // Rich Biome + Elevation Palette matching BSL Terrain & Water
-        let cr, cg, cb;
+        let yTop = isWater ? SEA_LEVEL : h;
+        let tr, tg, tb, sr, sg, sb;
+        const blockHash = coordHash(Math.floor(wx / step), Math.floor(wz / step), this.seed + 713);
+        const vVar = 0.93 + coordHash(Math.floor(wx / step), Math.floor(wz / step), this.seed + 888) * 0.14;
+
         if (isWater) {
-          if (col.biome === 'Snowy Taiga') { cr = 0.62; cg = 0.80; cb = 0.94; }
-          else {
+          if (biome === 'Snowy Taiga') {
+            tr = 0.68; tg = 0.85; tb = 0.98;
+            sr = 0.56; sg = 0.74; sb = 0.88;
+          } else {
             const depth = Math.min(1, (SEA_LEVEL - h) / 14);
-            cr = 0.14 - depth * 0.08;
-            cg = 0.46 - depth * 0.18;
-            cb = 0.68 - depth * 0.14;
+            tr = 0.14 - depth * 0.07; tg = 0.50 - depth * 0.18; tb = 0.76 - depth * 0.15;
+            sr = tr * 0.82; sg = tg * 0.82; sb = tb * 0.88;
           }
-        } else if (col.biome === 'Desert') {
-          cr = 0.84; cg = 0.76; cb = 0.52;
-        } else if (h >= 58 || col.biome === 'Snowy Taiga') {
-          cr = 0.90; cg = 0.94; cb = 0.98;
-        } else if (h >= 51) {
-          cr = 0.50; cg = 0.52; cb = 0.55;
-        } else if (col.biome === 'Forest') {
-          cr = 0.25; cg = 0.48; cb = 0.21;
-        } else if (col.biome === 'Birch Forest') {
-          cr = 0.35; cg = 0.57; cb = 0.27;
+        } else if (biome === 'Desert') {
+          tr = 0.86; tg = 0.79; tb = 0.55;
+          sr = 0.78; sg = 0.71; sb = 0.48;
+        } else if (!isFlat && h <= SEA_LEVEL + 1) {
+          // Sandy beach / riverbank block
+          tr = 0.84; tg = 0.78; tb = 0.56;
+          sr = 0.76; sg = 0.70; sb = 0.49;
+        } else if (h >= 58 || (biome === 'Snowy Taiga' && h >= SEA_LEVEL + 2)) {
+          if (biome === 'Snowy Taiga' && h < 57 && blockHash > 0.52) {
+            // Crisp blocky spruce tree voxel crown!
+            yTop = h + Math.max(3, Math.round(step * 0.5));
+            tr = 0.19; tg = 0.35; tb = 0.24;
+            sr = 0.15; sg = 0.29; sb = 0.19;
+          } else {
+            tr = 0.93; tg = 0.96; tb = 1.0;
+            sr = 0.54; sg = 0.56; sb = 0.60; // Alpine stone cliff below snow cap
+          }
+        } else if (h >= 52) {
+          // Crisp granite alpine mountain rock block!
+          tr = 0.52; tg = 0.54; tb = 0.57;
+          sr = 0.46; sg = 0.48; sb = 0.51;
+        } else if (biome === 'Forest') {
+          if (blockHash > 0.34) {
+            // Crisp blocky oak forest canopy voxel!
+            yTop = h + Math.max(3, Math.round(step * 0.55));
+            tr = 0.19; tg = 0.45; tb = 0.15;
+            sr = 0.16; sg = 0.38; sb = 0.13;
+          } else {
+            tr = 0.32; tg = 0.56; tb = 0.22;
+            sr = 0.46; sg = 0.34; sb = 0.23; // Dirt side under grass
+          }
+        } else if (biome === 'Birch Forest') {
+          if (blockHash > 0.40) {
+            yTop = h + Math.max(3, Math.round(step * 0.5));
+            tr = 0.34; tg = 0.58; tb = 0.23;
+            sr = 0.28; sg = 0.50; sb = 0.19;
+          } else {
+            tr = 0.38; tg = 0.61; tb = 0.26;
+            sr = 0.48; sg = 0.36; sb = 0.24;
+          }
         } else {
-          cr = 0.38; cg = 0.62; cb = 0.25;
+          // Plains grass block (with occasional blocky oak grove)
+          if (!isFlat && blockHash > 0.87) {
+            yTop = h + Math.max(3, Math.round(step * 0.45));
+            tr = 0.22; tg = 0.48; tb = 0.17;
+            sr = 0.18; sg = 0.40; sb = 0.14;
+          } else {
+            tr = 0.39; tg = 0.64; tb = 0.24;
+            sr = 0.48; sg = 0.35; sb = 0.23; // Classic grass-over-dirt side!
+          }
         }
-        // Subtle natural variation so distant plains & mountains feel alive
-        const vVar = 0.94 + coordHash(wx >> 3, wz >> 3, this.seed + 888) * 0.12;
-        colors[vi * 3] = Math.min(1, cr * vVar);
-        colors[vi * 3 + 1] = Math.min(1, cg * vVar);
-        colors[vi * 3 + 2] = Math.min(1, cb * vVar);
+
+        colTopY[idx] = yTop;
+        colTopR[idx] = Math.min(1, tr * vVar);
+        colTopG[idx] = Math.min(1, tg * vVar);
+        colTopB[idx] = Math.min(1, tb * vVar);
+        colSideR[idx] = Math.min(1, sr * vVar);
+        colSideG[idx] = Math.min(1, sg * vVar);
+        colSideB[idx] = Math.min(1, sb * vVar);
       }
     }
 
-    const indices = new Uint16Array(cells * cells * 6);
-    let ii = 0;
+    // Pass 2: Emit flat-shaded stepped Minecraft voxel columns (top face + vertical step cliff faces ONLY where y > neighborY!)
+    const maxQuads = cells * cells * 5;
+    const pos = new Float32Array(maxQuads * 12);
+    const norm = new Float32Array(maxQuads * 12);
+    const col = new Float32Array(maxQuads * 12);
+    const idxBuf = new Uint16Array(maxQuads * 6);
+    let vCount = 0;
+    let iCount = 0;
+
+    const pushLodQuad = (
+      x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3,
+      nx, ny, nz, r, g, b
+    ) => {
+      const base = vCount;
+      const p = base * 3;
+      pos[p] = x0; pos[p + 1] = y0; pos[p + 2] = z0;
+      pos[p + 3] = x1; pos[p + 4] = y1; pos[p + 5] = z1;
+      pos[p + 6] = x2; pos[p + 7] = y2; pos[p + 8] = z2;
+      pos[p + 9] = x3; pos[p + 10] = y3; pos[p + 11] = z3;
+
+      norm[p] = nx; norm[p + 1] = ny; norm[p + 2] = nz;
+      norm[p + 3] = nx; norm[p + 4] = ny; norm[p + 5] = nz;
+      norm[p + 6] = nx; norm[p + 7] = ny; norm[p + 8] = nz;
+      norm[p + 9] = nx; norm[p + 10] = ny; norm[p + 11] = nz;
+
+      col[p] = r; col[p + 1] = g; col[p + 2] = b;
+      col[p + 3] = r; col[p + 4] = g; col[p + 5] = b;
+      col[p + 6] = r; col[p + 7] = g; col[p + 8] = b;
+      col[p + 9] = r; col[p + 10] = g; col[p + 11] = b;
+
+      idxBuf[iCount] = base; idxBuf[iCount + 1] = base + 1; idxBuf[iCount + 2] = base + 2;
+      idxBuf[iCount + 3] = base; idxBuf[iCount + 4] = base + 2; idxBuf[iCount + 5] = base + 3;
+      vCount += 4;
+      iCount += 6;
+    };
+
     for (let gz = 0; gz < cells; gz++) {
+      const wz0 = oz + gz * step;
+      const wz1 = wz0 + step;
+      const pz = gz + 1;
       for (let gx = 0; gx < cells; gx++) {
-        const a = gx + gz * vertsPerSide;
-        const b = a + 1;
-        const c = a + vertsPerSide;
-        const d = c + 1;
-        indices[ii++] = a; indices[ii++] = c; indices[ii++] = b;
-        indices[ii++] = b; indices[ii++] = c; indices[ii++] = d;
+        const wx0 = ox + gx * step;
+        const wx1 = wx0 + step;
+        const px = gx + 1;
+        const ci = px + pz * pad;
+
+        const yTop = colTopY[ci];
+        const yDraw = yTop + 1.0; // Exact Minecraft block top Y!
+        const tr = colTopR[ci], tg = colTopG[ci], tb = colTopB[ci];
+
+        // 1. Flat Crisp Block Top Face (+Y)
+        pushLodQuad(
+          wx0, yDraw, wz1,
+          wx1, yDraw, wz1,
+          wx1, yDraw, wz0,
+          wx0, yDraw, wz0,
+          0, 1, 0, tr, tg, tb
+        );
+
+        // 2. Vertical Stepped Cliff / Block Side Faces where higher than cardinal neighbor!
+        const yPX = colTopY[ci + 1];
+        const yNX = colTopY[ci - 1];
+        const yPZ = colTopY[ci + pad];
+        const yNZ = colTopY[ci - pad];
+
+        // Steep tall cliffs (>3 blocks drop) expose granite stone rock!
+        const sideColForDrop = (drop, shade) => {
+          if (drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci]) {
+            return [0.50 * shade, 0.52 * shade, 0.55 * shade];
+          }
+          return [colSideR[ci] * shade, colSideG[ci] * shade, colSideB[ci] * shade];
+        };
+
+        if (yTop > yPX) {
+          const yBot = yPX + 1.0;
+          const [sr, sg, sb] = sideColForDrop(yTop - yPX, 0.88);
+          pushLodQuad(wx1, yBot, wz1, wx1, yBot, wz0, wx1, yDraw, wz0, wx1, yDraw, wz1, 1, 0, 0, sr, sg, sb);
+        }
+        if (yTop > yNX) {
+          const yBot = yNX + 1.0;
+          const [sr, sg, sb] = sideColForDrop(yTop - yNX, 0.88);
+          pushLodQuad(wx0, yBot, wz0, wx0, yBot, wz1, wx0, yDraw, wz1, wx0, yDraw, wz0, -1, 0, 0, sr, sg, sb);
+        }
+        if (yTop > yPZ) {
+          const yBot = yPZ + 1.0;
+          const [sr, sg, sb] = sideColForDrop(yTop - yPZ, 0.80);
+          pushLodQuad(wx0, yBot, wz1, wx1, yBot, wz1, wx1, yDraw, wz1, wx0, yDraw, wz1, 0, 0, 1, sr, sg, sb);
+        }
+        if (yTop > yNZ) {
+          const yBot = yNZ + 1.0;
+          const [sr, sg, sb] = sideColForDrop(yTop - yNZ, 0.80);
+          pushLodQuad(wx1, yBot, wz0, wx0, yBot, wz0, wx0, yDraw, wz0, wx1, yDraw, wz0, 0, 0, -1, sr, sg, sb);
+        }
       }
     }
 
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.setIndex(new THREE.BufferAttribute(indices, 1));
-    geo.computeVertexNormals();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos.slice(0, vCount * 3), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(norm.slice(0, vCount * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col.slice(0, vCount * 3), 3));
+    geo.setIndex(new THREE.BufferAttribute(idxBuf.slice(0, iCount), 1));
 
     const mesh = new THREE.Mesh(geo, this.lodMat);
     mesh.frustumCulled = true;
     mesh.castShadow = false;
     mesh.receiveShadow = false;
-    mesh.position.y = -0.45;
+    // Slight per-tier vertical drop eliminates any z-fighting along tier boundaries!
+    mesh.position.y = tier === 1 ? -0.35 : (tier === 2 ? -0.75 : -1.25);
     mesh.matrixAutoUpdate = false;
     mesh.updateMatrix();
     return mesh;
@@ -2782,7 +2916,6 @@ export class World {
 
   updateLodAround(pcx, pcz, detailR, fullRD, budgetMs = 1.8) {
     if (fullRD <= detailR) {
-      // Clear LOD meshes when render distance fits fully inside high-detail chunks
       if (this.lodRegions.size > 0) {
         for (const rec of this.lodRegions.values()) {
           this.lodGroup.remove(rec.mesh);
@@ -2794,52 +2927,67 @@ export class World {
       return;
     }
 
-    const prx = Math.floor(pcx / 8);
-    const prz = Math.floor(pcz / 8);
-    const lodRadiusRegions = Math.ceil(fullRD / 8);
+    // Re-evaluate cascaded 3-tier LOD rings when player crosses a 4-chunk boundary or changes renderDistance!
+    const prx = Math.floor(pcx / 4);
+    const prz = Math.floor(pcz / 4);
 
     if (prx !== this._lastLodRx || prz !== this._lastLodRz || fullRD !== this._lastLodRD) {
       this._lastLodRx = prx;
       this._lastLodRz = prz;
       this._lastLodRD = fullRD;
 
-      // Queue missing LOD regions in spiral order outside the inner high-detail chunk ring
-      const innerMinDist = Math.max(0, (detailR - 2) / 8);
-      const outerMaxDist = lodRadiusRegions + 0.6;
+      const t1End = Math.min(fullRD, 28);
+      const t2End = Math.min(fullRD, 68);
+      const t3End = Math.min(fullRD, 128);
+
+      const activeKeys = new Set();
       const needed = [];
-      for (let dz = -lodRadiusRegions; dz <= lodRadiusRegions; dz++) {
-        for (let dx = -lodRadiusRegions; dx <= lodRadiusRegions; dx++) {
-          const dist = Math.hypot(dx, dz);
-          if (dist > outerMaxDist) continue;
-          const rx = prx + dx;
-          const rz = prz + dz;
-          // Hide any region completely inside the loaded high-detail voxel circle
-          const regionCenterCx = rx * 8 + 4;
-          const regionCenterCz = rz * 8 + 4;
-          const centerDistChunks = Math.hypot(regionCenterCx - pcx, regionCenterCz - pcz);
-          const fullyInsideDetail = centerDistChunks < Math.max(0, detailR - 5.8);
-          const key = this.chunkKey(rx, rz);
-          const existing = this.lodRegions.get(key);
-          if (fullyInsideDetail) {
-            if (existing) existing.mesh.visible = false;
-            continue;
-          }
-          if (existing) {
-            existing.mesh.visible = true;
-          } else if (dist >= innerMinDist * 0.5) {
-            needed.push({ rx, rz, key, d2: dx * dx + dz * dz });
+
+      const queueTier = (tier, regChunks, minChunkDist, maxChunkDist) => {
+        if (maxChunkDist <= minChunkDist) return;
+        const pRegX = Math.floor(pcx / regChunks);
+        const pRegZ = Math.floor(pcz / regChunks);
+        const radRegs = Math.ceil(maxChunkDist / regChunks);
+        const halfSpan = regChunks * 0.5;
+        const minAllow = Math.max(0, minChunkDist - halfSpan * 0.75);
+        const maxAllow = maxChunkDist + halfSpan * 0.9;
+
+        for (let dz = -radRegs; dz <= radRegs; dz++) {
+          for (let dx = -radRegs; dx <= radRegs; dx++) {
+            const rx = pRegX + dx;
+            const rz = pRegZ + dz;
+            const centerCx = rx * regChunks + halfSpan;
+            const centerCz = rz * regChunks + halfSpan;
+            const distChunks = Math.hypot(centerCx - pcx, centerCz - pcz);
+            if (distChunks < minAllow || distChunks > maxAllow) continue;
+
+            // Unique key encoding (tier, rx, rz)
+            const key = `${tier}:${rx},${rz}`;
+            activeKeys.add(key);
+            const existing = this.lodRegions.get(key);
+            if (existing) {
+              existing.mesh.visible = true;
+            } else {
+              needed.push({ rx, rz, tier, key, dist: distChunks });
+            }
           }
         }
-      }
-      needed.sort((a, b) => a.d2 - b.d2);
+      };
+
+      // Tier 1: High-Detail 4-block stride (detailR .. 28 chunks)
+      queueTier(1, 4, Math.max(2, detailR - 2.5), t1End);
+      // Tier 2: Detailed 8-block stride (28 .. 68 chunks)
+      if (fullRD > 28) queueTier(2, 8, t1End - 2, t2End);
+      // Tier 3: Ultra-Far 16-block stride (68 .. 128 chunks = 2,048 blocks!)
+      if (fullRD > 68) queueTier(3, 16, t2End - 4, t3End);
+
+      // Stream closest high-detail regions first, then outward to 128 chunks!
+      needed.sort((a, b) => a.dist - b.dist);
       this._lodQueue = needed;
 
-      // Unload out-of-range LOD regions cleanly
-      const unloadRegSq = (lodRadiusRegions + 2) * (lodRadiusRegions + 2);
+      // Unload out-of-ring LOD regions cleanly
       for (const [key, rec] of this.lodRegions.entries()) {
-        const dx = rec.rx - prx;
-        const dz = rec.rz - prz;
-        if (dx * dx + dz * dz > unloadRegSq) {
+        if (!activeKeys.has(key)) {
           this.lodGroup.remove(rec.mesh);
           rec.mesh.geometry.dispose();
           this.lodRegions.delete(key);
@@ -2847,16 +2995,16 @@ export class World {
       }
     }
 
-    // Stream LOD super-regions under a strict sub-2ms budget so frame rate NEVER dips!
+    // Stream LOD super-regions under strict sub-2ms frame budget (zero FPS dip even at 128 chunks!)
     if (this._lodQueue.length > 0) {
       const t0 = performance.now();
       let built = 0;
-      while (this._lodQueue.length > 0 && built < 4) {
+      while (this._lodQueue.length > 0 && built < 5) {
         const item = this._lodQueue.shift();
         if (this.lodRegions.has(item.key)) continue;
-        const mesh = this._buildLodRegionMesh(item.rx, item.rz);
+        const mesh = this._buildLodRegionMesh(item.rx, item.rz, item.tier);
         this.lodGroup.add(mesh);
-        this.lodRegions.set(item.key, { rx: item.rx, rz: item.rz, mesh });
+        this.lodRegions.set(item.key, { rx: item.rx, rz: item.rz, tier: item.tier, mesh });
         built++;
         if (performance.now() - t0 >= budgetMs) break;
       }
@@ -3071,7 +3219,7 @@ export class World {
       this._lightDirty = false;
       this._lightRefreshTimer = 0.16;
 
-      const maxDistSq = 34 * 34;
+      const maxDistSq = 54 * 54;
       const near = [];
       for (const src of this.lightSources.values()) {
         const dx = src.x + 0.5 - playerPos.x;
@@ -3098,17 +3246,17 @@ export class World {
       if (i < activeCount) {
         const s = this._activeLightSources[i];
         // Position light slightly above the torch flame so it floods nearby floor & walls cleanly!
-        pl.position.set(s.x + 0.5, s.y + (s.isGlowstone ? 0.6 : 1.15), s.z + 0.5);
+        pl.position.set(s.x + 0.5, s.y + (s.isGlowstone ? 0.6 : 1.18), s.z + 0.5);
         const phase = s.x * 1.7 + s.z * 2.3 + s.y * 0.9;
         const flicker = s.isGlowstone
-          ? Math.sin(t * 3.5 + phase) * 0.12
-          : Math.sin(t * 8.5 + phase) * 0.28 + Math.cos(t * 15.2 + phase * 1.3) * 0.14;
-        // Rich warm light during dusk/day, and dramatically brighter & wider at night!
+          ? Math.sin(t * 3.5 + phase) * 0.22
+          : Math.sin(t * 8.5 + phase) * 0.48 + Math.cos(t * 15.2 + phase * 1.3) * 0.24;
+        // +100% Brighter Torch & Glowstone Light Output with wide warm illumination!
         const baseIntensity = s.isGlowstone
-          ? (4.8 + nightFactor * 7.2)
-          : (4.0 + nightFactor * 6.8);
-        pl.intensity = Math.max(0.5, baseIntensity + flicker);
-        pl.distance = 24 + nightFactor * 8;
+          ? (9.6 + nightFactor * 14.4)
+          : (8.0 + nightFactor * 13.6);
+        pl.intensity = Math.max(1.0, baseIntensity + flicker);
+        pl.distance = 38 + nightFactor * 14;
         pl.color.setHex(s.isGlowstone ? 0xffd27a : 0xffb247);
       } else {
         pl.intensity = 0;

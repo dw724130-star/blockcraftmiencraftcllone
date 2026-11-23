@@ -139,9 +139,9 @@ export class Player {
     this.heldTorchGroup.visible = false;
     this.handPivot.add(this.heldTorchGroup);
 
-    // Dynamic Torch / Glowstone PointLight (Bright, Warm & Wide Reach!)
-    this.heldLight = new THREE.PointLight(0xffb64f, 0, 26, 1.0);
-    this.heldLight.position.set(0.3, 0.05, -0.45);
+    // Dynamic Torch / Glowstone PointLight (+100% brighter & wider reach!)
+    this.heldLight = new THREE.PointLight(0xffb64f, 0, 42, 0.85);
+    this.heldLight.position.set(0.3, 0.08, -0.45);
     this.handGroup.add(this.heldLight);
 
     this.handPivot.position.set(0.52, -0.46, -0.62);
@@ -369,10 +369,12 @@ export class Player {
     return false;
   }
 
-  update(dt, input, mods = null) {
+  update(dt, input, mods = null, gameRules = null) {
     if (this.dead) return;
     const superMob = !!(mods && mods.isEnabled('super_mobility'));
     const moonGrav = !!(mods && mods.isEnabled('moon_gravity'));
+    const difficulty = (gameRules && gameRules.difficulty) ? gameRules.difficulty : 'normal';
+    const hungerRate = (gameRules && typeof gameRules.hungerRate === 'number') ? Math.max(0, gameRules.hungerRate) : 1.0;
 
     // Tick active status effects
     for (const k of Object.keys(this.statusEffects)) {
@@ -536,26 +538,48 @@ export class Player {
         this.air = Math.min(this.maxAir, this.air + dt * 4.5);
       }
 
-      // Hunger
-      const drain = this.sprinting ? 0.09 : (horizSpeed > 0.5 ? 0.025 : 0.008);
-      this.hungerTimer += dt * drain;
-      if (this.hungerTimer >= 1.0) {
-        this.hungerTimer = 0;
-        if (this.hunger > 0) {
-          this.hunger = Math.max(0, this.hunger - 0.5);
+      // Hunger (scaled by Difficulty & Hunger Drain Speed!)
+      if (difficulty === 'peaceful') {
+        if (this.hunger < this.maxHunger) {
+          this.hunger = this.maxHunger;
           if (this.onHudDirty) this.onHudDirty();
-        } else if (this.hp > 2) {
-          this.takeDamage(1, 'Starved');
         }
-      }
+        if (this.hp < this.maxHp) {
+          this.regenTimer += dt;
+          if (this.regenTimer >= 1.2) {
+            this.regenTimer = 0;
+            this.hp = Math.min(this.maxHp, this.hp + 1);
+            if (this.onHudDirty) this.onHudDirty();
+          }
+        }
+      } else {
+        const diffHungerMul = difficulty === 'easy' ? 0.75 : (difficulty === 'hard' ? 1.45 : 1.0);
+        const effHungerMul = diffHungerMul * hungerRate;
+        const drain = this.sprinting ? 0.09 : (horizSpeed > 0.5 ? 0.025 : 0.008);
+        if (effHungerMul > 0) {
+          this.hungerTimer += dt * drain * effHungerMul;
+        }
+        if (this.hungerTimer >= 1.0) {
+          this.hungerTimer = 0;
+          if (this.hunger > 0) {
+            this.hunger = Math.max(0, this.hunger - 0.5);
+            if (this.onHudDirty) this.onHudDirty();
+          } else {
+            const minStarveHp = difficulty === 'hard' ? 0 : (difficulty === 'normal' ? 1 : 10);
+            if (this.hp > minStarveHp) {
+              this.takeDamage(1, 'Starved');
+            }
+          }
+        }
 
-      // Natural Health Regeneration when well-fed
-      if (this.hunger >= 17 && this.hp < this.maxHp) {
-        this.regenTimer += dt;
-        if (this.regenTimer >= 2.5) {
-          this.regenTimer = 0;
-          this.hp = Math.min(this.maxHp, this.hp + 1);
-          if (this.onHudDirty) this.onHudDirty();
+        // Natural Health Regeneration when well-fed
+        if (this.hunger >= 17 && this.hp < this.maxHp) {
+          this.regenTimer += dt;
+          if (this.regenTimer >= 2.5) {
+            this.regenTimer = 0;
+            this.hp = Math.min(this.maxHp, this.hp + 1);
+            if (this.onHudDirty) this.onHudDirty();
+          }
         }
       }
 
@@ -642,10 +666,10 @@ export class Player {
       this.heldSpriteMat.needsUpdate = true;
     }
 
-    // Dynamic Torch / Glowstone Light flicker (brighter & wider reach!)
+    // Dynamic Torch / Glowstone Light flicker (+100% brighter & wider reach!)
     const emitsLight = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
     if (emitsLight) {
-      const flicker = 5.4 + Math.sin(performance.now() * 0.015) * 0.32 + Math.cos(performance.now() * 0.037) * 0.16;
+      const flicker = 10.8 + Math.sin(performance.now() * 0.015) * 0.55 + Math.cos(performance.now() * 0.037) * 0.28;
       this.heldLight.intensity = flicker;
     } else {
       this.heldLight.intensity = 0;

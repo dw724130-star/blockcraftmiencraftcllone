@@ -1,5 +1,5 @@
 import { ITEMS, getItemCategory } from './blocks.js';
-import { RECIPES, matchCraftingGrid, canCraftRecipe, quickCraftRecipe, SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
+import { RECIPES, matchCraftingGrid, canCraftRecipe, quickCraftRecipe, matchesItemTag, SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
 import { DEFAULT_KEYBINDS } from './storage.js';
@@ -181,11 +181,11 @@ export class UIManager {
   }
 
   bindStaticEvents() {
-    // Modal close buttons (including classic Chest & Furnace close buttons + backdrop tap!)
+    // Modal close buttons (including classic Inventory, Crafting, Chest & Furnace close buttons + backdrop tap!)
     document.querySelectorAll('.close-modal-btn, .mc-classic-close').forEach((btn) => {
       btn.addEventListener('click', () => this.closeModals());
     });
-    for (const mid of ['chest-modal', 'furnace-modal']) {
+    for (const mid of ['inventory-modal', 'crafting-modal', 'chest-modal', 'furnace-modal']) {
       document.getElementById(mid)?.addEventListener('click', (e) => {
         if (e.target && e.target.id === mid) this.closeModals();
       });
@@ -200,19 +200,58 @@ export class UIManager {
       this.sound.playPop();
     });
 
-    // Inventory tabs
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const tab = btn.dataset.tab;
-        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
-        document.querySelectorAll('.inv-tab-panel').forEach((p) => p.classList.add('hidden'));
-        document.getElementById(`inv-tab-${tab}`).classList.remove('hidden');
-        if (tab === 'recipes') this.renderRecipeBook();
-        if (tab === 'creative' && !this._creativeRendered) {
-          this._creativeRendered = true;
-          this.renderCreativeCatalog(document.getElementById('creative-search')?.value || '');
-        }
-      });
+    // Classic Inventory Green Recipe Book & Creative Drawer toggles
+    this._invDrawerMode = null; // null | 'recipes' | 'creative'
+    const setInvDrawer = (mode) => {
+      const panel = document.getElementById('inv-book-panel');
+      const recDiv = document.getElementById('inv-drawer-recipes');
+      const creDiv = document.getElementById('inv-drawer-creative');
+      const titleEl = document.getElementById('inv-drawer-title');
+      if (!panel) return;
+      const next = this._invDrawerMode === mode ? null : mode;
+      this._invDrawerMode = next;
+      panel.classList.toggle('hidden', !next);
+      document.getElementById('btn-inv-book')?.classList.toggle('active', next === 'recipes');
+      document.getElementById('btn-inv-creative')?.classList.toggle('active', next === 'creative');
+      if (recDiv) recDiv.classList.toggle('hidden', next !== 'recipes');
+      if (creDiv) creDiv.classList.toggle('hidden', next !== 'creative');
+      if (titleEl) titleEl.textContent = next === 'creative' ? 'Creative Catalog' : 'Recipe Book';
+      if (next === 'recipes') this.renderRecipeBook(false);
+      if (next === 'creative') {
+        this._creativeRendered = true;
+        this.renderCreativeCatalog(document.getElementById('creative-search')?.value || '');
+      }
+      this.sound.playPop();
+    };
+    document.getElementById('btn-inv-book')?.addEventListener('click', () => setInvDrawer('recipes'));
+    document.getElementById('btn-inv-creative')?.addEventListener('click', () => setInvDrawer('creative'));
+    document.getElementById('btn-inv-drawer-close')?.addEventListener('click', () => setInvDrawer(null));
+
+    // Classic 3x3 Crafting Table Green Recipe Book toggle
+    document.getElementById('btn-craft-book')?.addEventListener('click', () => {
+      const panel = document.getElementById('craft-book-panel');
+      if (!panel) return;
+      const willOpen = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !willOpen);
+      document.getElementById('btn-craft-book')?.classList.toggle('active', willOpen);
+      if (willOpen) this.renderRecipeBook(true);
+      this.sound.playPop();
+    });
+    document.getElementById('btn-craft-drawer-close')?.addEventListener('click', () => {
+      document.getElementById('craft-book-panel')?.classList.add('hidden');
+      document.getElementById('btn-craft-book')?.classList.remove('active');
+    });
+
+    // Live interactive Steve preview head tracking inside classic Player Inventory!
+    this._steveLookX = 0.18;
+    this._steveLookY = 0.05;
+    document.getElementById('inventory-modal')?.addEventListener('pointermove', (e) => {
+      const box = document.getElementById('inv-player-preview');
+      if (!box || this.activeModal !== 'inventory-modal') return;
+      const r = box.getBoundingClientRect();
+      this._steveLookX = Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width * 0.5)) / 180));
+      this._steveLookY = Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height * 0.28)) / 160));
+      this.renderPlayerPreview();
     });
 
     // Creative search, categories, stack mode & clear inventory
@@ -232,7 +271,7 @@ export class UIManager {
     if (stackBtn) {
       stackBtn.addEventListener('click', () => {
         this.creativeGiveStack = !this.creativeGiveStack;
-        stackBtn.textContent = this.creativeGiveStack ? 'Give ×64' : 'Give ×1';
+        stackBtn.textContent = this.creativeGiveStack ? '×64' : '×1';
         this.sound.playPop();
       });
     }
@@ -242,6 +281,7 @@ export class UIManager {
         if (!this.game) return;
         this.game.inventory.slots.fill(null);
         this.game.inventory.armor.fill(null);
+        this.game.inventory.offhand = null;
         this.sound.playPop();
         this.renderInventoryModal();
         this.updateHotbar();
@@ -249,7 +289,10 @@ export class UIManager {
       });
     }
     document.getElementById('recipe-search')?.addEventListener('input', () => {
-      this.renderRecipeBook();
+      this.renderRecipeBook(false);
+    });
+    document.getElementById('craft-recipe-search')?.addEventListener('input', () => {
+      this.renderRecipeBook(true);
     });
 
     // Minecraft Java Main Menu navigation buttons
@@ -379,6 +422,15 @@ export class UIManager {
     document.getElementById('set-shaders').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('shaders', e.target.value);
     });
+    document.getElementById('set-difficulty')?.addEventListener('change', (e) => {
+      if (this.game) this.game.setDifficulty(e.target.value);
+    });
+    document.getElementById('set-mob-rate')?.addEventListener('change', (e) => {
+      if (this.game) this.game.setMobSpawnRate(parseFloat(e.target.value));
+    });
+    document.getElementById('set-hunger-rate')?.addEventListener('change', (e) => {
+      if (this.game) this.game.setHungerRate(parseFloat(e.target.value));
+    });
     document.getElementById('set-mc-ui').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('minecraftUI', e.target.checked);
     });
@@ -483,10 +535,44 @@ export class UIManager {
       const name = document.getElementById('new-world-name').value.trim() || 'My World';
       const mode = document.getElementById('new-world-mode').value;
       const worldType = document.getElementById('new-world-type').value;
+      const difficulty = document.getElementById('new-world-difficulty')?.value || 'normal';
+      const mobSpawnRate = parseFloat(document.getElementById('new-world-mob-rate')?.value ?? '1');
+      const hungerRate = parseFloat(document.getElementById('new-world-hunger-rate')?.value ?? '1');
       const seed = document.getElementById('new-world-seed').value.trim() || String(Math.floor(Math.random() * 9999999));
       const allowCheats = Boolean(document.getElementById('new-world-cheats')?.checked);
-      if (this.game) this.game.startNewWorld({ name, mode, worldType, seed, allowCheats });
+      if (this.game) {
+        this.game.startNewWorld({
+          name,
+          mode,
+          worldType,
+          difficulty,
+          mobSpawnRate: Number.isFinite(mobSpawnRate) ? mobSpawnRate : 1.0,
+          hungerRate: Number.isFinite(hungerRate) ? hungerRate : 1.0,
+          seed,
+          allowCheats
+        });
+      }
     });
+  }
+
+  syncWorldRulesUI(meta) {
+    if (!meta) return;
+    const diffSel = document.getElementById('set-difficulty');
+    if (diffSel) diffSel.value = meta.difficulty || 'normal';
+    const mobSel = document.getElementById('set-mob-rate');
+    if (mobSel) {
+      const mr = typeof meta.mobSpawnRate === 'number' ? meta.mobSpawnRate : 1.0;
+      const opts = [0, 0.5, 1, 1.8, 3];
+      const closest = opts.reduce((a, b) => (Math.abs(b - mr) < Math.abs(a - mr) ? b : a), 1);
+      mobSel.value = String(closest);
+    }
+    const hunSel = document.getElementById('set-hunger-rate');
+    if (hunSel) {
+      const hr = typeof meta.hungerRate === 'number' ? meta.hungerRate : 1.0;
+      const opts = [0, 0.5, 1, 1.8, 3];
+      const closest = opts.reduce((a, b) => (Math.abs(b - hr) < Math.abs(a - hr) ? b : a), 1);
+      hunSel.value = String(closest);
+    }
   }
 
   syncSettingsUI(settings) {
@@ -592,10 +678,11 @@ export class UIManager {
       const card = document.createElement('div');
       card.className = 'world-card';
       const dateStr = w.updatedAt ? new Date(w.updatedAt).toLocaleDateString() : '';
+      const diffLbl = (w.difficulty || 'normal').toUpperCase();
       card.innerHTML = `
         <div class="world-card-info">
           <div class="world-card-name">${this.escapeHtml(w.name)}</div>
-          <div class="world-card-meta">${w.mode.toUpperCase()} • ${w.worldType || 'infinite'} • Seed: ${w.seed} • ${dateStr}</div>
+          <div class="world-card-meta">${w.mode.toUpperCase()} • ${diffLbl} • ${w.worldType || 'infinite'} • Seed: ${w.seed} • ${dateStr}</div>
         </div>
         <div class="world-card-actions">
           <button class="mc-btn primary sm play-btn">Play</button>
@@ -913,14 +1000,8 @@ export class UIManager {
   // --- MODALS ---
   closeModals() {
     this.cancelKeybindListen();
-    if (this.activeModal === 'inventory-modal') {
-      // Return items left in crafting grid to inventory
-      for (let i = 0; i < 9; i++) {
-        if (this.craftGrid[i] && this.game) {
-          this.game.inventory.addItem(this.craftGrid[i].id, this.craftGrid[i].count);
-          this.craftGrid[i] = null;
-        }
-      }
+    if (this.activeModal === 'inventory-modal' || this.activeModal === 'crafting-modal') {
+      this.returnCraftGridToInventory();
       this.pickedSource = null;
     }
     document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
@@ -932,6 +1013,16 @@ export class UIManager {
       this.game.controls.enabled = true;
       this.updateHotbar();
       this.updateStats();
+    }
+  }
+
+  returnCraftGridToInventory() {
+    if (!this.game) return;
+    for (let i = 0; i < 9; i++) {
+      if (this.craftGrid[i]) {
+        this.game.inventory.addItem(this.craftGrid[i].id, this.craftGrid[i].count);
+        this.craftGrid[i] = null;
+      }
     }
   }
 
@@ -967,121 +1058,350 @@ export class UIManager {
   }
 
   openInventory(isTable = false) {
-    if (this.activeModal === 'inventory-modal' && !isTable) {
+    if (!isTable && this.activeModal === 'inventory-modal') {
+      this.closeModals();
+      return;
+    }
+    if (isTable && this.activeModal === 'crafting-modal') {
       this.closeModals();
       return;
     }
     this.isCraftingTable = isTable;
     this.pickedSource = null;
-    this.openModal('inventory-modal');
 
-    document.getElementById('inv-modal-title').textContent = isTable ? 'Crafting Table (3×3)' : 'Inventory & Crafting';
-    document.getElementById('craft-grid-label').textContent = isTable ? 'Crafting (3×3)' : 'Crafting (2×2)';
-    document.getElementById('recipe-station-badge').textContent = isTable ? '3×3 Crafting Table' : '2×2 Hand Crafting';
-
-    const isCreative = this.game.player.mode === 'creative';
-    const tabCreative = document.getElementById('tab-btn-creative');
-    tabCreative.classList.toggle('hidden', !isCreative);
-
-    // Default to Creative catalog in Creative mode, Recipes on Crafting Table, or Craft tab in Survival
-    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.inv-tab-panel').forEach((p) => p.classList.add('hidden'));
-    const startTab = isTable ? 'recipes' : (isCreative ? 'creative' : 'craft');
-    document.querySelector(`.tab-btn[data-tab="${startTab}"]`).classList.add('active');
-    document.getElementById(`inv-tab-${startTab}`).classList.remove('hidden');
-
-    this.renderInventoryModal();
-    if (startTab === 'recipes') this.renderRecipeBook();
-    if (startTab === 'creative') {
-      this._creativeRendered = true;
-      this.renderCreativeCatalog(document.getElementById('creative-search')?.value || '');
+    if (isTable) {
+      this.openModal('crafting-modal');
+      document.getElementById('craft-book-panel')?.classList.add('hidden');
+      document.getElementById('btn-craft-book')?.classList.remove('active');
+      this.renderCraftingModal();
+      return;
     }
+
+    this.openModal('inventory-modal');
+    const isCreative = this.game && this.game.player.mode === 'creative';
+    const creBtn = document.getElementById('btn-inv-creative');
+    if (creBtn) creBtn.classList.toggle('hidden', !isCreative);
+
+    // Start with the authentic classic Inventory screen cleanly framed (drawer closed by default!)
+    this._invDrawerMode = null;
+    document.getElementById('inv-book-panel')?.classList.add('hidden');
+    document.getElementById('btn-inv-book')?.classList.remove('active');
+    document.getElementById('btn-inv-creative')?.classList.remove('active');
+    this.renderInventoryModal();
+  }
+
+  refreshActiveContainerModal() {
+    if (this.activeModal === 'inventory-modal') this.renderInventoryModal();
+    else if (this.activeModal === 'crafting-modal') this.renderCraftingModal();
+    else if (this.activeModal === 'chest-modal') this.renderChestModal();
+    else if (this.activeModal === 'furnace-modal') this.renderFurnaceModal();
+    this.updateHotbar();
+    this.updateStats();
+  }
+
+  // Crisp articulated Minecraft Steve character preview (wearing equipped armor!) inside the black Inventory viewport
+  renderPlayerPreview() {
+    const canvas = document.getElementById('inv-steve-canvas');
+    if (!canvas || !this.game) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, w, h);
+
+    const lx = (this._steveLookX || 0.18) * 5;
+    const ly = (this._steveLookY || 0.05) * 4;
+    const inv = this.game.inventory;
+    const armorColor = (slotIdx) => {
+      const a = inv.armor[slotIdx];
+      if (!a) return null;
+      if (a.id.startsWith('diamond')) return { main: '#4ce2e8', dark: '#279aa3', rim: '#a5f8fc' };
+      if (a.id.startsWith('iron')) return { main: '#d8dee6', dark: '#949ea8', rim: '#ffffff' };
+      if (a.id.startsWith('leather')) return { main: '#8f5934', dark: '#5e391f', rim: '#b87b4f' };
+      return null;
+    };
+
+    const helm = armorColor(0);
+    const chest = armorColor(1);
+    const legs = armorColor(2);
+    const boots = armorColor(3);
+
+    const cx = Math.round(w * 0.5);
+    const rect3D = (x, y, bw, bh, frontCol, sideCol, topCol) => {
+      ctx.fillStyle = sideCol;
+      ctx.fillRect(x - 4, y + 2, 4, bh);
+      if (topCol) {
+        ctx.fillStyle = topCol;
+        ctx.fillRect(x - 4, y - 3, bw + 4, 4);
+      }
+      ctx.fillStyle = frontCol;
+      ctx.fillRect(x, y, bw, bh);
+    };
+
+    // Legs (classic Steve indigo trousers + armor leggings + boots)
+    const legTop = 122;
+    const legH = 54;
+    const legCol = legs ? legs.main : '#3b3291';
+    const legDark = legs ? legs.dark : '#2a236e';
+    rect3D(cx - 17, legTop, 16, legH, legCol, legDark, null);
+    rect3D(cx + 1, legTop, 16, legH, legCol, legDark, null);
+    // Shoes / Boots
+    const bootCol = boots ? boots.main : '#4c4c4c';
+    const bootDark = boots ? boots.dark : '#2e2e2e';
+    rect3D(cx - 17, legTop + legH - 14, 16, 14, bootCol, bootDark, null);
+    rect3D(cx + 1, legTop + legH - 14, 16, 14, bootCol, bootDark, null);
+
+    // Torso (classic Steve cyan tunic + equipped Chestplate)
+    const torsoTop = 74;
+    const torsoCol = chest ? chest.main : '#11a5a8';
+    const torsoDark = chest ? chest.dark : '#0a7378';
+    rect3D(cx - 17, torsoTop, 34, 48, torsoCol, torsoDark, torsoCol);
+    // Subtle tunic neckline & shadow
+    if (!chest) {
+      ctx.fillStyle = '#0d888c';
+      ctx.fillRect(cx - 17, torsoTop + 36, 34, 12);
+      ctx.fillStyle = '#b98562';
+      ctx.fillRect(cx - 6, torsoTop, 12, 6);
+    } else {
+      ctx.fillStyle = chest.rim;
+      ctx.fillRect(cx - 13, torsoTop + 6, 26, 4);
+    }
+
+    // Arms (skin + cyan sleeves or armor pauldrons)
+    const armCol = '#b57e5b';
+    const armDark = '#8b5c3e';
+    rect3D(cx - 31, torsoTop + 2, 13, 46, armCol, armDark, null);
+    rect3D(cx + 18, torsoTop + 2, 13, 46, armCol, armDark, null);
+    rect3D(cx - 31, torsoTop + 2, 13, 16, torsoCol, torsoDark, torsoCol);
+    rect3D(cx + 18, torsoTop + 2, 13, 16, torsoCol, torsoDark, torsoCol);
+
+    // Head (classic Steve face + hair + beard + equipped Helmet + subtle cursor look!)
+    const hx = Math.round(cx - 18 + lx * 0.5);
+    const hy = Math.round(36 + ly * 0.5);
+    rect3D(hx, hy, 36, 36, '#c6906c', '#986748', '#422918');
+    // Classic Steve Hair
+    ctx.fillStyle = '#3b2414';
+    ctx.fillRect(hx, hy, 36, 10);
+    ctx.fillRect(hx, hy + 10, 5, 5);
+    ctx.fillRect(hx + 31, hy + 10, 5, 5);
+    // Eyes (subtle shift toward pointer!)
+    const ex = Math.round(lx * 0.35);
+    const ey = Math.round(ly * 0.25);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(hx + 5 + ex, hy + 16 + ey, 9, 5);
+    ctx.fillRect(hx + 22 + ex, hy + 16 + ey, 9, 5);
+    ctx.fillStyle = '#3c3080';
+    ctx.fillRect(hx + 9 + ex, hy + 16 + ey, 5, 5);
+    ctx.fillRect(hx + 22 + ex, hy + 16 + ey, 5, 5);
+    // Nose & Goatee/Smile
+    ctx.fillStyle = '#9f6a4b';
+    ctx.fillRect(hx + 15 + ex, hy + 21 + ey, 6, 4);
+    ctx.fillStyle = '#4e311d';
+    ctx.fillRect(hx + 11 + ex, hy + 25 + ey, 14, 7);
+    ctx.fillStyle = '#b47a58';
+    ctx.fillRect(hx + 14 + ex, hy + 26 + ey, 8, 4);
+
+    // Helmet overlay if equipped!
+    if (helm) {
+      ctx.fillStyle = helm.main;
+      ctx.fillRect(hx - 2, hy - 3, 40, 14);
+      ctx.fillRect(hx - 2, hy + 11, 6, 12);
+      ctx.fillRect(hx + 32, hy + 11, 6, 12);
+      ctx.fillStyle = helm.rim;
+      ctx.fillRect(hx + 2, hy, 32, 3);
+    }
+  }
+
+  _bindCraftOutputSlot(outEl, size) {
+    const inv = this.game.inventory;
+    const matched = matchCraftingGrid(this.craftGrid.slice(0, size * size), size);
+    this.renderSlotContent(outEl, matched ? { id: matched.out, count: matched.count } : null);
+    outEl.classList.toggle('mc-craft-ready', !!matched);
+    outEl.onclick = (e) => {
+      if (!matched) return;
+      const craftOnce = () => {
+        const curMatch = matchCraftingGrid(this.craftGrid.slice(0, size * size), size);
+        if (!curMatch || curMatch.out !== matched.out) return false;
+        if (!inv.addItem(curMatch.out, curMatch.count)) {
+          this.toast('Inventory full');
+          return false;
+        }
+        for (let i = 0; i < size * size; i++) {
+          if (this.craftGrid[i]) {
+            this.craftGrid[i].count--;
+            if (this.craftGrid[i].count <= 0) this.craftGrid[i] = null;
+          }
+        }
+        return true;
+      };
+      if (e && e.shiftKey) {
+        let crafted = 0;
+        while (crafted < 64 && craftOnce()) crafted++;
+        if (crafted > 0) this.sound.playCraft();
+      } else {
+        if (craftOnce()) this.sound.playCraft();
+      }
+      this.refreshActiveContainerModal();
+      if (this._invDrawerMode === 'recipes') this.renderRecipeBook(false);
+      if (!document.getElementById('craft-book-panel')?.classList.contains('hidden')) this.renderRecipeBook(true);
+    };
   }
 
   renderInventoryModal() {
     if (!this.game) return;
     const inv = this.game.inventory;
 
-    // Cursor info & Delete button active state
+    // Cursor info & Trash active state
     const curEl = document.getElementById('selected-cursor-info');
     const trashEl = document.getElementById('inv-trash-slot');
     if (this.pickedSource) {
       const it = this.getSlotByRef(this.pickedSource);
-      curEl.textContent = it ? `Selected: ${ITEMS[it.id].name} (tap destination or Delete)` : '';
+      if (curEl) curEl.textContent = it ? `Selected: ${ITEMS[it.id].name} — tap slot or Trash` : '';
       if (trashEl) trashEl.classList.toggle('ready-delete', !!it);
     } else {
-      curEl.textContent = 'Drag blocks to move or drop on Delete';
+      if (curEl) curEl.textContent = '';
       if (trashEl) trashEl.classList.remove('ready-delete');
     }
 
-    // Armor Slots (pixel-art silhouettes, no emojis!)
+    // 4 Vertical Classic Armor Slots
     const armorGrid = document.getElementById('armor-slots');
-    armorGrid.innerHTML = '';
-    const armorPlaceholders = ['slot_helmet', 'slot_chestplate', 'slot_leggings', 'slot_boots'];
-    for (let i = 0; i < 4; i++) {
-      const el = document.createElement('div');
-      el.className = 'inv-slot';
-      if (this.pickedSource && this.pickedSource.type === 'armor' && this.pickedSource.index === i) el.classList.add('picked');
-      if (inv.armor[i]) this.renderSlotContent(el, inv.armor[i]);
-      else el.innerHTML = `<img class="px-ui-icon slot-placeholder-px" src="${this.textures.getUiIcon(armorPlaceholders[i])}" alt="" />`;
-      this.attachSlotInteractions(el, { type: 'armor', index: i });
-      armorGrid.appendChild(el);
-    }
-
-    // Craft Grid
-    const size = this.isCraftingTable ? 3 : 2;
-    const cg = document.getElementById('craft-grid');
-    cg.className = `craft-grid ${size === 3 ? 'grid-3x3' : 'grid-2x2'}`;
-    cg.innerHTML = '';
-    for (let i = 0; i < size * size; i++) {
-      const el = document.createElement('div');
-      el.className = 'inv-slot';
-      if (this.pickedSource && this.pickedSource.type === 'craft' && this.pickedSource.index === i) el.classList.add('picked');
-      this.renderSlotContent(el, this.craftGrid[i]);
-      this.attachSlotInteractions(el, { type: 'craft', index: i });
-      cg.appendChild(el);
-    }
-
-    // Craft Output
-    const outEl = document.getElementById('craft-output');
-    const matched = matchCraftingGrid(this.craftGrid.slice(0, size * size), size);
-    this.renderSlotContent(outEl, matched ? { id: matched.out, count: matched.count } : null);
-    outEl.onclick = () => {
-      if (!matched) return;
-      for (let i = 0; i < size * size; i++) {
-        if (this.craftGrid[i]) {
-          this.craftGrid[i].count--;
-          if (this.craftGrid[i].count <= 0) this.craftGrid[i] = null;
-        }
+    if (armorGrid) {
+      armorGrid.innerHTML = '';
+      const armorPlaceholders = ['slot_helmet', 'slot_chestplate', 'slot_leggings', 'slot_boots'];
+      for (let i = 0; i < 4; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'armor' && this.pickedSource.index === i) el.classList.add('picked');
+        if (inv.armor[i]) this.renderSlotContent(el, inv.armor[i]);
+        else el.innerHTML = `<img class="slot-placeholder-px" src="${this.textures.getUiIcon(armorPlaceholders[i])}" alt="" />`;
+        this.attachSlotInteractions(el, { type: 'armor', index: i });
+        armorGrid.appendChild(el);
       }
-      inv.addItem(matched.out, matched.count);
-      this.sound.playCraft();
-      this.renderInventoryModal();
-      this.updateHotbar();
-    };
+    }
+
+    // Live Pixel-Art Steve Character Preview
+    this.renderPlayerPreview();
+
+    // Classic Offhand / Shield Slot
+    const offEl = document.getElementById('offhand-slot');
+    if (offEl) {
+      const newOff = offEl.cloneNode(false);
+      offEl.parentNode.replaceChild(newOff, offEl);
+      newOff.classList.toggle('picked', !!(this.pickedSource && this.pickedSource.type === 'offhand'));
+      if (inv.offhand) {
+        this.renderSlotContent(newOff, inv.offhand);
+      } else {
+        newOff.innerHTML = `<svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="slot-placeholder-svg" aria-hidden="true"><path d="M3 2h10v6h-1v2h-1v2h-2v2H7v-2H5v-2H4V8H3V2zm1 1v5h1v2h1v2h2v1h0v-1h2v-2h1V8h1V3H4z" fill="#525252"/></svg>`;
+      }
+      this.attachSlotInteractions(newOff, { type: 'offhand', index: 0 });
+    }
+
+    // 2×2 Hand Crafting Grid
+    const cg = document.getElementById('craft-grid-2x2');
+    if (cg) {
+      cg.innerHTML = '';
+      for (let i = 0; i < 4; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'craft' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, this.craftGrid[i]);
+        this.attachSlotInteractions(el, { type: 'craft', index: i });
+        cg.appendChild(el);
+      }
+    }
+
+    // 2×2 Craft Output
+    const outEl = document.getElementById('craft-output-2x2');
+    if (outEl) this._bindCraftOutputSlot(outEl, 2);
 
     // Main Inventory (9..35)
     const mainGrid = document.getElementById('main-inv-grid');
-    mainGrid.innerHTML = '';
-    for (let i = 9; i < 36; i++) {
-      const el = document.createElement('div');
-      el.className = 'inv-slot';
-      if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
-      this.renderSlotContent(el, inv.slots[i]);
-      this.attachSlotInteractions(el, { type: 'inv', index: i });
-      mainGrid.appendChild(el);
+    if (mainGrid) {
+      mainGrid.innerHTML = '';
+      for (let i = 9; i < 36; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, inv.slots[i]);
+        this.attachSlotInteractions(el, { type: 'inv', index: i });
+        mainGrid.appendChild(el);
+      }
     }
 
     // Hotbar (0..8)
     const hbGrid = document.getElementById('modal-hotbar-grid');
-    hbGrid.innerHTML = '';
-    for (let i = 0; i < 9; i++) {
-      const el = document.createElement('div');
-      el.className = 'inv-slot';
-      if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
-      this.renderSlotContent(el, inv.slots[i]);
-      this.attachSlotInteractions(el, { type: 'inv', index: i });
-      hbGrid.appendChild(el);
+    if (hbGrid) {
+      hbGrid.innerHTML = '';
+      for (let i = 0; i < 9; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, inv.slots[i]);
+        this.attachSlotInteractions(el, { type: 'inv', index: i });
+        hbGrid.appendChild(el);
+      }
+    }
+  }
+
+  renderCraftingModal() {
+    if (!this.game) return;
+    const inv = this.game.inventory;
+
+    const curEl = document.getElementById('craft-cursor-info');
+    if (curEl) {
+      if (this.pickedSource) {
+        const it = this.getSlotByRef(this.pickedSource);
+        curEl.textContent = it ? `— Selected: ${ITEMS[it.id].name}` : '';
+      } else {
+        curEl.textContent = '';
+      }
+    }
+
+    // 3×3 Crafting Grid
+    const cg = document.getElementById('craft-grid-3x3');
+    if (cg) {
+      cg.innerHTML = '';
+      for (let i = 0; i < 9; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'craft' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, this.craftGrid[i]);
+        this.attachSlotInteractions(el, { type: 'craft', index: i });
+        cg.appendChild(el);
+      }
+    }
+
+    // 3×3 Craft Output
+    const outEl = document.getElementById('craft-output-3x3');
+    if (outEl) this._bindCraftOutputSlot(outEl, 3);
+
+    // Main Inventory (9..35)
+    const mainGrid = document.getElementById('craft-player-inv');
+    if (mainGrid) {
+      mainGrid.innerHTML = '';
+      for (let i = 9; i < 36; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, inv.slots[i]);
+        this.attachSlotInteractions(el, { type: 'inv', index: i });
+        mainGrid.appendChild(el);
+      }
+    }
+
+    // Hotbar (0..8)
+    const hbGrid = document.getElementById('craft-player-hotbar');
+    if (hbGrid) {
+      hbGrid.innerHTML = '';
+      for (let i = 0; i < 9; i++) {
+        const el = document.createElement('div');
+        el.className = 'mc-classic-slot';
+        if (this.pickedSource && this.pickedSource.type === 'inv' && this.pickedSource.index === i) el.classList.add('picked');
+        this.renderSlotContent(el, inv.slots[i]);
+        this.attachSlotInteractions(el, { type: 'inv', index: i });
+        hbGrid.appendChild(el);
+      }
     }
   }
 
@@ -1176,7 +1496,7 @@ export class UIManager {
     if (trashEl) trashEl.classList.remove('drag-active', 'drag-over');
   }
 
-  attachSlotInteractions(el, ref) {
+  attachSlotInteractions(el, ref, customClick = null) {
     el.dataset.slotType = ref.type;
     el.dataset.slotIndex = String(ref.index);
     el.addEventListener('pointerdown', (e) => {
@@ -1194,9 +1514,17 @@ export class UIManager {
         active: false
       };
     });
+    // Authentic Minecraft right-click: place 1 item from selected slot into crafting/inventory slot!
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (this.pickedSource && (this.pickedSource.type !== ref.type || this.pickedSource.index !== ref.index)) {
+        this.moveOrSwapSlot(this.pickedSource, ref, true, true);
+      }
+    });
     el.addEventListener('click', () => {
       if (this._suppressNextClick) return;
-      this.handleSlotClick(ref);
+      if (customClick) customClick();
+      else this.handleSlotClick(ref);
     });
   }
 
@@ -1210,14 +1538,21 @@ export class UIManager {
     this.pickedSource = null;
     this.sound.playPop();
     this.toast(`Deleted ${qty}${label}`);
-    this.renderInventoryModal();
-    this.updateHotbar();
+    this.refreshActiveContainerModal();
   }
 
-  moveOrSwapSlot(srcRef, dstRef, singleCraft = true) {
+  moveOrSwapSlot(srcRef, dstRef, singleCraft = true, forceSingle = false) {
     const src = this.getSlotByRef(srcRef);
     const dst = this.getSlotByRef(dstRef);
     if (!src) return;
+
+    // Furnace output is take-only (authentic Minecraft!)
+    if (dstRef.type === 'furnace_out') {
+      this.toast('Cannot place items into furnace output');
+      this.pickedSource = null;
+      this.refreshActiveContainerModal();
+      return;
+    }
 
     // Armor slot validation
     if (dstRef.type === 'armor') {
@@ -1225,17 +1560,28 @@ export class UIManager {
       if (!def || def.armorSlot !== dstRef.index) {
         this.toast('Cannot equip that here');
         this.pickedSource = null;
-        this.renderInventoryModal();
+        this.refreshActiveContainerModal();
         return;
       }
     }
 
-    // If tapping into craft grid and src has >1, place 1 item for easy crafting; dragging moves full stack/merges!
-    if (singleCraft && dstRef.type === 'craft' && src.count > 1 && (!dst || dst.id === src.id)) {
-      src.count -= 1;
-      if (!dst) this.setSlotByRef(dstRef, { id: src.id, count: 1 });
-      else dst.count += 1;
-      if (src.count <= 0) this.setSlotByRef(srcRef, null);
+    // Furnace fuel validation when dragging/placing into fuel slot
+    if (dstRef.type === 'furnace_fuel' && !FUEL_VALUES[src.id]) {
+      this.toast('That item cannot be used as fuel');
+      this.pickedSource = null;
+      this.refreshActiveContainerModal();
+      return;
+    }
+
+    // If tapping/right-clicking into craft grid (or forceSingle) and src has >1, place 1 item for authentic Minecraft pattern crafting!
+    if ((forceSingle || (singleCraft && dstRef.type === 'craft')) && src.count > 1 && (!dst || dst.id === src.id)) {
+      const max = (ITEMS[src.id] && ITEMS[src.id].stackSize) || 64;
+      if (!dst || dst.count < max) {
+        src.count -= 1;
+        if (!dst) this.setSlotByRef(dstRef, { ...src, count: 1 });
+        else dst.count += 1;
+        if (src.count <= 0) this.setSlotByRef(srcRef, null);
+      }
     } else if (dst && src.id === dst.id && (ITEMS[src.id].stackSize || 64) > 1) {
       // Merge stacks
       const max = ITEMS[src.id].stackSize || 64;
@@ -1245,6 +1591,13 @@ export class UIManager {
       if (src.count <= 0) this.setSlotByRef(srcRef, null);
       this.pickedSource = null;
     } else {
+      // Cannot swap an item into furnace_out even from reverse drag
+      if (srcRef.type === 'furnace_out' && dst) {
+        this.toast('Drop furnace output into an empty or matching slot');
+        this.pickedSource = null;
+        this.refreshActiveContainerModal();
+        return;
+      }
       // Swap
       this.setSlotByRef(dstRef, src);
       this.setSlotByRef(srcRef, dst);
@@ -1252,59 +1605,142 @@ export class UIManager {
     }
 
     this.sound.playPop();
-    this.renderInventoryModal();
-    this.updateHotbar();
+    this.refreshActiveContainerModal();
   }
 
   getSlotByRef(ref) {
+    if (!ref || !this.game) return null;
     if (ref.type === 'inv') return this.game.inventory.slots[ref.index];
     if (ref.type === 'armor') return this.game.inventory.armor[ref.index];
+    if (ref.type === 'offhand') return this.game.inventory.offhand;
     if (ref.type === 'craft') return this.craftGrid[ref.index];
+    if (ref.type === 'chest' && this.activeChestPos) {
+      const chest = this.game.world.chests.get(this.activeChestPos);
+      return chest ? chest[ref.index] : null;
+    }
+    if (this.activeFurnacePos) {
+      const f = this.game.world.furnaces.get(this.activeFurnacePos);
+      if (!f) return null;
+      if (ref.type === 'furnace_in') return f.input;
+      if (ref.type === 'furnace_fuel') return f.fuel;
+      if (ref.type === 'furnace_out') return f.output;
+    }
     return null;
   }
 
   setSlotByRef(ref, val) {
+    if (!ref || !this.game) return;
     if (ref.type === 'inv') this.game.inventory.slots[ref.index] = val;
     else if (ref.type === 'armor') this.game.inventory.armor[ref.index] = val;
+    else if (ref.type === 'offhand') this.game.inventory.offhand = val;
     else if (ref.type === 'craft') this.craftGrid[ref.index] = val;
+    else if (ref.type === 'chest' && this.activeChestPos) {
+      const chest = this.game.world.chests.get(this.activeChestPos);
+      if (chest) chest[ref.index] = val;
+    } else if (this.activeFurnacePos) {
+      const f = this.game.world.furnaces.get(this.activeFurnacePos);
+      if (!f) return;
+      if (ref.type === 'furnace_in') f.input = val;
+      else if (ref.type === 'furnace_fuel') f.fuel = val;
+      else if (ref.type === 'furnace_out') f.output = val;
+    }
   }
 
   handleSlotClick(ref) {
     if (!this.pickedSource) {
       const cur = this.getSlotByRef(ref);
       if (cur) this.pickedSource = ref;
-      this.renderInventoryModal();
-      this.updateHotbar();
+      this.refreshActiveContainerModal();
     } else if (this.pickedSource.type === ref.type && this.pickedSource.index === ref.index) {
       this.pickedSource = null;
-      this.renderInventoryModal();
-      this.updateHotbar();
+      this.refreshActiveContainerModal();
     } else {
       this.moveOrSwapSlot(this.pickedSource, ref, true);
     }
   }
 
-  renderRecipeBook() {
+  // Authentic Minecraft Recipe Book Auto-Fill: places the exact recipe pattern into the 2×2 or 3×3 grid!
+  loadRecipeIntoGrid(recipe, isTable) {
+    if (!this.game) return false;
+    const size = isTable ? 3 : 2;
+    if (recipe.table && !isTable) return false;
+
+    const inv = this.game.inventory;
+    // Return any current craft grid items first so all player items are available
+    this.returnCraftGridToInventory();
+    if (!canCraftRecipe(recipe, inv, isTable)) {
+      this.refreshActiveContainerModal();
+      return false;
+    }
+
+    const takeOneFromInv = (req) => {
+      for (let i = 0; i < inv.slots.length; i++) {
+        const s = inv.slots[i];
+        if (s && matchesItemTag(s.id, req)) {
+          const id = s.id;
+          s.count -= 1;
+          if (s.count <= 0) inv.slots[i] = null;
+          return id;
+        }
+      }
+      return null;
+    };
+
+    if (recipe.pattern) {
+      for (let r = 0; r < recipe.pattern.length; r++) {
+        for (let c = 0; c < recipe.pattern[r].length; c++) {
+          const ch = recipe.pattern[r][c];
+          if (ch === ' ') continue;
+          const req = recipe.map[ch];
+          const taken = takeOneFromInv(req);
+          if (taken) {
+            this.craftGrid[r * size + c] = { id: taken, count: 1 };
+          }
+        }
+      }
+    } else if (recipe.ingredients) {
+      let slotIdx = 0;
+      for (const [req, cnt] of Object.entries(recipe.ingredients)) {
+        for (let k = 0; k < cnt && slotIdx < size * size; k++) {
+          const taken = takeOneFromInv(req);
+          if (taken) {
+            this.craftGrid[slotIdx++] = { id: taken, count: 1 };
+          }
+        }
+      }
+    }
+
+    this.pickedSource = null;
+    this.sound.playPop();
+    this.refreshActiveContainerModal();
+    this.renderRecipeBook(isTable);
+    return true;
+  }
+
+  renderRecipeBook(isTable = this.isCraftingTable) {
     if (!this.game) return;
-    const list = document.getElementById('recipe-list');
+    const listId = isTable ? 'craft-recipe-list' : 'recipe-list';
+    const searchId = isTable ? 'craft-recipe-search' : 'recipe-search';
+    const list = document.getElementById(listId);
+    if (!list) return;
     list.innerHTML = '';
-    const q = (document.getElementById('recipe-search')?.value || '').trim().toLowerCase();
+    const q = (document.getElementById(searchId)?.value || '').trim().toLowerCase();
 
     const sorted = [...RECIPES]
       .filter((r) => {
-        if (r.table && !this.isCraftingTable) return false;
+        if (r.table && !isTable) return false;
         if (!q) return true;
         const def = ITEMS[r.out];
         return def && (def.name.toLowerCase().includes(q) || def.id.includes(q));
       })
       .sort((a, b) => {
-        const ca = canCraftRecipe(a, this.game.inventory, this.isCraftingTable) ? 0 : 1;
-        const cb = canCraftRecipe(b, this.game.inventory, this.isCraftingTable) ? 0 : 1;
+        const ca = canCraftRecipe(a, this.game.inventory, isTable) ? 0 : 1;
+        const cb = canCraftRecipe(b, this.game.inventory, isTable) ? 0 : 1;
         return ca - cb;
       });
 
     for (const r of sorted) {
-      const ok = canCraftRecipe(r, this.game.inventory, this.isCraftingTable);
+      const ok = canCraftRecipe(r, this.game.inventory, isTable);
       const outDef = ITEMS[r.out];
       if (!outDef) continue;
 
@@ -1313,20 +1749,18 @@ export class UIManager {
         .join(', ');
 
       const card = document.createElement('button');
-      card.className = `recipe-card ${ok ? 'craftable' : 'disabled'}`;
+      card.type = 'button';
+      card.className = `mc-recipe-row ${ok ? 'craftable' : 'disabled'}`;
       card.innerHTML = `
         <img src="${this.textures.getIcon(r.out)}" alt="" />
         <div>
-          <div class="recipe-card-name">${outDef.name}${r.count > 1 ? ` ×${r.count}` : ''}</div>
-          <div class="recipe-card-cost">${costStr}</div>
+          <div class="mc-recipe-row-name">${outDef.name}${r.count > 1 ? ` ×${r.count}` : ''}</div>
+          <div class="mc-recipe-row-cost">${costStr}</div>
         </div>
       `;
       card.addEventListener('click', () => {
-        if (quickCraftRecipe(r, this.game.inventory, this.isCraftingTable)) {
-          this.sound.playCraft();
-          this.renderRecipeBook();
-          this.renderInventoryModal();
-          this.updateHotbar();
+        if (!this.loadRecipeIntoGrid(r, isTable)) {
+          this.toast(`Need: ${costStr}`);
         }
       });
       list.appendChild(card);
@@ -1461,13 +1895,6 @@ export class UIManager {
     if (!f) return;
     const inv = this.game.inventory;
 
-    const inEl = document.getElementById('furnace-input');
-    const fuelEl = document.getElementById('furnace-fuel');
-    const outEl = document.getElementById('furnace-output');
-    this.renderSlotContent(inEl, f.input);
-    this.renderSlotContent(fuelEl, f.fuel);
-    this.renderSlotContent(outEl, f.output);
-
     const flame = document.getElementById('furnace-flame');
     if (flame) flame.classList.toggle('lit', f.burnTime > 0);
     const burnPct = f.burnMax > 0 ? Math.max(0, Math.min(100, (f.burnTime / f.burnMax) * 100)) : 0;
@@ -1477,36 +1904,48 @@ export class UIManager {
     if (fuelBar) fuelBar.style.height = `${burnPct}%`;
     if (cookBar) cookBar.style.width = `${cookPct}%`;
 
-    inEl.onclick = () => {
+    // Never replace slot DOM nodes mid-drag during live smelting tick updates!
+    if (this._dragState && this._dragState.active) return;
+
+    const resetSlotNode = (id, ref, item, onTap) => {
+      const oldEl = document.getElementById(id);
+      if (!oldEl) return;
+      const el = oldEl.cloneNode(false);
+      oldEl.parentNode.replaceChild(el, oldEl);
+      this.renderSlotContent(el, item);
+      this.attachSlotInteractions(el, ref, onTap);
+    };
+
+    resetSlotNode('furnace-input', { type: 'furnace_in', index: 0 }, f.input, () => {
       if (f.input && inv.addItem(f.input.id, f.input.count)) {
         f.input = null;
         this.sound.playPop();
         this.renderFurnaceModal();
         this.updateHotbar();
       }
-    };
-    fuelEl.onclick = () => {
+    });
+    resetSlotNode('furnace-fuel', { type: 'furnace_fuel', index: 0 }, f.fuel, () => {
       if (f.fuel && inv.addItem(f.fuel.id, f.fuel.count)) {
         f.fuel = null;
         this.sound.playPop();
         this.renderFurnaceModal();
         this.updateHotbar();
       }
-    };
-    outEl.onclick = () => {
+    });
+    resetSlotNode('furnace-output', { type: 'furnace_out', index: 0 }, f.output, () => {
       if (f.output && inv.addItem(f.output.id, f.output.count)) {
         f.output = null;
         this.sound.playPop();
         this.renderFurnaceModal();
         this.updateHotbar();
       }
-    };
+    });
 
     const bindFurnaceSlot = (i, parent) => {
       const el = document.createElement('div');
       el.className = 'mc-classic-slot';
       this.renderSlotContent(el, inv.slots[i]);
-      el.addEventListener('click', () => {
+      this.attachSlotInteractions(el, { type: 'inv', index: i }, () => {
         const s = inv.slots[i];
         if (!s) return;
         const max = (ITEMS[s.id] && ITEMS[s.id].stackSize) || 64;
@@ -1547,7 +1986,7 @@ export class UIManager {
     }
   }
 
-  // --- CHEST (Authentic Classic Minecraft Chest GUI!) ---
+  // --- CHEST (Authentic Classic Minecraft Chest GUI with Full Drag-and-Drop!) ---
   openChest(posKey) {
     this.openModal('chest-modal');
     this.activeChestPos = posKey;
@@ -1566,7 +2005,7 @@ export class UIManager {
       const el = document.createElement('div');
       el.className = 'mc-classic-slot';
       this.renderSlotContent(el, chest[i]);
-      el.addEventListener('click', () => {
+      this.attachSlotInteractions(el, { type: 'chest', index: i }, () => {
         if (chest[i] && inv.addItem(chest[i].id, chest[i].count)) {
           chest[i] = null;
           this.sound.playPop();
@@ -1581,7 +2020,7 @@ export class UIManager {
       const el = document.createElement('div');
       el.className = 'mc-classic-slot';
       this.renderSlotContent(el, inv.slots[i]);
-      el.addEventListener('click', () => {
+      this.attachSlotInteractions(el, { type: 'inv', index: i }, () => {
         const s = inv.slots[i];
         if (!s) return;
         const max = (ITEMS[s.id] && ITEMS[s.id].stackSize) || 64;

@@ -4,6 +4,7 @@ export class Inventory {
   constructor() {
     this.slots = new Array(36).fill(null); // 0-8 hotbar, 9-35 main
     this.armor = new Array(4).fill(null);  // 0:helmet, 1:chest, 2:legs, 3:boots
+    this.offhand = null;                   // classic shield / offhand slot
     this.selected = 0; // 0..8
   }
 
@@ -19,16 +20,8 @@ export class Inventory {
   giveStarterKit(mode) {
     this.slots.fill(null);
     this.armor.fill(null);
-    if (mode === 'creative') {
-      const starter = [
-        'grass', 'stone', 'oak_planks', 'oak_log', 'glass',
-        'bricks', 'torch', 'tnt', 'diamond_sword'
-      ];
-      starter.forEach((id, i) => {
-        this.slots[i] = this.makeStack(id, ITEMS[id].stackSize || 64);
-      });
-    }
-    // Survival starts completely empty (no tools or items) — true survival!
+    this.offhand = null;
+    // Both Survival & Creative start with a clean empty hotbar (like authentic Minecraft!)
   }
 
   makeStack(id, count = 1) {
@@ -108,6 +101,7 @@ export class Inventory {
     return {
       slots: this.slots.map((s) => (s ? { ...s } : null)),
       armor: this.armor.map((a) => (a ? { ...a } : null)),
+      offhand: this.offhand ? { ...this.offhand } : null,
       selected: this.selected
     };
   }
@@ -120,6 +114,7 @@ export class Inventory {
     if (Array.isArray(data.armor)) {
       this.armor = new Array(4).fill(null).map((_, i) => (data.armor[i] ? { ...data.armor[i] } : null));
     }
+    this.offhand = data.offhand ? { ...data.offhand } : null;
     if (typeof data.selected === 'number') this.selected = data.selected;
   }
 }

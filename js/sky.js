@@ -77,8 +77,8 @@ export class SkySystem {
       uCloudCover: { value: 1.0 }
     };
 
-    // Volumetric Atmospheric Sky Dome — GPU Early-Z Optimized (renders AFTER opaque terrain at depth=1.0 so hidden sky pixels cost 0 GPU!)
-    const domeGeo = new THREE.SphereGeometry(1600, 24, 18);
+    // Volumetric Atmospheric Sky Dome — GPU Early-Z Optimized (2800 radius for 128-chunk vistas!)
+    const domeGeo = new THREE.SphereGeometry(2800, 24, 18);
     const domeMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       side: THREE.BackSide,
@@ -246,7 +246,7 @@ export class SkySystem {
     for (let i = 0; i < 360; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(Math.random() * 0.88 + 0.08);
-      const r = 1420;
+      const r = 2480;
       starPts.push(
         r * Math.sin(phi) * Math.cos(theta),
         r * Math.cos(phi),
@@ -258,7 +258,7 @@ export class SkySystem {
     this.starMat = new THREE.PointsMaterial({
       color: 0xeaf4ff,
       map: starTex,
-      size: 16.5,
+      size: 28.0,
       transparent: true,
       opacity: 0,
       depthWrite: false,

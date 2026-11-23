@@ -13,23 +13,24 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="css/style.css?v=20" />
+  <link rel="stylesheet" href="css/style.css?v=22" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=20",
-        "./js/recipes.js": "./js/recipes.js?v=20",
-        "./js/world.js": "./js/world.js?v=20",
-        "./js/mobs.js": "./js/mobs.js?v=20",
-        "./js/player.js": "./js/player.js?v=20",
-        "./js/effects.js": "./js/effects.js?v=20",
-        "./js/audio.js": "./js/audio.js?v=20",
-        "./js/ui.js": "./js/ui.js?v=20",
-        "./js/controls.js": "./js/controls.js?v=20",
-        "./js/sky.js": "./js/sky.js?v=20",
-        "./js/panorama.js": "./js/panorama.js?v=20",
-        "./js/storage.js": "./js/storage.js?v=20"
+        "./js/blocks.js": "./js/blocks.js?v=22",
+        "./js/inventory.js": "./js/inventory.js?v=22",
+        "./js/recipes.js": "./js/recipes.js?v=22",
+        "./js/world.js": "./js/world.js?v=22",
+        "./js/mobs.js": "./js/mobs.js?v=22",
+        "./js/player.js": "./js/player.js?v=22",
+        "./js/effects.js": "./js/effects.js?v=22",
+        "./js/audio.js": "./js/audio.js?v=22",
+        "./js/ui.js": "./js/ui.js?v=22",
+        "./js/controls.js": "./js/controls.js?v=22",
+        "./js/sky.js": "./js/sky.js?v=22",
+        "./js/panorama.js": "./js/panorama.js?v=22",
+        "./js/storage.js": "./js/storage.js?v=22"
       }
     }
   </script>
@@ -150,9 +151,42 @@
                 </select>
               </div>
             </div>
-            <div class="form-row">
-              <label>Seed (optional)</label>
-              <input type="text" id="new-world-seed" placeholder="Random seed..." maxlength="20" />
+            <div class="form-row two-col">
+              <div>
+                <label>Difficulty</label>
+                <select id="new-world-difficulty">
+                  <option value="peaceful">Peaceful</option>
+                  <option value="easy">Easy</option>
+                  <option value="normal" selected>Normal</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </div>
+              <div>
+                <label>Mob Spawn Rate</label>
+                <select id="new-world-mob-rate">
+                  <option value="0">Off (0×)</option>
+                  <option value="0.5">Low (0.5×)</option>
+                  <option value="1" selected>Normal (1.0×)</option>
+                  <option value="1.8">High (1.8×)</option>
+                  <option value="3">Swarm (3.0×)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>Hunger Drain Speed</label>
+                <select id="new-world-hunger-rate">
+                  <option value="0">Off (0×)</option>
+                  <option value="0.5">Slow (0.5×)</option>
+                  <option value="1" selected>Normal (1.0×)</option>
+                  <option value="1.8">Fast (1.8×)</option>
+                  <option value="3">Extreme (3.0×)</option>
+                </select>
+              </div>
+              <div>
+                <label>Seed (optional)</label>
+                <input type="text" id="new-world-seed" placeholder="Random seed..." maxlength="20" />
+              </div>
             </div>
             <div class="form-row inline-check-row">
               <label for="new-world-cheats" class="check-label-icon">
@@ -274,7 +308,7 @@
           </div>
           <div class="setting-row">
             <label>Render Distance: <strong id="title-val-render-dist">6</strong> chunks</label>
-            <input type="range" id="title-set-render-dist" min="2" max="64" step="1" value="6" />
+            <input type="range" id="title-set-render-dist" min="2" max="128" step="1" value="6" />
           </div>
           <div class="setting-row keybinds-section">
             <div class="keybinds-header">
@@ -453,90 +487,176 @@
     </div>
   </div>
 
-  <!-- INVENTORY / CRAFTING MODAL -->
+  <!-- INVENTORY MODAL (Authentic Classic Minecraft Player Inventory GUI — Armor + Steve Preview + Offhand + 2×2 Crafting + Recipe Book!) -->
   <div id="inventory-modal" class="modal-backdrop hidden">
-    <div class="mc-window inv-window">
-      <div class="mc-window-header">
-        <span id="inv-modal-title">Inventory &amp; Crafting</span>
-        <div class="inv-tabs">
-          <button class="tab-btn active" data-tab="craft">Craft</button>
-          <button class="tab-btn" data-tab="recipes">Recipes</button>
-          <button class="tab-btn" data-tab="creative" id="tab-btn-creative">Creative</button>
-        </div>
-        <button class="close-modal-btn" data-close="inventory-modal"><img class="px-ui-icon close-px" data-px-icon="close" alt="Close" /></button>
-      </div>
-
-      <div class="inv-body">
-        <!-- Top section changes by tab -->
-        <div id="inv-tab-craft" class="inv-tab-panel">
-          <div class="craft-top-layout">
-            <div class="armor-section">
-              <div class="section-label">Armor</div>
-              <div id="armor-slots" class="armor-grid"></div>
-            </div>
-            <div class="crafting-section">
-              <div class="section-label" id="craft-grid-label">Crafting (2×2)</div>
-              <div class="craft-area">
-                <div id="craft-grid" class="craft-grid grid-2x2"></div>
-                <div class="craft-arrow"><img class="px-ui-icon arrow-px" data-px-icon="arrow_right_gold" alt="" /></div>
-                <div id="craft-output" class="inv-slot output-slot"></div>
-              </div>
-              <div class="craft-hint">Tap slot to pick/place • Double-tap to split • Or use Recipes tab</div>
-            </div>
-          </div>
+    <div class="mc-classic-shell mc-inv-shell">
+      <!-- Collapsible Left Drawer: Recipe Book OR Creative Catalog! -->
+      <div id="inv-book-panel" class="mc-classic-panel mc-book-drawer hidden">
+        <div class="mc-classic-title-row">
+          <span class="mc-classic-title" id="inv-drawer-title">Recipe Book</span>
+          <button type="button" id="btn-inv-drawer-close" class="mc-mini-close" aria-label="Close Drawer">×</button>
         </div>
 
-        <div id="inv-tab-recipes" class="inv-tab-panel hidden">
-          <div class="recipe-header">
-            <input type="text" id="recipe-search" class="recipe-search-input" placeholder="Search all block &amp; item recipes..." />
-            <span id="recipe-station-badge" class="station-badge">2×2 Hand Crafting</span>
-          </div>
-          <div id="recipe-list" class="recipe-list"></div>
+        <!-- 2x2 Crafting Recipe Book Panel -->
+        <div id="inv-drawer-recipes" class="mc-drawer-body">
+          <input type="text" id="recipe-search" class="mc-classic-search" placeholder="Search recipes..." />
+          <div id="recipe-list" class="mc-recipe-book-grid"></div>
         </div>
 
-        <div id="inv-tab-creative" class="inv-tab-panel hidden">
-          <div class="creative-toolbar">
-            <input type="text" id="creative-search" placeholder="Search every block &amp; item..." />
-            <button type="button" id="btn-creative-stack" class="mc-btn sm primary" title="Toggle Stack Amount">Give ×64</button>
-            <button type="button" id="btn-creative-clear" class="mc-btn sm danger" title="Clear Inventory">Clear</button>
+        <!-- Creative All-Items Catalog Panel (accessible via Creative button in Creative mode!) -->
+        <div id="inv-drawer-creative" class="mc-drawer-body hidden">
+          <div class="mc-creative-toprow">
+            <input type="text" id="creative-search" class="mc-classic-search" placeholder="Search all items..." />
+            <button type="button" id="btn-creative-stack" class="mc-classic-btn sm">×64</button>
+            <button type="button" id="btn-creative-clear" class="mc-classic-btn sm danger">Clear</button>
           </div>
-          <div id="creative-cats" class="creative-cats">
+          <div id="creative-cats" class="mc-creative-cats">
             <button type="button" class="cat-chip active" data-cat="all">All</button>
-            <button type="button" class="cat-chip" data-cat="building">Building</button>
+            <button type="button" class="cat-chip" data-cat="building">Blocks</button>
             <button type="button" class="cat-chip" data-cat="nature">Nature</button>
             <button type="button" class="cat-chip" data-cat="utility">Utility</button>
             <button type="button" class="cat-chip" data-cat="tools">Tools</button>
             <button type="button" class="cat-chip" data-cat="armor">Armor</button>
             <button type="button" class="cat-chip" data-cat="food">Food</button>
-            <button type="button" class="cat-chip" data-cat="materials">Materials</button>
+            <button type="button" class="cat-chip" data-cat="materials">Items</button>
           </div>
-          <div class="creative-meta-bar">
-            <span id="creative-count-label">All blocks &amp; items unlocked — tap any tile to add</span>
-          </div>
-          <div id="creative-catalog" class="creative-catalog"></div>
+          <div id="creative-count-label" class="mc-classic-subnote">Tap any item to add</div>
+          <div id="creative-catalog" class="mc-creative-grid"></div>
         </div>
+      </div>
 
-        <!-- Main Inventory + Hotbar (always visible below) -->
-        <div class="player-inv-section">
-          <div class="section-label">Inventory <span id="selected-cursor-info" class="cursor-info"></span></div>
-          <div id="main-inv-grid" class="inv-grid"></div>
-          <div class="hotbar-trash-header">
-            <div class="section-label small">Hotbar</div>
-            <div id="inv-trash-slot" class="inv-trash-dropzone" data-drop-trash="true" role="button" tabindex="0" title="Drag an item here or tap a selected item to delete">
-              <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="trash-px-svg" aria-hidden="true">
-                <rect x="5" y="1" width="6" height="2" fill="#ffd2d2"/>
-                <rect x="2" y="3" width="12" height="2" fill="#ff9e9e"/>
-                <rect x="3" y="5" width="10" height="9" fill="#d94545"/>
-                <rect x="4" y="6" width="8" height="7" fill="#a82828"/>
-                <rect x="5" y="6" width="1" height="6" fill="#ff9e9e"/>
-                <rect x="7" y="6" width="2" height="6" fill="#ff9e9e"/>
-                <rect x="10" y="6" width="1" height="6" fill="#ff9e9e"/>
-              </svg>
-              <span class="inv-trash-label">Delete Item <small>(Drag here or tap selected)</small></span>
+      <!-- Main Classic Minecraft Player Inventory Panel (Matches Reference Screenshot 2!) -->
+      <div class="mc-classic-panel mc-inv-panel">
+        <button class="mc-classic-close" data-close="inventory-modal" aria-label="Close">×</button>
+
+        <div class="mc-inv-top">
+          <!-- Left: 4 Vertical Armor Slots + Black Steve Preview + Offhand Shield Slot -->
+          <div class="mc-inv-character-cluster">
+            <div id="armor-slots" class="mc-armor-col"></div>
+
+            <div id="inv-player-preview" class="mc-player-preview-box" aria-label="Player Preview">
+              <canvas id="inv-steve-canvas" width="128" height="196"></canvas>
+            </div>
+
+            <div class="mc-offhand-col">
+              <div id="offhand-slot" class="mc-classic-slot mc-offhand-slot" title="Offhand / Shield"></div>
             </div>
           </div>
-          <div id="modal-hotbar-grid" class="inv-grid hotbar-9"></div>
+
+          <!-- Right: "Crafting" + 2x2 Grid -> Arrow -> Output + Green Recipe Book + Trash + Creative -->
+          <div class="mc-inv-craft-cluster">
+            <div class="mc-classic-title mc-craft-title">Crafting</div>
+            <div class="mc-inv-craft-row">
+              <div id="craft-grid-2x2" class="mc-craft-grid-2x2"></div>
+              <svg viewBox="0 0 22 16" shape-rendering="crispEdges" class="mc-static-arrow-svg" aria-hidden="true">
+                <path d="M0 6h14V2h1v1h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1h-1v1h-1v1h-1v1h-1v-4H0V6z" fill="#8b8b8b"/>
+              </svg>
+              <div id="craft-output-2x2" class="mc-classic-slot" title="Craft Output"></div>
+            </div>
+
+            <div class="mc-inv-book-row">
+              <button type="button" id="btn-inv-book" class="mc-recipe-book-btn" title="Toggle Recipe Book" aria-label="Recipe Book">
+                <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="mc-green-book-svg">
+                  <rect x="3" y="2" width="10" height="12" fill="#141414"/>
+                  <rect x="2" y="3" width="12" height="10" fill="#141414"/>
+                  <rect x="4" y="3" width="8" height="10" fill="#2e7d22"/>
+                  <rect x="3" y="4" width="10" height="8" fill="#3fa32e"/>
+                  <rect x="4" y="4" width="7" height="2" fill="#63d14b"/>
+                  <rect x="5" y="6" width="5" height="2" fill="#4fbf3a"/>
+                  <rect x="3" y="10" width="9" height="2" fill="#1e5916"/>
+                  <rect x="5" y="11" width="7" height="2" fill="#ece6d8"/>
+                  <rect x="4" y="12" width="8" height="1" fill="#bfb7a4"/>
+                  <rect x="6" y="5" width="3" height="1" fill="#e8ffd8"/>
+                  <rect x="7" y="7" width="2" height="1" fill="#e8ffd8"/>
+                </svg>
+              </button>
+
+              <button type="button" id="btn-inv-creative" class="mc-classic-btn creative-toggle-btn hidden" title="Open Creative Item Catalog">
+                Creative
+              </button>
+
+              <div id="inv-trash-slot" class="mc-classic-trash-slot" data-drop-trash="true" role="button" tabindex="0" title="Drag item here or tap selected item to Delete">
+                <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="mc-trash-svg" aria-hidden="true">
+                  <rect x="5" y="1" width="6" height="2" fill="#ffd2d2"/>
+                  <rect x="2" y="3" width="12" height="2" fill="#ff9e9e"/>
+                  <rect x="3" y="5" width="10" height="9" fill="#d94545"/>
+                  <rect x="4" y="6" width="8" height="7" fill="#9c2222"/>
+                  <rect x="5" y="6" width="1" height="6" fill="#ff9e9e"/>
+                  <rect x="7" y="6" width="2" height="6" fill="#ff9e9e"/>
+                  <rect x="10" y="6" width="1" height="6" fill="#ff9e9e"/>
+                </svg>
+              </div>
+            </div>
+          </div>
         </div>
+
+        <div id="selected-cursor-info" class="mc-classic-cursor-hint"></div>
+        <div id="main-inv-grid" class="mc-classic-grid"></div>
+        <div id="modal-hotbar-grid" class="mc-classic-grid mc-classic-hotbar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CRAFTING TABLE MODAL (Authentic Classic Minecraft 3×3 Crafting Table GUI — Matches Reference Screenshot 1!) -->
+  <div id="crafting-modal" class="modal-backdrop hidden">
+    <div class="mc-classic-shell">
+      <!-- Collapsible Left Recipe Book Drawer (toggled by the green book button!) -->
+      <div id="craft-book-panel" class="mc-classic-panel mc-book-drawer hidden">
+        <div class="mc-classic-title-row">
+          <span class="mc-classic-title">Crafting Recipes</span>
+          <button type="button" id="btn-craft-drawer-close" class="mc-mini-close" aria-label="Close">×</button>
+        </div>
+        <div class="mc-drawer-body">
+          <input type="text" id="craft-recipe-search" class="mc-classic-search" placeholder="Search recipes..." />
+          <div id="craft-recipe-list" class="mc-recipe-book-grid"></div>
+        </div>
+      </div>
+
+      <div class="mc-classic-panel mc-crafting-panel">
+        <button class="mc-classic-close" data-close="crafting-modal" aria-label="Close">×</button>
+
+        <div class="mc-crafting-stage">
+          <!-- Left: Green Minecraft Recipe Book Button -->
+          <div class="mc-crafting-book-col">
+            <button type="button" id="btn-craft-book" class="mc-recipe-book-btn" title="Toggle Crafting Recipe Book" aria-label="Crafting Recipe Book">
+              <svg viewBox="0 0 16 16" shape-rendering="crispEdges" class="mc-green-book-svg">
+                <rect x="3" y="2" width="10" height="12" fill="#141414"/>
+                <rect x="2" y="3" width="12" height="10" fill="#141414"/>
+                <rect x="4" y="3" width="8" height="10" fill="#2e7d22"/>
+                <rect x="3" y="4" width="10" height="8" fill="#3fa32e"/>
+                <rect x="4" y="4" width="7" height="2" fill="#63d14b"/>
+                <rect x="5" y="6" width="5" height="2" fill="#4fbf3a"/>
+                <rect x="3" y="10" width="9" height="2" fill="#1e5916"/>
+                <rect x="5" y="11" width="7" height="2" fill="#ece6d8"/>
+                <rect x="4" y="12" width="8" height="1" fill="#bfb7a4"/>
+                <rect x="6" y="5" width="3" height="1" fill="#e8ffd8"/>
+                <rect x="7" y="7" width="2" height="1" fill="#e8ffd8"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Center: "Crafting" Title + 3×3 Recessed Grid -->
+          <div class="mc-crafting-grid-col">
+            <div class="mc-classic-title mc-craft-title">Crafting</div>
+            <div id="craft-grid-3x3" class="mc-craft-grid-3x3"></div>
+          </div>
+
+          <!-- Center-Right: Crisp Pixel Grey Arrow -->
+          <div class="mc-crafting-arrow-col">
+            <svg viewBox="0 0 22 16" shape-rendering="crispEdges" class="mc-static-arrow-svg large" aria-hidden="true">
+              <path d="M0 6h14V2h1v1h1v1h1v1h1v1h1v1h1v2h-1v1h-1v1h-1v1h-1v1h-1v1h-1v-4H0V6z" fill="#8b8b8b"/>
+            </svg>
+          </div>
+
+          <!-- Right: Large Recessed Output Slot -->
+          <div class="mc-crafting-out-col">
+            <div id="craft-output-3x3" class="mc-classic-slot mc-classic-output" title="Craft Output"></div>
+          </div>
+        </div>
+
+        <div class="mc-classic-label">Inventory <span id="craft-cursor-info" class="mc-classic-cursor-inline"></span></div>
+        <div id="craft-player-inv" class="mc-classic-grid"></div>
+        <div id="craft-player-hotbar" class="mc-classic-grid mc-classic-hotbar"></div>
       </div>
     </div>
   </div>
@@ -660,7 +780,7 @@
         <div class="settings-list">
           <div class="setting-row">
             <label>Render Distance: <strong id="val-render-dist">6</strong> chunks</label>
-            <input type="range" id="set-render-dist" min="2" max="64" step="1" value="6" />
+            <input type="range" id="set-render-dist" min="2" max="128" step="1" value="6" />
           </div>
           <div class="setting-row">
             <label>Touch Sensitivity: <strong id="val-sensitivity">1.0</strong></label>
@@ -669,6 +789,35 @@
           <div class="setting-row">
             <label>FOV: <strong id="val-fov">72</strong>°</label>
             <input type="range" id="set-fov" min="55" max="100" step="1" value="72" />
+          </div>
+          <div class="setting-row inline">
+            <label>Difficulty</label>
+            <select id="set-difficulty">
+              <option value="peaceful">Peaceful</option>
+              <option value="easy">Easy</option>
+              <option value="normal" selected>Normal</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+          <div class="setting-row inline">
+            <label>Mob Spawn Rate</label>
+            <select id="set-mob-rate">
+              <option value="0">Off (0×)</option>
+              <option value="0.5">Low (0.5×)</option>
+              <option value="1" selected>Normal (1.0×)</option>
+              <option value="1.8">High (1.8×)</option>
+              <option value="3">Swarm (3.0×)</option>
+            </select>
+          </div>
+          <div class="setting-row inline">
+            <label>Hunger Drain Speed</label>
+            <select id="set-hunger-rate">
+              <option value="0">Off (0×)</option>
+              <option value="0.5">Slow (0.5×)</option>
+              <option value="1" selected>Normal (1.0×)</option>
+              <option value="1.8">Fast (1.8×)</option>
+              <option value="3">Extreme (3.0×)</option>
+            </select>
           </div>
           <div class="setting-row inline">
             <label>Shaders &amp; Graphics</label>
@@ -764,6 +913,12 @@
           <button class="cmd-chip" data-cheat="true" data-cmd="/effect regen 60"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Regen</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/effect nightvision 90"><img class="px-ui-icon chip-px" data-px-icon="potion" alt="" /> Night Vision</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/effect clear"><img class="px-ui-icon chip-px" data-px-icon="close" alt="" /> Clear FX</button>
+          <button class="cmd-chip" data-cmd="/difficulty peaceful">Peaceful</button>
+          <button class="cmd-chip" data-cmd="/difficulty easy">Easy</button>
+          <button class="cmd-chip" data-cmd="/difficulty normal">Normal</button>
+          <button class="cmd-chip" data-cmd="/difficulty hard">Hard</button>
+          <button class="cmd-chip" data-cmd="/mobrate swarm">Mobs: Swarm</button>
+          <button class="cmd-chip" data-cmd="/hungerrate slow">Hunger: Slow</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give bed 1"><img class="px-ui-icon chip-px" data-px-icon="bed" alt="" /> Red Bed</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give torch 32"><img class="px-ui-icon chip-px" data-px-icon="torch" alt="" /> Torches</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give diamond_pickaxe 1"><img class="px-ui-icon chip-px" data-px-icon="pickaxe" alt="" /> Diamond Pick</button>
@@ -820,6 +975,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=20"></script>
+  <script type="module" src="js/main.js?v=22"></script>
 </body>
 </html>
