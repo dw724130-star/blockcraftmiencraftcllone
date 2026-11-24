@@ -577,15 +577,54 @@ export class TextureManager {
       px(c, x, y, 12, 0, '#966c3e', 2, 16);
       for (let iy of [2, 6, 10, 14]) px(c, x, y, 2, iy, '#b58852', 12, 2);
     });
+    // Clean, authentic Minecraft furrowed Farmland (no harsh grainy noise!)
     this.addTile('farmland_top', (c, x, y) => {
-      fillNoise(c, x, y, '#734e2e', 12, 75);
-      for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#52341b', 16, 1);
+      const soil = ['#7c5534', '#724d2e', '#865d3a'];
+      for (let iy = 0; iy < 16; iy++) {
+        const isFurrow = iy % 4 === 1;
+        const isRidge = iy % 4 === 2;
+        for (let ix = 0; ix < 16; ix++) {
+          const idx = Math.floor(pxHash(ix >> 1, iy, 75) * soil.length);
+          px(c, x, y, ix, iy, isFurrow ? '#52351d' : (isRidge ? '#8c6340' : soil[idx]));
+        }
+      }
     });
-    // Rich dark moist Hydrated Farmland (water within 4 blocks — matches Screenshot 2!)
+    // Rich dark moist Hydrated Farmland (water within 4 blocks)
     this.addTile('farmland_wet_top', (c, x, y) => {
-      fillNoise(c, x, y, '#382110', 8, 76);
-      for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#211208', 16, 1);
-      for (let iy = 2; iy < 16; iy += 3) px(c, x, y, 0, iy, '#472c16', 16, 1);
+      const soil = ['#3e2512', '#351f0f', '#462a16'];
+      for (let iy = 0; iy < 16; iy++) {
+        const isFurrow = iy % 4 === 1;
+        const isRidge = iy % 4 === 2;
+        for (let ix = 0; ix < 16; ix++) {
+          const idx = Math.floor(pxHash(ix >> 1, iy, 76) * soil.length);
+          px(c, x, y, ix, iy, isFurrow ? '#221308' : (isRidge ? '#4d3019' : soil[idx]));
+        }
+      }
+    });
+    // Authentic Minecraft Shovel Dirt Path (warm golden-tan packed road top + path side rim!)
+    this.addTile('dirt_path_top', (c, x, y) => {
+      const tans = ['#947840', '#9f8248', '#a98c50', '#8b6f39', '#b59859'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 141);
+          const fine = pxHash(ix, iy, 142);
+          if (fine > 0.91) {
+            px(c, x, y, ix, iy, '#7a5f32'); // compacted dirt speck
+          } else {
+            const idx = Math.min(tans.length - 1, Math.floor((clump * 0.65 + fine * 0.35) * tans.length));
+            px(c, x, y, ix, iy, tans[idx]);
+          }
+        }
+      }
+    });
+    this.addTile('dirt_path_side', (c, x, y) => {
+      drawMinecraftDirt(c, x, y, 143);
+      for (let ix = 0; ix < 16; ix++) {
+        const lipH = 2 + (pxHash(ix, 0, 144) > 0.45 ? 1 : 0);
+        for (let iy = 0; iy < lipH; iy++) {
+          px(c, x, y, ix, iy, iy === 0 ? '#b39557' : (iy === 1 ? '#9c7f45' : '#856936'));
+        }
+      }
     });
     // 8 Authentic Progressive Minecraft Wheat Growth Stages (0=tiny sprout .. 7=lush golden ripe wheat!)
     for (let st = 0; st <= 7; st++) {

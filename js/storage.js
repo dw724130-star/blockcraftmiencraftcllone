@@ -35,6 +35,9 @@ export const DEFAULT_SETTINGS = {
   difficulty: 'normal',
   mobSpawnRate: 1.0,
   hungerRate: 1.0,
+  farmSpeed: 1.0,      // Crop / Wheat growth speed multiplier (0.5x .. 10x)
+  generateStructures: true,
+  bonusChest: false,
   controlStyle: 'joystick', // 'joystick' | 'dpad'
   showTouch: true,
   sound: true,

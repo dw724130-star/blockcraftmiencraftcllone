@@ -14,29 +14,29 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="css/style.css?v=31" />
+  <link rel="stylesheet" href="css/style.css?v=32" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=31",
-        "./js/textures.js": "./js/textures.js?v=31",
-        "./js/mods.js": "./js/mods.js?v=31",
-        "./js/inventory.js": "./js/inventory.js?v=31",
-        "./js/recipes.js": "./js/recipes.js?v=31",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=31",
-        "./js/noise.js": "./js/noise.js?v=31",
-        "./js/world.js": "./js/world.js?v=31",
-        "./js/mobs.js": "./js/mobs.js?v=31",
-        "./js/player.js": "./js/player.js?v=31",
-        "./js/effects.js": "./js/effects.js?v=31",
-        "./js/audio.js": "./js/audio.js?v=31",
-        "./js/ui.js": "./js/ui.js?v=31",
-        "./js/controls.js": "./js/controls.js?v=31",
-        "./js/sky.js": "./js/sky.js?v=31",
-        "./js/postfx.js": "./js/postfx.js?v=31",
-        "./js/panorama.js": "./js/panorama.js?v=31",
-        "./js/storage.js": "./js/storage.js?v=31"
+        "./js/blocks.js": "./js/blocks.js?v=32",
+        "./js/textures.js": "./js/textures.js?v=32",
+        "./js/mods.js": "./js/mods.js?v=32",
+        "./js/inventory.js": "./js/inventory.js?v=32",
+        "./js/recipes.js": "./js/recipes.js?v=32",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=32",
+        "./js/noise.js": "./js/noise.js?v=32",
+        "./js/world.js": "./js/world.js?v=32",
+        "./js/mobs.js": "./js/mobs.js?v=32",
+        "./js/player.js": "./js/player.js?v=32",
+        "./js/effects.js": "./js/effects.js?v=32",
+        "./js/audio.js": "./js/audio.js?v=32",
+        "./js/ui.js": "./js/ui.js?v=32",
+        "./js/controls.js": "./js/controls.js?v=32",
+        "./js/sky.js": "./js/sky.js?v=32",
+        "./js/postfx.js": "./js/postfx.js?v=32",
+        "./js/panorama.js": "./js/panorama.js?v=32",
+        "./js/storage.js": "./js/storage.js?v=32"
       }
     }
   </script>
@@ -129,92 +129,114 @@
       </div>
     </div>
 
-    <!-- SINGLEPLAYER SUB-SCREEN (Select World & Create New World) -->
+    <!-- SINGLEPLAYER SUB-SCREEN (Select World List -> Create New World!) -->
     <div id="title-view-singleplayer" class="java-subscreen hidden">
       <div class="java-sub-header">
         <h2><img class="px-ui-icon btn-px" data-px-icon="play" alt="" /> Select World</h2>
       </div>
-      <div class="java-sub-body">
-        <div id="title-main-view">
-          <div class="create-world-box">
-            <h3>Create New World</h3>
-            <div class="form-row">
-              <label>World Name</label>
-              <input type="text" id="new-world-name" value="My World" maxlength="24" />
-            </div>
-            <div class="form-row two-col">
-              <div>
-                <label>Game Mode</label>
-                <select id="new-world-mode">
-                  <option value="survival">Survival</option>
-                  <option value="creative">Creative (Fly)</option>
-                </select>
-              </div>
-              <div>
-                <label>World Type</label>
-                <select id="new-world-type">
-                  <option value="infinite">Infinite Biomes</option>
-                  <option value="flat">Superflat</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-row two-col">
-              <div>
-                <label>Difficulty</label>
-                <select id="new-world-difficulty">
-                  <option value="peaceful">Peaceful</option>
-                  <option value="easy">Easy</option>
-                  <option value="normal" selected>Normal</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </div>
-              <div>
-                <label>Mob Spawn Rate</label>
-                <select id="new-world-mob-rate">
-                  <option value="0">Off (0×)</option>
-                  <option value="0.5">Low (0.5×)</option>
-                  <option value="1" selected>Normal (1.0×)</option>
-                  <option value="1.8">High (1.8×)</option>
-                  <option value="3">Swarm (3.0×)</option>
-                </select>
-              </div>
-            </div>
-            <div class="form-row two-col">
-              <div>
-                <label>Hunger Drain Speed</label>
-                <select id="new-world-hunger-rate">
-                  <option value="0">Off (0×)</option>
-                  <option value="0.5">Slow (0.5×)</option>
-                  <option value="1" selected>Normal (1.0×)</option>
-                  <option value="1.8">Fast (1.8×)</option>
-                  <option value="3">Extreme (3.0×)</option>
-                </select>
-              </div>
-              <div>
-                <label>Seed (optional)</label>
-                <input type="text" id="new-world-seed" placeholder="Random seed..." maxlength="20" />
-              </div>
-            </div>
-            <div class="form-row inline-check-row">
-              <label for="new-world-cheats" class="check-label-icon">
-                <img class="px-ui-icon inline-px" data-px-icon="cheat" alt="" />
-                Allow Cheats (/give, /effect, /time)
-              </label>
-              <input type="checkbox" id="new-world-cheats" />
-            </div>
-            <button id="btn-create-world" class="mc-stone-btn primary large">Create New World &amp; Play</button>
-          </div>
-
-          <div class="saved-worlds-box">
+      <div class="java-sub-body sp-select-body">
+        <div class="saved-worlds-box sp-full-worlds">
+          <div class="sp-list-top">
             <h3>Saved Worlds</h3>
-            <div id="saved-worlds-list" class="worlds-list">
-              <div class="empty-worlds">No saved worlds yet.</div>
-            </div>
+            <span class="sp-list-hint">Tap a world to play or create a brand new adventure</span>
+          </div>
+          <div id="saved-worlds-list" class="worlds-list">
+            <div class="empty-worlds">No saved worlds yet. Tap "Create New World" below to begin!</div>
           </div>
         </div>
       </div>
-      <div class="java-sub-footer">
-        <button class="mc-stone-btn java-back-btn" data-title-view="home">Back to Title Screen</button>
+      <div class="java-sub-footer sp-footer-grid">
+        <button id="btn-open-create-world" class="mc-stone-btn primary java-footer-btn" data-title-view="create-world">Create New World</button>
+        <button class="mc-stone-btn java-footer-btn" data-title-view="home">Cancel</button>
+      </div>
+    </div>
+
+    <!-- CLASSIC MINECRAFT CREATE NEW WORLD SUB-SCREEN (Authentic Stone Buttons + More World Options!) -->
+    <div id="title-view-create-world" class="java-subscreen cw-dirt-screen hidden">
+      <div class="cw-stage">
+        <h2 class="cw-title">Create New World</h2>
+
+        <!-- MAIN CREATE WORLD VIEW -->
+        <div id="cw-page-main" class="cw-page">
+          <div class="cw-input-block">
+            <label for="new-world-name" class="cw-input-label">World Name</label>
+            <input type="text" id="new-world-name" class="cw-mc-input" value="My World" maxlength="24" />
+            <div class="cw-input-sub">Will be saved in: <span id="cw-save-hint">My World</span></div>
+          </div>
+
+          <div class="cw-btn-grid">
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-mode" class="mc-stone-btn cw-opt-btn">Game Mode: Survival</button>
+              <div id="cw-sub-mode" class="cw-opt-sub">Search for resources, crafting, gain levels, health and hunger</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-difficulty" class="mc-stone-btn cw-opt-btn">Difficulty: Normal</button>
+              <div id="cw-sub-difficulty" class="cw-opt-sub">Standard survival challenge &amp; hostile mobs</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-cheats" class="mc-stone-btn cw-opt-btn">Allow Cheats: OFF</button>
+              <div class="cw-opt-sub">Commands like /gamemode, /give, /tp</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-type" class="mc-stone-btn cw-opt-btn">World Type: Default</button>
+              <div id="cw-sub-type" class="cw-opt-sub">Infinite Biomes, Oceans, Villages &amp; Pyramids</div>
+            </div>
+          </div>
+
+          <div class="cw-center-row">
+            <button type="button" id="cw-btn-more" class="mc-stone-btn cw-mid-btn">More World Options...</button>
+          </div>
+        </div>
+
+        <!-- MORE WORLD OPTIONS VIEW (Authentic Classic Minecraft Seed & World Options Layout!) -->
+        <div id="cw-page-more" class="cw-page hidden">
+          <div class="cw-input-block">
+            <label for="new-world-seed" class="cw-input-label">Seed for the World Generator</label>
+            <input type="text" id="new-world-seed" class="cw-mc-input" placeholder="" maxlength="20" />
+            <div class="cw-input-sub">Leave blank for a random seed</div>
+          </div>
+
+          <div class="cw-btn-grid">
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-structures" class="mc-stone-btn cw-opt-btn">Generate Structures: ON</button>
+              <div class="cw-opt-sub">Villages, pyramids, castles, shipwrecks etc</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-type-2" class="mc-stone-btn cw-opt-btn">World Type: Default</button>
+              <div id="cw-sub-type-2" class="cw-opt-sub">Infinite Biomes, Oceans &amp; Mountains</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-cheats-2" class="mc-stone-btn cw-opt-btn">Allow Cheats: OFF</button>
+              <div class="cw-opt-sub">Commands like /gamemode, /give, /tp</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-bonus" class="mc-stone-btn cw-opt-btn">Bonus Chest: OFF</button>
+              <div class="cw-opt-sub">Starter chest with tools, seeds &amp; torches</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-mob-rate" class="mc-stone-btn cw-opt-btn">Mob Spawn Rate: Normal (1.0×)</button>
+              <div class="cw-opt-sub">Controls wildlife &amp; monster density</div>
+            </div>
+            <div class="cw-option-cell">
+              <button type="button" id="cw-btn-hunger-rate" class="mc-stone-btn cw-opt-btn">Hunger Speed: Normal (1.0×)</button>
+              <div class="cw-opt-sub">Controls how quickly hunger drains</div>
+            </div>
+            <div class="cw-option-cell cw-span-2">
+              <button type="button" id="cw-btn-farm-speed" class="mc-stone-btn cw-opt-btn">Farm Speed: Normal (1.0×)</button>
+              <div class="cw-opt-sub">Wheat &amp; crop growth speed multiplier</div>
+            </div>
+          </div>
+
+          <div class="cw-center-row">
+            <button type="button" id="cw-btn-done" class="mc-stone-btn cw-mid-btn">Done</button>
+          </div>
+        </div>
+
+        <!-- BOTTOM ACTION ROW (Create New World / Cancel) -->
+        <div class="cw-bottom-row">
+          <button type="button" id="btn-create-world" class="mc-stone-btn cw-create-btn">Create New World</button>
+          <button type="button" class="mc-stone-btn cw-cancel-btn" data-title-view="singleplayer">Cancel</button>
+        </div>
       </div>
     </div>
 
@@ -320,6 +342,17 @@
           <div class="setting-row">
             <label>Creative Flight Speed: <strong id="title-val-flight-speed">1.0</strong>×</label>
             <input type="range" id="title-set-flight-speed" min="1" max="10" step="0.5" value="1" />
+          </div>
+          <div class="setting-row inline">
+            <label>Farm Growth Speed</label>
+            <select id="title-set-farm-speed">
+              <option value="0">Paused (0×)</option>
+              <option value="0.5">Slow (0.5×)</option>
+              <option value="1" selected>Normal (1.0×)</option>
+              <option value="2">Fast (2.0×)</option>
+              <option value="4">Turbo (4.0×)</option>
+              <option value="10">Hyper (10×)</option>
+            </select>
           </div>
           <div class="setting-row keybinds-section">
             <div class="keybinds-header">
@@ -836,6 +869,17 @@
             </select>
           </div>
           <div class="setting-row inline">
+            <label>Farm Growth Speed</label>
+            <select id="set-farm-speed">
+              <option value="0">Paused (0×)</option>
+              <option value="0.5">Slow (0.5×)</option>
+              <option value="1" selected>Normal (1.0×)</option>
+              <option value="2">Fast (2.0×)</option>
+              <option value="4">Turbo (4.0×)</option>
+              <option value="10">Hyper (10×)</option>
+            </select>
+          </div>
+          <div class="setting-row inline">
             <label>Shaders &amp; Graphics</label>
             <select id="set-shaders">
               <option value="ultra">Ultra BSL (Shadows + Mirror Water + Clouds)</option>
@@ -935,6 +979,7 @@
           <button class="cmd-chip" data-cmd="/difficulty hard">Hard</button>
           <button class="cmd-chip" data-cmd="/mobrate swarm">Mobs: Swarm</button>
           <button class="cmd-chip" data-cmd="/hungerrate slow">Hunger: Slow</button>
+          <button class="cmd-chip" data-cmd="/farmspeed turbo">Farm: Turbo (4×)</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give bed 1"><img class="px-ui-icon chip-px" data-px-icon="bed" alt="" /> Red Bed</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give torch 32"><img class="px-ui-icon chip-px" data-px-icon="torch" alt="" /> Torches</button>
           <button class="cmd-chip" data-cheat="true" data-cmd="/give diamond_pickaxe 1"><img class="px-ui-icon chip-px" data-px-icon="pickaxe" alt="" /> Diamond Pick</button>
@@ -991,6 +1036,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=31"></script>
+  <script type="module" src="js/main.js?v=32"></script>
 </body>
 </html>

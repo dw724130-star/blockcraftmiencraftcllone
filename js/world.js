@@ -308,6 +308,7 @@ export class World {
     this.seedStr = String(options.seed || Math.floor(Math.random() * 999999));
     this.seed = hashString(this.seedStr);
     this.worldType = options.worldType || 'infinite';
+    this.generateStructures = options.generateStructures !== false;
 
     this.heightNoise = new Noise(this.seed);
     this.biomeNoise = new Noise(this.seed + 101);
@@ -336,6 +337,9 @@ export class World {
     this.onFluidMix = null;       // optional callback (x, y, z, newBlockId)
     this.onFireIgniteTnt = null;  // optional callback (x, y, z)
     this.megaStructures = new Map(); // numeric key -> { type, x, y, z, radius, villagersSpawned }
+    this._roadRegionCache = new Map(); // "rgx,rgz" -> Array<{ ax, az, bx, bz, bend, minX, maxX, minZ, maxZ }>
+    this._megaChunkCache = new Map();  // chunkKey -> mega info | null (eliminates repeated noise lookups!)
+    this._villageChunkCache = new Map(); // chunkKey -> village info | null
     this._lastChunkPcx = 1e9;
     this._lastChunkPcz = 1e9;
     this._lastChunkRD = -1;
@@ -1239,14 +1243,17 @@ export class World {
   sampleColumn(wx, wz) {
     if (this.worldType === 'flat') return { biome: 'Plains', height: SEA_LEVEL + 2 };
 
-    // Wider macro climate & terrain fields (~2.3x larger biomes, landmasses, valleys & mountain ranges!)
+    // Wider macro climate & terrain fields (~2.3x larger biomes, landmasses, valleys, sweeping oceans & mountain ranges!)
     const temp = this.biomeNoise.fbm2D(wx * 0.00145, wz * 0.00145, 3);
     const moist = this.moistureNoise.fbm2D(wx * 0.00145, wz * 0.00145, 3);
     const mountField = this.heightNoise.fbm2D(wx * 0.00155 + 50, wz * 0.00155 - 50, 3);
     const cont = this.heightNoise.fbm2D(wx * 0.0018, wz * 0.0018, 4);
+    const oceanDistSq = wx * wx + wz * wz;
+    const isOceanZone = cont < -0.175 && mountField < 0.04 && oceanDistSq > 140 * 140;
 
     let biome = 'Plains';
-    if (mountField > 0.145) biome = 'Mountains';
+    if (isOceanZone) biome = cont < -0.265 ? 'Deep Ocean' : 'Ocean';
+    else if (mountField > 0.145) biome = 'Mountains';
     else if (temp > 0.21 && moist < -0.05) biome = 'Badlands';
     else if (temp > 0.13 && moist < 0.01) biome = 'Desert';
     else if (temp > 0.10 && moist < 0.11) biome = 'Savanna';
@@ -1319,8 +1326,17 @@ export class World {
     }
 
     const terrace = Math.sin(hills * 3.14159) * 0.5 * flatBlend;
-    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve;
-    if (biome === 'Swamp' && mSmooth < 0.15) {
+    // Deep sweeping Ocean basin carve with gentle sandy seabed dunes!
+    let oceanCarve = 0;
+    if (isOceanZone) {
+      const oRaw = Math.max(0, Math.min(1, (-0.175 - cont) / 0.18));
+      const oSmooth = oRaw * oRaw * (3 - 2 * oRaw);
+      oceanCarve = 10.5 + oSmooth * 18.5;
+    }
+    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve - oceanCarve;
+    if (isOceanZone) {
+      baseH = Math.min(baseH, SEA_LEVEL - 4.5 + hills * 2.5);
+    } else if (biome === 'Swamp' && mSmooth < 0.15) {
       // Keep swamps as lush low-lying wetlands with shallow marsh channels
       baseH = Math.min(baseH, SEA_LEVEL + 3.5 + hills * 3.0);
       baseH = Math.max(baseH, SEA_LEVEL - 2.5);
@@ -1335,6 +1351,9 @@ export class World {
     const moist = this.moistureNoise.fbm2D(wx * 0.00145, wz * 0.00145, 3);
     const mount = this.heightNoise.fbm2D(wx * 0.00155 + 50, wz * 0.00155 - 50, 3);
     const cont = this.heightNoise.fbm2D(wx * 0.0018, wz * 0.0018, 4);
+    if (cont < -0.175 && mount < 0.04 && (wx * wx + wz * wz) > 140 * 140) {
+      return cont < -0.265 ? 'Deep Ocean' : 'Ocean';
+    }
     if (mount > 0.145) return 'Mountains';
     if (temp > 0.21 && moist < -0.05) return 'Badlands';
     if (temp > 0.13 && moist < 0.01) return 'Desert';
@@ -1388,24 +1407,37 @@ export class World {
   }
 
   isVillageCenter(vcx, vcz) {
-    if (this.worldType === 'flat') return false;
-    // Guaranteed grand 3x3 starter village near spawn centered at chunk (2, 1)!
-    if (vcx === 2 && vcz === 1) return true;
-    // Spaced 11x11 chunk grid so huge 3x3 villages never collide
-    if (((vcx % 11) + 11) % 11 !== 4 || ((vcz % 11) + 11) % 11 !== 4) return false;
-    return coordHash(vcx * 13, vcz * 17, this.seed + 555) > 0.25;
+    if (this.worldType === 'flat' || !this.generateStructures) return false;
+    // Guaranteed Grand 5x5 (80x80 block!) starter village near spawn centered at chunk (3, 2)!
+    if (vcx === 3 && vcz === 2) return true;
+    // Spread out on a wide 16x16 chunk grid (256x256 blocks) so huge 5x5 & 3x3 villages never crowd!
+    if (((vcx % 16) + 16) % 16 !== 5 || ((vcz % 16) + 16) % 16 !== 5) return false;
+    return coordHash(vcx * 13, vcz * 17, this.seed + 555) > 0.24;
   }
 
-  // Deterministic Mega-Structure Locator (Great Pyramid 4x4 chunks & Grand Citadel 3x3 chunks!)
-  // Returns { type, name, originCx, originCz, sizeChunks, dx, dz, baseY, centerWx, centerWz, villagerCount }
-  getMegaStructureForChunk(cx, cz) {
-    if (this.worldType === 'flat') return null;
+  getVillageRadius(vcx, vcz) {
+    if (vcx === 3 && vcz === 2) return 2; // Starter village is a Grand 5x5 Town!
+    return coordHash(vcx * 37, vcz * 53, this.seed + 619) > 0.40 ? 2 : 1; // 60% Grand 5x5 Towns, 40% Cozy 3x3 Villages!
+  }
 
-    // 1. Guaranteed Starter Mega-Structure near spawn: The Great Pyramid of Secrets!
-    // Spans 4x4 chunks: cx in [-7..-4], cz in [-6..-3] (64x64 blocks, ~95m NW of spawn!)
-    if (cx >= -7 && cx <= -4 && cz >= -6 && cz <= -3) {
-      const originCx = -7;
-      const originCz = -6;
+  // Deterministic Mega-Structure Locator (64x64 Great Pyramids & 64x64 Mega Castles — widely spaced!)
+  // Returns { type, name, variant, originCx, originCz, sizeChunks, dx, dz, baseY, centerWx, centerWz, villagerCount }
+  getMegaStructureForChunk(cx, cz) {
+    if (this.worldType === 'flat' || !this.generateStructures) return null;
+    const ck = this.chunkKey(cx, cz);
+    if (this._megaChunkCache.has(ck)) return this._megaChunkCache.get(ck);
+    const res = this._computeMegaStructureForChunk(cx, cz);
+    if (this._megaChunkCache.size > 4096) this._megaChunkCache.clear();
+    this._megaChunkCache.set(ck, res);
+    return res;
+  }
+
+  _computeMegaStructureForChunk(cx, cz) {
+
+    // 1. Guaranteed Starter Great Pyramid (~120m NW of spawn: cx in [-9..-6], cz in [-8..-5])
+    if (cx >= -9 && cx <= -6 && cz >= -8 && cz <= -5) {
+      const originCx = -9;
+      const originCz = -8;
       const centerWx = (originCx + 2) * CHUNK_SIZE;
       const centerWz = (originCz + 2) * CHUNK_SIZE;
       const biome = this.getBiomeAt(centerWx, centerWz);
@@ -1414,6 +1446,7 @@ export class World {
       return {
         type: 'great_pyramid',
         name: 'The Great Pyramid',
+        variant: Math.floor(coordHash(originCx, originCz, this.seed + 1907) * 3),
         originCx, originCz,
         sizeChunks: 4,
         dx: cx - originCx,
@@ -1424,21 +1457,48 @@ export class World {
       };
     }
 
-    // 2. Repeating World Mega-Structures on a 28x28 chunk grid (never overlapping spawn cell 0,0)
-    const GRID = 28;
-    const gx = Math.floor((cx + 14) / GRID);
-    const gz = Math.floor((cz + 14) / GRID);
+    // 2. Guaranteed Starter Mega Castle (~185m NE of spawn: cx in [10..13], cz in [-9..-6])
+    if (cx >= 10 && cx <= 13 && cz >= -9 && cz <= -6) {
+      const originCx = 10;
+      const originCz = -9;
+      const centerWx = (originCx + 2) * CHUNK_SIZE;
+      const centerWz = (originCz + 2) * CHUNK_SIZE;
+      const biome = this.getBiomeAt(centerWx, centerWz);
+      const rawH = this.getTerrainHeight(centerWx, centerWz, biome);
+      if (biome !== 'Ocean' && biome !== 'Deep Ocean' && rawH > SEA_LEVEL - 2) {
+        const baseY = Math.max(SEA_LEVEL + 5, Math.min(SEA_LEVEL + 46, rawH));
+        const variant = Math.floor(coordHash(originCx, originCz, this.seed + 1909) * 3);
+        const castleNames = ['Royal Stone Citadel', 'Highland Mega Castle', 'Sunstone Imperial Keep'];
+        return {
+          type: 'grand_citadel',
+          name: castleNames[variant] || 'Mega Castle',
+          variant,
+          originCx, originCz,
+          sizeChunks: 4,
+          dx: cx - originCx,
+          dz: cz - originCz,
+          baseY,
+          centerWx, centerWz,
+          villagerCount: 150
+        };
+      }
+    }
+
+    // 3. Repeating World Mega-Structures on a wide 36x36 chunk grid (576 blocks apart, never crowded!)
+    const GRID = 36;
+    const gx = Math.floor((cx + 18) / GRID);
+    const gz = Math.floor((cz + 18) / GRID);
     if (gx === 0 && gz === 0) return null;
 
     const hRoll = coordHash(gx * 59, gz * 83, this.seed + 1901);
-    if (hRoll < 0.22) return null;
+    if (hRoll < 0.25) return null;
 
-    const isCitadel = (((gx + gz) & 1) === 1) && hRoll > 0.56;
-    const sizeChunks = isCitadel ? 3 : 4;
-    const offX = 4 + Math.floor(coordHash(gx * 37, gz * 71, this.seed + 1913) * (GRID - 10));
-    const offZ = 4 + Math.floor(coordHash(gx * 97, gz * 41, this.seed + 1931) * (GRID - 10));
-    const originCx = gx * GRID - 14 + offX;
-    const originCz = gz * GRID - 14 + offZ;
+    const isCastle = (((gx + gz) & 1) === 1) || hRoll > 0.62;
+    const sizeChunks = 4; // Both Great Pyramids AND Mega Castles are massive 64x64 (4x4 chunk) Mega-Structures!
+    const offX = 5 + Math.floor(coordHash(gx * 37, gz * 71, this.seed + 1913) * (GRID - 12));
+    const offZ = 5 + Math.floor(coordHash(gx * 97, gz * 41, this.seed + 1931) * (GRID - 12));
+    const originCx = gx * GRID - 18 + offX;
+    const originCz = gz * GRID - 18 + offZ;
 
     if (cx < originCx || cx >= originCx + sizeChunks || cz < originCz || cz >= originCz + sizeChunks) {
       return null;
@@ -1447,39 +1507,60 @@ export class World {
     const centerWx = (originCx + sizeChunks * 0.5) * CHUNK_SIZE;
     const centerWz = (originCz + sizeChunks * 0.5) * CHUNK_SIZE;
     const biome = this.getBiomeAt(centerWx, centerWz);
+    if (biome === 'Ocean' || biome === 'Deep Ocean') return null;
     const rawH = this.getTerrainHeight(centerWx, centerWz, biome);
-    if (rawH <= SEA_LEVEL - 2 || rawH > SEA_LEVEL + 56) return null;
+    if (rawH <= SEA_LEVEL - 1 || rawH > SEA_LEVEL + 56) return null;
     const baseY = Math.max(SEA_LEVEL + 4, Math.min(SEA_LEVEL + 46, rawH));
+    const variant = Math.floor(coordHash(gx * 19, gz * 31, this.seed + 1951) * 3);
+    const castleNames = ['Royal Stone Citadel', 'Highland Mega Castle', 'Sunstone Imperial Keep'];
 
     return {
-      type: isCitadel ? 'grand_citadel' : 'great_pyramid',
-      name: isCitadel ? 'Grand Citadel' : 'The Great Pyramid',
+      type: isCastle ? 'grand_citadel' : 'great_pyramid',
+      name: isCastle ? (castleNames[variant] || 'Mega Castle') : 'The Great Pyramid',
+      variant,
       originCx, originCz,
       sizeChunks,
       dx: cx - originCx,
       dz: cz - originCz,
       baseY,
       centerWx, centerWz,
-      villagerCount: isCitadel ? 120 : 200
+      villagerCount: isCastle ? 150 : 200
     };
   }
 
-  // Returns { vcx, vcz, dx, dz, baseY, biome } if chunk (cx, cz) belongs to any 3x3 village!
+  // Returns { vcx, vcz, dx, dz, radius, variant, baseY, biome } if chunk (cx, cz) belongs to a 3x3 or 5x5 village!
   getVillageForChunk(cx, cz) {
-    if (this.worldType === 'flat') return null;
+    if (this.worldType === 'flat' || !this.generateStructures) return null;
+    const ck = this.chunkKey(cx, cz);
+    if (this._villageChunkCache.has(ck)) return this._villageChunkCache.get(ck);
+    const res = this._computeVillageForChunk(cx, cz);
+    if (this._villageChunkCache.size > 4096) this._villageChunkCache.clear();
+    this._villageChunkCache.set(ck, res);
+    return res;
+  }
+
+  _computeVillageForChunk(cx, cz) {
     if (this.getMegaStructureForChunk(cx, cz)) return null;
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
         const vcx = cx - dx;
         const vcz = cz - dz;
         if (this.isVillageCenter(vcx, vcz)) {
+          const radius = this.getVillageRadius(vcx, vcz);
+          if (Math.abs(dx) > radius || Math.abs(dz) > radius) continue;
           if (this.getMegaStructureForChunk(vcx, vcz)) return null;
           const centerWx = vcx * CHUNK_SIZE + 8;
           const centerWz = vcz * CHUNK_SIZE + 8;
           const biome = this.getBiomeAt(centerWx, centerWz);
-          const baseY = this.getTerrainHeight(centerWx, centerWz, biome);
-          if (baseY <= SEA_LEVEL + 1 || baseY > SEA_LEVEL + 36 || biome === 'Mountains' || biome === 'Swamp') return null;
-          return { vcx, vcz, dx, dz, baseY, biome };
+          const rawH = this.getTerrainHeight(centerWx, centerWz, biome);
+          const isStarter = vcx === 3 && vcz === 2;
+          if (!isStarter) {
+            if (biome === 'Ocean' || biome === 'Deep Ocean' || biome === 'Mountains' || biome === 'Swamp') return null;
+            if (rawH <= SEA_LEVEL + 1 || rawH > SEA_LEVEL + 36) return null;
+          }
+          const baseY = isStarter ? Math.max(SEA_LEVEL + 3, Math.min(SEA_LEVEL + 34, rawH)) : rawH;
+          const variant = Math.floor(coordHash(vcx * 73, vcz * 41, this.seed + 701) * 3);
+          return { vcx, vcz, dx, dz, radius, variant, baseY, biome: isStarter && (biome === 'Ocean' || biome === 'Deep Ocean' || biome === 'Swamp') ? 'Plains' : biome };
         }
       }
     }
@@ -1490,9 +1571,9 @@ export class World {
     return !!this.getVillageForChunk(cx, cz);
   }
 
-  // HUGE 3x3-Chunk (48x48 block!) Multi-District Living Village with Real Beds & Architecture!
+  // HUGE Varied 3x3 (48x48) & 5x5 (80x80!) Multi-District Living Villages with Real Wheat Farms, Dirt Paths & Windmills!
   buildVillageDistrict(cx, cz, ox, oz, heights, setLocal, getLocal, vInfo) {
-    const { vcx, vcz, dx: vdx, dz: vdz, baseY, biome } = vInfo;
+    const { vcx, vcz, dx: vdx, dz: vdz, radius = 1, variant = 0, baseY, biome } = vInfo;
     const isDesert = biome === 'Desert' || biome === 'Badlands';
     const isSnow = biome === 'Snowy Taiga';
     const isBirch = biome === 'Birch Forest';
@@ -1500,11 +1581,11 @@ export class World {
     const isJungle = biome === 'Jungle';
     const isCherry = biome === 'Cherry Grove';
 
-    const wallBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_PLANKS : (isBirch ? BLOCK.BIRCH_PLANKS : (isSavanna ? BLOCK.ACACIA_PLANKS : (isJungle ? BLOCK.JUNGLE_PLANKS : (isCherry ? BLOCK.CHERRY_PLANKS : BLOCK.OAK_PLANKS)))));
-    const logBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : (isBirch ? BLOCK.BIRCH_LOG : (isSavanna ? BLOCK.ACACIA_LOG : (isJungle ? BLOCK.JUNGLE_LOG : (isCherry ? BLOCK.CHERRY_LOG : BLOCK.OAK_LOG)))));
-    const roofBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : (isSavanna ? BLOCK.ACACIA_LOG : (isCherry ? BLOCK.CHERRY_LOG : BLOCK.BRICKS)));
-    const trimBlk = isDesert ? BLOCK.SANDSTONE : BLOCK.STONE_BRICKS;
-    const pathBlk = isDesert ? BLOCK.SANDSTONE : BLOCK.GRAVEL;
+    const wallBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_PLANKS : (isBirch ? BLOCK.BIRCH_PLANKS : (isSavanna ? BLOCK.ACACIA_PLANKS : (isJungle ? BLOCK.JUNGLE_PLANKS : (isCherry ? BLOCK.CHERRY_PLANKS : (variant === 2 ? BLOCK.BIRCH_PLANKS : BLOCK.OAK_PLANKS))))));
+    const logBlk = isDesert ? BLOCK.SANDSTONE : (isSnow ? BLOCK.SPRUCE_LOG : (isBirch ? BLOCK.BIRCH_LOG : (isSavanna ? BLOCK.ACACIA_LOG : (isJungle ? BLOCK.JUNGLE_LOG : (isCherry ? BLOCK.CHERRY_LOG : (variant === 1 ? BLOCK.SPRUCE_LOG : BLOCK.OAK_LOG))))));
+    const roofBlk = isDesert ? (variant === 1 ? BLOCK.TERRACOTTA_ORANGE : BLOCK.SANDSTONE) : (isSnow ? BLOCK.SPRUCE_LOG : (isSavanna ? BLOCK.ACACIA_LOG : (isCherry ? BLOCK.CHERRY_LOG : (variant === 0 ? BLOCK.BRICKS : (variant === 1 ? BLOCK.SPRUCE_PLANKS : BLOCK.OAK_LOG)))));
+    const trimBlk = isDesert ? BLOCK.SANDSTONE : (variant === 1 ? BLOCK.MOSSY_COBBLESTONE : BLOCK.STONE_BRICKS);
+    const pathBlk = isDesert ? BLOCK.SANDSTONE : BLOCK.DIRT_PATH;
     const groundBlk = biome === 'Badlands' ? BLOCK.RED_SAND : (isDesert ? BLOCK.SAND : (isSnow ? BLOCK.SNOW : (isSavanna ? BLOCK.SAVANNA_GRASS : (isJungle ? BLOCK.JUNGLE_GRASS : BLOCK.GRASS))));
     const fillBlk = biome === 'Badlands' ? BLOCK.TERRACOTTA : (isDesert ? BLOCK.SAND : BLOCK.DIRT);
 
@@ -1512,8 +1593,8 @@ export class World {
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const outerEdge =
-          (vdx === -1 && lx === 0) || (vdx === 1 && lx === 15) ||
-          (vdz === -1 && lz === 0) || (vdz === 1 && lz === 15);
+          (vdx === -radius && lx <= 1) || (vdx === radius && lx >= 14) ||
+          (vdz === -radius && lz <= 1) || (vdz === radius && lz >= 14);
         const curH = heights[lx + lz * CHUNK_SIZE];
         const targetY = outerEdge ? Math.round((curH + baseY) * 0.5) : baseY;
         if (curH < targetY) {
@@ -1526,24 +1607,25 @@ export class World {
       }
     }
 
-    // 2. Wide 3-block Village Avenues connecting all 9 districts!
+    // 2. Wide 3-block Authentic Minecraft Dirt Path Avenues connecting every district!
     const layRoad = (x0, z0, x1, z1) => {
       for (let z = z0; z <= z1; z++) {
         for (let x = x0; x <= x1; x++) {
-          const isEdge = (x === x0 || x === x1 || z === z0 || z === z1);
-          const blk = isEdge && coordHash(ox + x, oz + z, this.seed + 31) > 0.55 ? BLOCK.COBBLESTONE : pathBlk;
-          setLocal(x, baseY, z, blk);
+          setLocal(x, baseY, z, pathBlk);
         }
       }
     };
     if (vdz === 0) layRoad(0, 6, 15, 8);
     if (vdx === 0) layRoad(6, 0, 8, 15);
-    if (vdx !== 0 && vdz !== 0) {
-      // Corner district connector lanes toward main roads
-      if (vdx === -1) layRoad(7, 6, 15, 8);
-      if (vdx === 1) layRoad(0, 6, 8, 8);
-      if (vdz === -1) layRoad(6, 7, 8, 15);
-      if (vdz === 1) layRoad(6, 0, 8, 8);
+    if (Math.abs(vdx) === 1 && Math.abs(vdz) === 1) {
+      // Inner-ring boulevards connecting to outer districts!
+      layRoad(0, 6, 15, 8);
+      layRoad(6, 0, 8, 15);
+    } else if (vdx !== 0 && vdz !== 0) {
+      if (vdx < 0) layRoad(7, 6, 15, 8);
+      if (vdx > 0) layRoad(0, 6, 8, 8);
+      if (vdz < 0) layRoad(6, 7, 8, 15);
+      if (vdz > 0) layRoad(6, 0, 8, 8);
     }
 
     const addLootChest = (lx, ly, lz, tier = 'house') => {
@@ -1772,7 +1854,7 @@ export class World {
       buildDetailedHouse(3, 10, 7, 5, 3, { doorSide: 'north', beds: 2, chestTier: 'house' });
       addLamp(11, 5);
     } else if (vdx === -1 && vdz === 0) {
-      // --- WEST DISTRICT: Large Irrigated Farmlands + Rustic Barn! ---
+      // --- WEST DISTRICT: Lush Hydrated Wheat Farmlands + Rustic Farmhouse! ---
       const buildFarmPlot = (fx, fz, fw, fd) => {
         for (let dz = 0; dz < fd; dz++) {
           for (let dx = 0; dx < fw; dx++) {
@@ -1782,8 +1864,9 @@ export class World {
             } else if (dx === Math.floor(fw / 2)) {
               setLocal(fx + dx, baseY, fz + dz, BLOCK.WATER);
             } else {
-              setLocal(fx + dx, baseY, fz + dz, BLOCK.FARMLAND);
-              setLocal(fx + dx, baseY + 1, fz + dz, BLOCK.TALL_GRASS);
+              setLocal(fx + dx, baseY, fz + dz, BLOCK.FARMLAND_WET);
+              const wStage = BLOCK.WHEAT_4 + ((dx + dz + variant) & 3);
+              setLocal(fx + dx, baseY + 1, fz + dz, wStage);
             }
           }
         }
@@ -1792,10 +1875,97 @@ export class World {
       buildFarmPlot(9, 1, 6, 5);
       buildDetailedHouse(2, 10, 7, 5, 3, { doorSide: 'north', beds: 1, chestTier: 'house', chimney: false });
       addLamp(10, 10);
+    } else if (Math.abs(vdx) === 2 || Math.abs(vdz) === 2) {
+      // --- OUTER RING DISTRICTS (5x5 Grand Towns!): Windmills, Double Wheat Farms, Townhouses, Pastures & Gates! ---
+      const dRoll = Math.floor(coordHash((vcx + vdx) * 31, (vcz + vdz) * 47, this.seed + 881) * 4);
+      if (vdx === 0 && (vdz === -2 || vdz === 2)) {
+        // Grand Village Entrance Gateway Arch + Flanking Guard Cottages!
+        const gz = vdz === -2 ? 4 : 11;
+        for (let dy = 1; dy <= 5; dy++) {
+          setLocal(5, baseY + dy, gz, trimBlk);
+          setLocal(9, baseY + dy, gz, trimBlk);
+        }
+        for (let gx = 5; gx <= 9; gx++) {
+          setLocal(gx, baseY + 5, gz, logBlk);
+          setLocal(gx, baseY + 6, gz, roofBlk);
+        }
+        setLocal(7, baseY + 5, gz, BLOCK.GLOWSTONE);
+        buildDetailedHouse(1, vdz === -2 ? 7 : 1, 4, 5, 3, { doorSide: 'east', beds: 1, chestTier: 'house', chimney: false });
+        buildDetailedHouse(11, vdz === -2 ? 7 : 1, 4, 5, 3, { doorSide: 'west', beds: 1, chimney: true });
+      } else if (vdz === 0 && (vdx === -2 || vdx === 2)) {
+        // East/West Entrance Arch + Tall Rustic Village Windmill!
+        const gx = vdx === -2 ? 4 : 11;
+        for (let dy = 1; dy <= 5; dy++) {
+          setLocal(gx, baseY + dy, 5, trimBlk);
+          setLocal(gx, baseY + dy, 9, trimBlk);
+        }
+        for (let gz = 5; gz <= 9; gz++) {
+          setLocal(gx, baseY + 5, gz, logBlk);
+          setLocal(gx, baseY + 6, gz, roofBlk);
+        }
+        setLocal(gx, baseY + 5, 7, BLOCK.GLOWSTONE);
+        // Windmill Tower beside entrance
+        const wx0 = vdx === -2 ? 8 : 2, wz0 = 1;
+        for (let dy = 1; dy <= 10; dy++) {
+          for (let dz = 0; dz < 4; dz++) {
+            for (let dx = 0; dx < 4; dx++) {
+              const e = dx === 0 || dx === 3 || dz === 0 || dz === 3;
+              if (e) setLocal(wx0 + dx, baseY + dy, wz0 + dz, dy <= 3 ? trimBlk : wallBlk);
+              else setLocal(wx0 + dx, baseY + dy, wz0 + dz, BLOCK.AIR);
+            }
+          }
+        }
+        // Wool windmill sails!
+        for (let s = -3; s <= 3; s++) {
+          if (wx0 + 2 + s >= 0 && wx0 + 2 + s < 16) setLocal(wx0 + 2 + s, baseY + 8, wz0, BLOCK.WOOL_WHITE);
+          if (baseY + 8 + s > baseY + 2) setLocal(wx0 + 2, baseY + 8 + s, wz0, BLOCK.WOOL_WHITE);
+        }
+        setLocal(wx0 + 2, baseY + 8, wz0, logBlk);
+      } else if (dRoll === 0) {
+        // Expansive Irrigated Double Wheat Farm + Farmer Silo!
+        for (const [fx, fz] of [[2, 2], [2, 9]]) {
+          for (let dz = 0; dz < 5; dz++) {
+            for (let dx = 0; dx < 11; dx++) {
+              const border = dx === 0 || dx === 10 || dz === 0 || dz === 4;
+              if (border) setLocal(fx + dx, baseY, fz + dz, logBlk);
+              else if (dx === 5) setLocal(fx + dx, baseY, fz + dz, BLOCK.WATER);
+              else {
+                setLocal(fx + dx, baseY, fz + dz, BLOCK.FARMLAND_WET);
+                setLocal(fx + dx, baseY + 1, fz + dz, BLOCK.WHEAT_4 + ((dx + dz) & 3));
+              }
+            }
+          }
+        }
+        addLamp(13, 7);
+      } else if (dRoll === 1) {
+        // Grand 2-Story Townhouse + Fenced Animal Pasture!
+        buildDetailedHouse(2, 2, 6, 6, 3, { doorSide: 'south', beds: 2, chestTier: 'house', twoStory: true });
+        for (let dz = 0; dz < 5; dz++) {
+          for (let dx = 0; dx < 6; dx++) {
+            if (dx === 0 || dx === 5 || dz === 0 || dz === 4) {
+              if (!(dz === 0 && dx === 2)) setLocal(9 + dx, baseY + 1, 9 + dz, logBlk);
+            }
+          }
+        }
+        addLamp(10, 4);
+      } else if (dRoll === 2) {
+        // Artisan Blacksmith / Bakery Row!
+        buildDetailedHouse(2, 2, 6, 5, 3, { doorSide: 'south', beds: 1, chestTier: 'forge', furnace: true, chimney: true });
+        buildDetailedHouse(9, 8, 5, 6, 3, { doorSide: 'west', beds: 2, chestTier: 'house' });
+        addLamp(8, 3);
+      } else {
+        // Cozy Twin Cottages with Flower Courtyard!
+        buildDetailedHouse(2, 2, 5, 5, 3, { doorSide: 'east', beds: 1, chestTier: 'house' });
+        buildDetailedHouse(9, 9, 5, 5, 3, { doorSide: 'north', beds: 1 });
+        setLocal(10, baseY + 1, 4, BLOCK.FLOWER_RED);
+        setLocal(11, baseY + 1, 5, BLOCK.FLOWER_YELLOW);
+        addLamp(8, 8);
+      }
     } else {
-      // --- CORNER DISTRICTS: Outer Cottages, Orchard & Flower Gardens! ---
-      const doorDir = vdz === -1 ? 'south' : 'north';
-      buildDetailedHouse(4, 4, 6, 6, 3, { doorSide: doorDir, beds: 1, chestTier: (vdx === 1 ? 'house' : null) });
+      // --- INNER CORNER DISTRICTS: Varied Cottages, Blacksmiths, Markets & Orchards! ---
+      const doorDir = vdz < 0 ? 'south' : 'north';
+      const isTwoStory = ((vdx + vdz + variant) & 1) === 0;
+      buildDetailedHouse(3, 3, 6, 6, 3, { doorSide: doorDir, beds: isTwoStory ? 2 : 1, chestTier: (vdx > 0 ? 'house' : 'library'), twoStory: isTwoStory });
       addLamp(3, 11);
       // Plant a scenic orchard tree strictly in a verified open corner yard (never overlapping houses!)
       const tx = vdx === -1 ? 13 : 2;
@@ -1844,36 +2014,43 @@ export class World {
     }
   }
 
-  // Deterministic Biome-Specific World Structure Locator (7 unique structures + Villages, zero collisions!)
+  // Deterministic Biome-Specific World Structure Locator (10 unique structures + 3 variants each, nicely spread out!)
   getStructureTypeForChunk(cx, cz) {
-    if (this.worldType === 'flat') return null;
+    if (this.worldType === 'flat' || !this.generateStructures) return null;
     if (this.getMegaStructureForChunk(cx, cz)) return null;
     if (this.getVillageForChunk(cx, cz)) return null;
-    // Grid cell of 6x6 chunks -> rich frequent discovery without clutter!
-    const gx = Math.floor(cx / 6);
-    const gz = Math.floor(cz / 6);
-    const ox = Math.floor(coordHash(gx * 43, gz * 67, this.seed + 811) * 4) + 1;
-    const oz = Math.floor(coordHash(gx * 71, gz * 29, this.seed + 823) * 4) + 1;
-    if (cx !== gx * 6 + ox || cz !== gz * 6 + oz) return null;
+    // Wide 10x10 chunk grid (160x160 blocks) so landmarks feel grand & well-spaced!
+    const gx = Math.floor(cx / 10);
+    const gz = Math.floor(cz / 10);
+    const ox = Math.floor(coordHash(gx * 43, gz * 67, this.seed + 811) * 6) + 2;
+    const oz = Math.floor(coordHash(gx * 71, gz * 29, this.seed + 823) * 6) + 2;
+    if (cx !== gx * 10 + ox || cz !== gz * 10 + oz) return null;
     const roll = coordHash(cx * 31, cz * 29, this.seed + 777);
-    if (roll < 0.30) return null;
+    if (roll < 0.22) return null;
 
     const col = this.sampleColumn(cx * CHUNK_SIZE + 8, cz * CHUNK_SIZE + 8);
     const h = col.height;
     const b = col.biome;
-    if (h <= SEA_LEVEL + 1 && b !== 'Swamp') return null;
     if (h > CHUNK_HEIGHT - 28) return null;
 
-    if (b === 'Desert') return roll > 0.62 ? 'desert_pyramid' : 'desert_oasis';
-    if (b === 'Badlands') return roll > 0.58 ? 'desert_pyramid' : 'ruined_portal';
-    if (b === 'Jungle') return 'jungle_temple';
-    if (b === 'Snowy Taiga') return 'igloo';
+    // Ocean & Deep Ocean & Coastal Seabed -> Sunken & Half-Buried Shipwrecks!
+    if (b === 'Ocean' || b === 'Deep Ocean' || h <= SEA_LEVEL - 4) {
+      return h <= SEA_LEVEL - 3 ? 'shipwreck' : null;
+    }
+    if (h <= SEA_LEVEL + 1 && b !== 'Swamp') return null;
+
+    if (b === 'Desert') return roll > 0.70 ? 'desert_pyramid' : (roll > 0.44 ? 'desert_oasis' : 'tent_camp');
+    if (b === 'Badlands') return roll > 0.65 ? 'desert_pyramid' : (roll > 0.42 ? 'ruined_portal' : 'tent_camp');
+    if (b === 'Jungle') return roll > 0.45 ? 'jungle_temple' : 'tent_camp';
+    if (b === 'Snowy Taiga') return roll > 0.46 ? 'igloo' : 'tent_camp';
     if (b === 'Swamp') return 'witch_hut';
-    if (b === 'Savanna') return 'savanna_outpost';
-    if (b === 'Mountains') return h < SEA_LEVEL + 72 ? (roll > 0.65 ? 'watchtower' : 'ruined_portal') : null;
-    if (b === 'Cherry Grove') return roll > 0.58 ? 'ruined_portal' : 'watchtower';
-    // Plains, Forest, Birch Forest
-    return roll > 0.62 ? 'watchtower' : 'ruined_portal';
+    if (b === 'Savanna') return roll > 0.50 ? 'savanna_outpost' : 'tent_camp';
+    if (b === 'Mountains') return h < SEA_LEVEL + 72 ? (roll > 0.62 ? 'watchtower' : 'ruined_portal') : null;
+    if (b === 'Cherry Grove') return roll > 0.64 ? 'ruined_portal' : (roll > 0.42 ? 'tent_camp' : 'watchtower');
+    // Plains, Forest, Birch Forest -> Watchtowers, Adventurer Tent Camps & Ruined Portals!
+    if (roll > 0.72) return 'watchtower';
+    if (roll > 0.45) return 'tent_camp';
+    return 'ruined_portal';
   }
 
   buildWorldStructure(structType, cx, cz, ox, oz, heights, setLocal, getLocal, noTreeMask) {
@@ -1909,8 +2086,160 @@ export class World {
       }
     };
 
-    if (structType === 'watchtower') {
-      const x0 = 5, z0 = 5, w = 6, hT = 11;
+    const variant = Math.floor(coordHash(cx * 53, cz * 97, this.seed + 1337) * 3);
+
+    if (structType === 'shipwreck') {
+      // 3 Distinct Ocean Shipwreck Variants (Oak Galleon, Tilted Spruce Brig, Half-Buried Birch Caravel!)
+      const hullPlanks = variant === 0 ? BLOCK.OAK_PLANKS : (variant === 1 ? BLOCK.SPRUCE_PLANKS : BLOCK.BIRCH_PLANKS);
+      const hullLog = variant === 0 ? BLOCK.OAK_LOG : (variant === 1 ? BLOCK.SPRUCE_LOG : BLOCK.BIRCH_LOG);
+      const sailA = variant === 0 ? BLOCK.WOOL_WHITE : (variant === 1 ? BLOCK.WOOL_BLUE : BLOCK.WOOL_RED);
+      const sailB = variant === 0 ? BLOCK.WOOL_RED : BLOCK.WOOL_WHITE;
+      const baseY = Math.max(12, Math.min(SEA_LEVEL - 4, th));
+      const tilt = variant === 1 ? 1 : 0; // Variant 1 heels sideways on seabed!
+      const buried = variant === 2 ? 1 : 0; // Variant 2 is half-buried in ocean sand!
+      const x0 = 5, z0 = 1, w = 6, len = 14;
+      for (let dz = 0; dz < len; dz++) {
+        const taper = (dz === 0 || dz === len - 1) ? 2 : ((dz === 1 || dz === len - 2) ? 1 : 0);
+        for (let dx = taper; dx < w - taper; dx++) {
+          const yOff = (tilt && dx >= 3) ? 1 : 0;
+          const by = baseY - buried + yOff;
+          const isRim = dx === taper || dx === w - 1 - taper || dz === 0 || dz === len - 1;
+          // Keel & deck floor
+          setLocal(x0 + dx, by, z0 + dz, hullLog);
+          setLocal(x0 + dx, by + 1, z0 + dz, isRim ? hullPlanks : BLOCK.WATER);
+          setLocal(x0 + dx, by + 2, z0 + dz, isRim ? hullPlanks : BLOCK.WATER);
+          if (dz >= 2 && dz <= len - 3) {
+            setLocal(x0 + dx, by + 3, z0 + dz, hullPlanks); // main deck
+          }
+          // Stern Captain's Cabin (dz >= 9)
+          if (dz >= 9 && dz <= len - 2) {
+            for (let cy = 4; cy <= 6; cy++) {
+              const cabEdge = isRim || dz === 9 || cy === 6;
+              if (cabEdge) {
+                const isPort = cy === 5 && (dx === taper || dx === w - 1 - taper) && dz === 11;
+                setLocal(x0 + dx, by + cy, z0 + dz, isPort ? BLOCK.GLASS : hullPlanks);
+              } else {
+                setLocal(x0 + dx, by + cy, z0 + dz, BLOCK.WATER);
+              }
+            }
+          }
+        }
+      }
+      // Tall Mast & Billowing/Tattered Wool Sail!
+      const mastH = variant === 0 ? 11 : (variant === 1 ? 8 : 6);
+      for (let my = 1; my <= mastH; my++) {
+        setLocal(x0 + 3, baseY - buried + my, z0 + 6, hullLog);
+      }
+      if (variant !== 2) {
+        const sailY0 = baseY - buried + 5;
+        for (let sy = 0; sy < 4; sy++) {
+          for (let sx = 0; sx < w; sx++) {
+            if (variant === 1 && ((sx + sy) % 3 === 0)) continue; // tattered sail on tilted brig!
+            setLocal(x0 + sx, sailY0 + sy, z0 + 5, (sy & 1) === 0 ? sailA : sailB);
+          }
+        }
+      }
+      // Captain's Treasure Chest & Supply Chest!
+      placeChest(x0 + 3, baseY - buried + 4, z0 + 11, [
+        { id: 'emerald', count: 4 + variant * 2 },
+        { id: 'gold_ingot', count: 5 + variant * 2 },
+        { id: 'diamond', count: 1 + (variant === 0 ? 2 : 1) },
+        { id: 'iron_ingot', count: 6 },
+        { id: 'bread', count: 6 },
+        { id: 'golden_sword', count: 1, durability: 64 }
+      ]);
+      placeChest(x0 + 2, baseY - buried + 1, z0 + 4, [
+        { id: 'wheat', count: 8 },
+        { id: 'wheat_seeds', count: 10 },
+        { id: 'coal', count: 12 },
+        { id: 'iron_shovel', count: 1, durability: 251 },
+        { id: 'iron_hoe', count: 1, durability: 251 }
+      ]);
+      return;
+    } else if (structType === 'tent_camp') {
+      // 3 Distinct Explorer & Nomad Tent Camp Variants (Striped A-Frame, Blue Pavilion, Green Twin Ranger Camp!)
+      const x0 = 3, z0 = 3, w = 10, d = 10;
+      markNoTrees(x0 - 1, z0 - 1, x0 + w, z0 + d, 4);
+      fillFoundation(x0, z0, x0 + w - 1, z0 + d - 1, th, BLOCK.GRASS);
+      // Natural packed dirt path clearing around campfire
+      for (let dz = 2; dz <= d - 3; dz++) {
+        for (let dx = 2; dx <= w - 3; dx++) {
+          setLocal(x0 + dx, th, z0 + dz, BLOCK.DIRT_PATH);
+        }
+      }
+      const woolA = variant === 0 ? BLOCK.WOOL_RED : (variant === 1 ? BLOCK.WOOL_BLUE : BLOCK.WOOL_GREEN);
+      const woolB = variant === 0 ? BLOCK.WOOL_WHITE : (variant === 1 ? BLOCK.WOOL_YELLOW : BLOCK.WOOL_WHITE);
+      const pole = variant === 2 ? BLOCK.SPRUCE_LOG : BLOCK.OAK_LOG;
+
+      // Pitched A-Frame Tent (left/back side of camp)
+      const tx = x0 + 1, tz = z0 + 1, tw = 5, td = 6;
+      for (let dz = 0; dz < td; dz++) {
+        for (let dx = 0; dx < tw; dx++) {
+          const isBack = dz === 0;
+          const isFront = dz === td - 1;
+          const distMid = Math.abs(dx - 2);
+          const roofY = 3 - distMid; // peak at dx=2 (dy=3), eaves at dx=0,4 (dy=1)
+          for (let dy = 1; dy <= roofY; dy++) {
+            const stripe = ((dz + dx) & 1) === 0 ? woolA : woolB;
+            if (dy === roofY) {
+              setLocal(tx + dx, th + dy, tz + dz, stripe);
+            } else if (isBack) {
+              setLocal(tx + dx, th + dy, tz + dz, woolA);
+            } else if (!isFront && (dx === 0 || dx === tw - 1)) {
+              setLocal(tx + dx, th + dy, tz + dz, stripe);
+            }
+          }
+        }
+      }
+      // Wooden ridge poles at front & back
+      for (let py = 1; py <= 3; py++) {
+        setLocal(tx + 2, th + py, tz, pole);
+        if (py === 3) setLocal(tx + 2, th + py, tz + td - 1, pole);
+      }
+      // Cozy tent interior: Bed, Crafting Table & Explorer Chest
+      setLocal(tx + 1, th + 1, tz + 2, BLOCK.BED_HEAD_N);
+      setLocal(tx + 1, th + 1, tz + 3, BLOCK.BED);
+      setLocal(tx + 3, th + 1, tz + 1, BLOCK.CRAFTING_TABLE);
+      if (variant === 1) setLocal(tx + 3, th + 1, tz + 2, BLOCK.FURNACE);
+      placeChest(tx + 3, th + 1, tz + 3, [
+        { id: 'bread', count: 5 },
+        { id: 'cooked_beef', count: 3 },
+        { id: 'torch', count: 14 },
+        { id: 'iron_shovel', count: 1, durability: 251 },
+        { id: 'wheat_seeds', count: 6 },
+        { id: 'emerald', count: 3 }
+      ]);
+
+      // Variant 2 adds a second smaller side tent facing the campfire!
+      if (variant === 2) {
+        const sx = x0 + 6, sz = z0 + 1;
+        for (let dz = 0; dz < 4; dz++) {
+          for (let dx = 0; dx < 3; dx++) {
+            const ry = dx === 1 ? 2 : 1;
+            setLocal(sx + dx, th + ry, sz + dz, (dz & 1) ? woolB : woolA);
+            if (dz === 0 && ry > 1) setLocal(sx + dx, th + 1, sz, woolA);
+          }
+        }
+      }
+
+      // Outdoor Stone-Ring Campfire + Log Seating + Lantern Post!
+      const fx = x0 + 7, fz = z0 + 7;
+      setLocal(fx, th, fz, BLOCK.COBBLESTONE);
+      setLocal(fx, th + 1, fz, BLOCK.TORCH);
+      setLocal(fx - 1, th, fz, BLOCK.COBBLESTONE);
+      setLocal(fx + 1, th, fz, BLOCK.COBBLESTONE);
+      setLocal(fx, th, fz - 1, BLOCK.COBBLESTONE);
+      setLocal(fx, th, fz + 1, BLOCK.COBBLESTONE);
+      setLocal(fx - 2, th + 1, fz, pole);
+      setLocal(fx, th + 1, fz - 2, pole);
+      for (let ly = 1; ly <= 3; ly++) setLocal(x0 + 8, th + ly, z0 + 5, pole);
+      setLocal(x0 + 8, th + 4, z0 + 5, BLOCK.GLOWSTONE);
+      return;
+    } else if (structType === 'watchtower') {
+      const x0 = 5, z0 = 5, w = 6, hT = 10 + variant * 2;
+      const wallA = variant === 0 ? BLOCK.STONE_BRICKS : (variant === 1 ? BLOCK.MOSSY_COBBLESTONE : BLOCK.BRICKS);
+      const wallB = variant === 0 ? BLOCK.COBBLESTONE : (variant === 1 ? BLOCK.STONE_BRICKS : BLOCK.STONE_BRICKS);
+      const floorWood = variant === 1 ? BLOCK.SPRUCE_PLANKS : BLOCK.OAK_PLANKS;
       markNoTrees(x0, z0, x0 + w - 1, z0 + w - 1, 5);
       fillFoundation(x0, z0, x0 + w - 1, z0 + w - 1, th, BLOCK.COBBLESTONE);
       for (let dz = 0; dz < w; dz++) {
@@ -1918,16 +2247,16 @@ export class World {
           for (let dy = 1; dy <= hT; dy++) {
             const edgeX = dx === 0 || dx === w - 1;
             const edgeZ = dz === 0 || dz === w - 1;
-            if (edgeX && edgeZ) setLocal(x0 + dx, th + dy, z0 + dz, BLOCK.STONE_BRICKS);
+            if (edgeX && edgeZ) setLocal(x0 + dx, th + dy, z0 + dz, wallA);
             else if (edgeX || edgeZ) {
               const isWin = (dy === 4 || dy === 8) && (dx === 2 || dx === 3 || dz === 2 || dz === 3);
-              setLocal(x0 + dx, th + dy, z0 + dz, isWin ? BLOCK.GLASS : (dy % 2 === 0 ? BLOCK.STONE_BRICKS : BLOCK.COBBLESTONE));
+              setLocal(x0 + dx, th + dy, z0 + dz, isWin ? BLOCK.GLASS : (dy % 2 === 0 ? wallA : wallB));
             } else {
-              setLocal(x0 + dx, th + dy, z0 + dz, dy === 5 || dy === hT ? BLOCK.OAK_PLANKS : BLOCK.AIR);
+              setLocal(x0 + dx, th + dy, z0 + dz, dy === 5 || dy === hT ? floorWood : BLOCK.AIR);
             }
           }
           if ((dx === 0 || dx === w - 1 || dz === 0 || dz === w - 1) && (dx + dz) % 2 === 0) {
-            setLocal(x0 + dx, th + hT + 1, z0 + dz, BLOCK.STONE_BRICKS);
+            setLocal(x0 + dx, th + hT + 1, z0 + dz, wallA);
           }
         }
       }
@@ -1944,8 +2273,9 @@ export class World {
         { id: 'torch', count: 16 }
       ]);
     } else if (structType === 'desert_pyramid') {
-      // Stepped Sandstone & Orange Terracotta Desert Temple with Treasure Chamber!
+      // Stepped Sandstone & Terracotta Desert Temple with 3 Accent Variants!
       const x0 = 2, z0 = 2, size = 12;
+      const accent = variant === 0 ? BLOCK.TERRACOTTA_ORANGE : (variant === 1 ? BLOCK.TERRACOTTA_RED : BLOCK.GOLD_BLOCK);
       markNoTrees(x0, z0, x0 + size - 1, z0 + size - 1, 4);
       fillFoundation(x0, z0, x0 + size - 1, z0 + size - 1, th, BLOCK.SANDSTONE);
       for (let layer = 0; layer < 6; layer++) {
@@ -1956,7 +2286,7 @@ export class World {
             const isRim = dx === min || dx === max || dz === min || dz === max || layer === 5;
             if (isRim) {
               const isAccent = (layer === 2 && (dx === 5 || dx === 6 || dz === 5 || dz === 6)) || layer === 5;
-              setLocal(x0 + dx, th + 1 + layer, z0 + dz, isAccent ? BLOCK.TERRACOTTA_ORANGE : BLOCK.SANDSTONE);
+              setLocal(x0 + dx, th + 1 + layer, z0 + dz, isAccent ? accent : BLOCK.SANDSTONE);
             } else {
               setLocal(x0 + dx, th + 1 + layer, z0 + dz, BLOCK.AIR);
             }
@@ -1983,8 +2313,9 @@ export class World {
         { id: 'golden_helmet', count: 1, durability: 112 }
       ]);
     } else if (structType === 'desert_oasis') {
-      // Desert Sandstone Well & Oasis Pool!
+      // Desert Sandstone Well & Oasis Pool (3 Variants: Classic Canopy, Twin Pillar Shrine, Lush Palm Oasis!)
       const x0 = 5, z0 = 5;
+      const trim = variant === 1 ? BLOCK.TERRACOTTA_ORANGE : (variant === 2 ? BLOCK.GOLD_BLOCK : BLOCK.SANDSTONE);
       markNoTrees(x0 - 1, z0 - 1, x0 + 6, z0 + 6, 4);
       fillFoundation(x0, z0, x0 + 5, z0 + 5, th, BLOCK.SANDSTONE);
       for (let dz = 1; dz <= 4; dz++) {
@@ -1992,16 +2323,16 @@ export class World {
           const edge = dx === 1 || dx === 4 || dz === 1 || dz === 4;
           setLocal(x0 + dx, th, z0 + dz, edge ? BLOCK.SANDSTONE : BLOCK.WATER);
           setLocal(x0 + dx, th - 1, z0 + dz, edge ? BLOCK.SANDSTONE : BLOCK.WATER);
-          setLocal(x0 + dx, th + 1, z0 + dz, edge ? BLOCK.SANDSTONE : BLOCK.AIR);
+          setLocal(x0 + dx, th + 1, z0 + dz, edge ? trim : BLOCK.AIR);
         }
       }
       for (const [px, pz] of [[1, 1], [4, 1], [1, 4], [4, 4]]) {
-        for (let dy = 2; dy <= 4; dy++) setLocal(x0 + px, th + dy, z0 + pz, BLOCK.SANDSTONE);
+        for (let dy = 2; dy <= 4 + (variant === 1 ? 1 : 0); dy++) setLocal(x0 + px, th + dy, z0 + pz, BLOCK.SANDSTONE);
       }
       for (let dz = 1; dz <= 4; dz++) {
-        for (let dx = 1; dx <= 4; dx++) setLocal(x0 + dx, th + 5, z0 + dz, BLOCK.SANDSTONE);
+        for (let dx = 1; dx <= 4; dx++) setLocal(x0 + dx, th + 5 + (variant === 1 ? 1 : 0), z0 + dz, variant === 2 ? BLOCK.WOOL_YELLOW : BLOCK.SANDSTONE);
       }
-      setLocal(x0 + 2, th + 6, z0 + 2, BLOCK.GLOWSTONE);
+      setLocal(x0 + 2, th + 6 + (variant === 1 ? 1 : 0), z0 + 2, BLOCK.GLOWSTONE);
       placeChest(x0 + 0, th + 1, z0 + 2, [
         { id: 'bread', count: 5 },
         { id: 'apple', count: 4 },
@@ -2009,23 +2340,26 @@ export class World {
         { id: 'flint', count: 3 }
       ]);
     } else if (structType === 'jungle_temple') {
-      // Mossy Cobblestone Ancient Jungle Temple!
+      // Mossy Cobblestone Ancient Jungle Temple (3 Variants: Classic Mossy, Tall Pyramid Spire, Brick Sanctuary!)
       const x0 = 3, z0 = 3, w = 10, d = 10;
+      const bodyA = variant === 2 ? BLOCK.STONE_BRICKS : BLOCK.MOSSY_COBBLESTONE;
+      const bodyB = variant === 1 ? BLOCK.COBBLESTONE : BLOCK.STONE_BRICKS;
+      const topH = variant === 1 ? 8 : 6;
       markNoTrees(x0, z0, x0 + w - 1, z0 + d - 1, 5);
-      fillFoundation(x0, z0, x0 + w - 1, z0 + d - 1, th, BLOCK.MOSSY_COBBLESTONE);
+      fillFoundation(x0, z0, x0 + w - 1, z0 + d - 1, th, bodyA);
       for (let dz = 0; dz < d; dz++) {
         for (let dx = 0; dx < w; dx++) {
           const edge = dx === 0 || dx === w - 1 || dz === 0 || dz === d - 1;
-          for (let dy = 1; dy <= 6; dy++) {
-            const wallBlk = ((dx + dy + dz) % 3 === 0) ? BLOCK.STONE_BRICKS : BLOCK.MOSSY_COBBLESTONE;
-            if (edge || dy === 6) setLocal(x0 + dx, th + dy, z0 + dz, wallBlk);
+          for (let dy = 1; dy <= topH; dy++) {
+            const wallBlk = ((dx + dy + dz) % 3 === 0) ? bodyB : bodyA;
+            if (edge || dy === topH) setLocal(x0 + dx, th + dy, z0 + dz, wallBlk);
             else setLocal(x0 + dx, th + dy, z0 + dz, BLOCK.AIR);
           }
           // Stepped temple crown
           if (dx >= 2 && dx <= w - 3 && dz >= 2 && dz <= d - 3) {
-            setLocal(x0 + dx, th + 7, z0 + dz, BLOCK.MOSSY_COBBLESTONE);
+            setLocal(x0 + dx, th + topH + 1, z0 + dz, bodyA);
             if (dx >= 3 && dx <= w - 4 && dz >= 3 && dz <= d - 4) {
-              setLocal(x0 + dx, th + 8, z0 + dz, BLOCK.STONE_BRICKS);
+              setLocal(x0 + dx, th + topH + 2, z0 + dz, variant === 2 ? BLOCK.GOLD_BLOCK : bodyB);
             }
           }
         }
@@ -2054,7 +2388,7 @@ export class World {
         for (let dx = 0; dx < w; dx++) {
           const dist = Math.hypot(dx - 3.5, dz - 3.5);
           if (dist > 4.2) continue;
-          setLocal(x0 + dx, th, z0 + dz, (dx >= 2 && dx <= 5 && dz >= 2 && dz <= 5) ? BLOCK.WOOL_RED : BLOCK.SNOW);
+          setLocal(x0 + dx, th, z0 + dz, (dx >= 2 && dx <= 5 && dz >= 2 && dz <= 5) ? (variant === 0 ? BLOCK.WOOL_RED : (variant === 1 ? BLOCK.WOOL_BLUE : BLOCK.WOOL_GREEN)) : BLOCK.SNOW);
           for (let dy = 1; dy <= 4; dy++) {
             const rLim = dy === 4 ? 2.1 : (dy === 3 ? 3.2 : 4.0);
             const rIn = dy === 4 ? 0 : (dy === 3 ? 2.1 : 3.0);
@@ -2093,7 +2427,9 @@ export class World {
         { id: 'flint_and_steel', count: 1, durability: 64 }
       ]);
     } else if (structType === 'witch_hut') {
-      // Elevated Swamp Stilted Witch Cabin!
+      // Elevated Swamp Stilted Witch Cabin (3 Timber Variants: Spruce, Oak, Dark Birch)!
+      const wLog = variant === 0 ? BLOCK.SPRUCE_LOG : (variant === 1 ? BLOCK.OAK_LOG : BLOCK.BIRCH_LOG);
+      const wPlank = variant === 0 ? BLOCK.SPRUCE_PLANKS : (variant === 1 ? BLOCK.OAK_PLANKS : BLOCK.BIRCH_PLANKS);
       const x0 = 4, z0 = 4, w = 7, d = 8;
       const deckY = Math.max(th, SEA_LEVEL) + 2;
       markNoTrees(x0, z0, x0 + w - 1, z0 + d - 1, 5);
@@ -2103,25 +2439,25 @@ export class World {
           for (let y = deckY; y <= deckY + 8; y++) setLocal(x0 + dx, y, z0 + dz, BLOCK.AIR);
         }
       }
-      // 4 sturdy spruce stilts down into mud/water
+      // 4 sturdy stilts down into mud/water
       for (const [sx, sz] of [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]]) {
         for (let y = Math.max(1, SEA_LEVEL - 4); y <= deckY + 4; y++) {
-          setLocal(x0 + sx, y, z0 + sz, BLOCK.SPRUCE_LOG);
+          setLocal(x0 + sx, y, z0 + sz, wLog);
         }
       }
       // Deck floor, cabin walls & gabled roof
       for (let dz = 0; dz < d; dz++) {
         for (let dx = 0; dx < w; dx++) {
-          setLocal(x0 + dx, deckY, z0 + dz, BLOCK.SPRUCE_PLANKS);
+          setLocal(x0 + dx, deckY, z0 + dz, wPlank);
           if (dz >= 2) {
             const edge = dx === 0 || dx === w - 1 || dz === 2 || dz === d - 1;
             for (let dy = 1; dy <= 3; dy++) {
               if (edge) {
                 const isWin = dy === 2 && ((dx === 0 || dx === w - 1) && dz === 5);
-                setLocal(x0 + dx, deckY + dy, z0 + dz, isWin ? BLOCK.GLASS : BLOCK.SPRUCE_PLANKS);
+                setLocal(x0 + dx, deckY + dy, z0 + dz, isWin ? BLOCK.GLASS : wPlank);
               }
             }
-            setLocal(x0 + dx, deckY + 4, z0 + dz, BLOCK.SPRUCE_LOG);
+            setLocal(x0 + dx, deckY + 4, z0 + dz, wLog);
           }
         }
       }
@@ -2151,8 +2487,10 @@ export class World {
             else if (!edge && (dy === 5 || dy === hT - 1)) setLocal(x0 + dx, th + dy, z0 + dz, BLOCK.ACACIA_PLANKS);
             else setLocal(x0 + dx, th + dy, z0 + dz, BLOCK.AIR);
           }
-          // Canopy roof overhang
-          setLocal(x0 + dx, th + hT + 1, z0 + dz, edge ? BLOCK.WOOL_RED : BLOCK.WOOL_YELLOW);
+          // Canopy roof overhang (3 vibrant banner palettes!)
+          const canA = variant === 0 ? BLOCK.WOOL_RED : (variant === 1 ? BLOCK.WOOL_BLUE : BLOCK.WOOL_GREEN);
+          const canB = variant === 0 ? BLOCK.WOOL_YELLOW : BLOCK.WOOL_WHITE;
+          setLocal(x0 + dx, th + hT + 1, z0 + dz, edge ? canA : canB);
         }
       }
       setLocal(x0 + 2, th + 1, z0, BLOCK.AIR);
@@ -2738,63 +3076,120 @@ export class World {
       return;
     }
 
-    // MEGA-STRUCTURE #2: THE GRAND CITADEL (48x48 Stone Fortress + 120 Villagers + 2-Level Dungeon Vaults!)
+    // MEGA-STRUCTURE #2: THE MEGA CASTLE (64x64 Fortified Citadel + 26-Block Grand Keep + 3 Architectural Variants + 150 Villagers + Dungeons!)
     if (type === 'grand_citadel') {
+      const mVar = mega.variant || 0;
+      const wallMain = mVar === 0 ? BLOCK.STONE_BRICKS : (mVar === 1 ? BLOCK.MOSSY_COBBLESTONE : BLOCK.SANDSTONE);
+      const wallTrim = mVar === 0 ? BLOCK.COBBLESTONE : (mVar === 1 ? BLOCK.STONE_BRICKS : BLOCK.TERRACOTTA_ORANGE);
+      const bannerWool = mVar === 0 ? BLOCK.WOOL_RED : (mVar === 1 ? BLOCK.WOOL_GREEN : BLOCK.WOOL_BLUE);
+      const roofBlk = mVar === 0 ? BLOCK.BRICKS : (mVar === 1 ? BLOCK.SPRUCE_PLANKS : BLOCK.TERRACOTTA_RED);
+      const woodPlanks = mVar === 1 ? BLOCK.SPRUCE_PLANKS : BLOCK.OAK_PLANKS;
+      const woodLog = mVar === 1 ? BLOCK.SPRUCE_LOG : BLOCK.OAK_LOG;
       const levels = [baseY - 11, Math.max(10, baseY - 22)];
+
       for (let lz = 0; lz < 16; lz++) {
         const gz = cdz * 16 + lz;
         for (let lx = 0; lx < 16; lx++) {
           const gx = cdx * 16 + lx;
           const ch = heights[lx + (lz << 4)];
-          const dxC = Math.abs(gx - 23.5);
-          const dzC = Math.abs(gz - 23.5);
+          const dxC = Math.abs(gx - 31.5);
+          const dzC = Math.abs(gz - 31.5);
           const dist = Math.max(dxC, dzC);
 
           for (let y = levels[1] - 2; y < baseY; y++) setLocal(lx, y, lz, BLOCK.STONE);
-          const onRoad = (gx >= 22 && gx <= 25) || (gz >= 22 && gz <= 25);
-          setLocal(lx, baseY, lz, onRoad ? BLOCK.COBBLESTONE : (((gx + gz) & 1) ? BLOCK.STONE_BRICKS : BLOCK.GRASS));
+          const onRoad = (gx >= 30 && gx <= 33) || (gz >= 30 && gz <= 33);
+          setLocal(lx, baseY, lz, onRoad ? BLOCK.DIRT_PATH : (((gx + gz) & 1) ? wallMain : BLOCK.GRASS));
 
-          // Clear interior & sky
-          for (let y = baseY + 1; y <= Math.min(CHUNK_HEIGHT - 2, Math.max(ch + 4, baseY + 24)); y++) {
+          // Clear interior & sky up above the soaring 28-block Grand Keep!
+          for (let y = baseY + 1; y <= Math.min(CHUNK_HEIGHT - 2, Math.max(ch + 4, baseY + 32)); y++) {
             setLocal(lx, y, lz, BLOCK.AIR);
           }
 
-          // Towering 48x48 Fortress Walls & 4 Corner Watchtowers
-          const inTower = (gx <= 7 || gx >= 40) && (gz <= 7 || gz >= 40);
-          const isOuterWall = dist >= 21.5 && dist <= 23.5;
-          const inGate = ((dxC <= 2.5 && (gz <= 3 || gz >= 44)) || (dzC <= 2.5 && (gx <= 3 || gx >= 44)));
+          // 1. Massive 64x64 Outer Curtain Walls + 4 Towering 22-Block Corner Watchtowers!
+          const inTower = (gx <= 8 || gx >= 55) && (gz <= 8 || gz >= 55);
+          const isOuterWall = dist >= 29.5 && dist <= 31.5;
+          const inGate = ((dxC <= 3.0 && (gz <= 3 || gz >= 60)) || (dzC <= 3.0 && (gx <= 3 || gx >= 60)));
           if (inTower) {
-            const tEdge = gx === 0 || gx === 7 || gx === 40 || gx === 47 || gz === 0 || gz === 7 || gz === 40 || gz === 47;
-            for (let dy = 1; dy <= 18; dy++) {
-              if (tEdge) setLocal(lx, baseY + dy, lz, dy === 18 && ((gx + gz) & 1) ? BLOCK.AIR : BLOCK.STONE_BRICKS);
-              else if (dy === 16) setLocal(lx, baseY + dy, lz, BLOCK.OAK_PLANKS);
+            const tEdge = gx === 0 || gx === 8 || gx === 55 || gx === 63 || gz === 0 || gz === 8 || gz === 55 || gz === 63;
+            for (let dy = 1; dy <= 22; dy++) {
+              if (tEdge) {
+                const isCrenel = dy === 22 && ((gx + gz) & 1);
+                const isSlit = (dy === 10 || dy === 16) && (gx === 4 || gx === 59 || gz === 4 || gz === 59);
+                if (!isCrenel) setLocal(lx, baseY + dy, lz, isSlit ? BLOCK.GLASS : (dy % 5 === 0 ? wallTrim : wallMain));
+              } else if (dy === 11 || dy === 20) {
+                setLocal(lx, baseY + dy, lz, woodPlanks);
+              }
             }
-            if ((gx === 3 || gx === 44) && (gz === 3 || gz === 44)) setLocal(lx, baseY + 17, lz, BLOCK.GLOWSTONE);
+            if ((gx === 4 || gx === 59) && (gz === 4 || gz === 59)) setLocal(lx, baseY + 21, lz, BLOCK.GLOWSTONE);
           } else if (isOuterWall) {
-            for (let dy = 1; dy <= 11; dy++) {
-              if (inGate && dy <= 5) continue;
-              if (dy === 11 && ((gx + gz) & 1)) continue;
-              setLocal(lx, baseY + dy, lz, dy === 10 ? BLOCK.MOSSY_COBBLESTONE : BLOCK.STONE_BRICKS);
+            const wallH = inGate ? 16 : 13;
+            for (let dy = 1; dy <= wallH; dy++) {
+              if (inGate && dy <= 6 && (dxC <= 2.2 || dzC <= 2.2)) continue;
+              if (dy === wallH && ((gx + gz) & 1)) continue;
+              setLocal(lx, baseY + dy, lz, dy === wallH - 1 ? wallTrim : wallMain);
             }
-            if (dy_check(gx, gz)) setLocal(lx, baseY + 11, lz, BLOCK.TORCH);
+            // Hanging colored banners along the outer ramparts!
+            if (dist >= 31.0 && !inGate && ((gx % 10 === 0) || (gz % 10 === 0))) {
+              for (let by = 6; by <= 10; by++) setLocal(lx, baseY + by, lz, bannerWool);
+            }
+            if ((gx === 1 || gx === 62) && gz % 8 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
+            if ((gz === 1 || gz === 62) && gx % 8 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
           }
 
-          // Central Grand Fountain (gx,gz in [21..26])
-          if (gx >= 21 && gx <= 26 && gz >= 21 && gz <= 26) {
-            const rim = gx === 21 || gx === 26 || gz === 21 || gz === 26;
-            setLocal(lx, baseY + 1, lz, rim ? BLOCK.STONE_BRICKS : BLOCK.WATER);
-            if ((gx === 23 || gx === 24) && (gz === 23 || gz === 24)) {
-              setLocal(lx, baseY + 1, lz, BLOCK.IRON_BLOCK);
-              setLocal(lx, baseY + 2, lz, BLOCK.GLOWSTONE);
+          // 2. Towering Central Grand Keep (20x20 footprint: gx,gz in [22..41], 26 blocks tall!)
+          if (gx >= 22 && gx <= 41 && gz >= 22 && gz <= 41) {
+            const kEdgeX = gx === 22 || gx === 41;
+            const kEdgeZ = gz === 22 || gz === 41;
+            const kCorner = (gx <= 24 || gx >= 39) && (gz <= 24 || gz >= 39);
+            const kDoor = (gz === 41 || gz === 22) && gx >= 30 && gx <= 33;
+            const keepH = kCorner ? 27 : 22;
+
+            // Carpeted Throne Room floor!
+            const onCarpet = gx >= 30 && gx <= 33 && gz >= 25 && gz <= 40;
+            setLocal(lx, baseY, lz, onCarpet ? bannerWool : wallMain);
+
+            for (let dy = 1; dy <= keepH; dy++) {
+              if (kEdgeX || kEdgeZ) {
+                if (kDoor && dy <= 4) continue;
+                if (dy === keepH && ((gx + gz) & 1)) continue;
+                const isTallWin = (dy === 4 || dy === 5 || dy === 11 || dy === 12 || dy === 17) && !kCorner && ((gx % 4 === 0) || (gz % 4 === 0));
+                setLocal(lx, baseY + dy, lz, isTallWin ? BLOCK.GLASS : (kCorner ? wallTrim : wallMain));
+              } else if (dy === 8 || dy === 15 || dy === 21) {
+                // Keep multi-story floors (leave central stairwell open)
+                const isStairWell = gx >= 36 && gx <= 38 && gz >= 25 && gz <= 27;
+                if (!isStairWell) setLocal(lx, baseY + dy, lz, dy === 21 ? wallMain : woodPlanks);
+              }
             }
+            // Golden Throne at North end of Throne Room!
+            if (gx >= 30 && gx <= 33 && gz >= 24 && gz <= 26) {
+              setLocal(lx, baseY + 1, lz, BLOCK.GOLD_BLOCK);
+              if (gz === 24) setLocal(lx, baseY + 2, lz, BLOCK.GOLD_BLOCK);
+              if (gz === 24 && (gx === 31 || gx === 32)) setLocal(lx, baseY + 3, lz, BLOCK.GOLD_BLOCK);
+            }
+            // Hanging Glowstone Chandeliers in the Grand Hall
+            if ((gx === 27 || gx === 36) && (gz === 31 || gz === 36)) {
+              setLocal(lx, baseY + 7, lz, BLOCK.GLOWSTONE);
+              setLocal(lx, baseY + 14, lz, BLOCK.GLOWSTONE);
+            }
+            // Royal Library Bookshelves on 2nd Floor!
+            if ((gx === 23 || gx === 40) && gz >= 26 && gz <= 37) {
+              setLocal(lx, baseY + 9, lz, BLOCK.BOOKSHELF);
+              setLocal(lx, baseY + 10, lz, BLOCK.BOOKSHELF);
+            }
+            // Royal Vault Chests inside the Keep!
+            if (gx === 24 && gz === 24) placeChest(lx, baseY + 1, lz, makeSecretLoot(101 + mVar * 13, 3));
+            if (gx === 39 && gz === 24) placeChest(lx, baseY + 9, lz, makeSecretLoot(207 + mVar * 17, 3));
+            if (gx === 31 && gz === 25) placeChest(lx, baseY + 16, lz, makeSecretLoot(311 + mVar * 19, 3));
           }
         }
       }
 
-      // 8 Citadel Guildhouses in the 4 inner quadrants
+      // 3. 12 Castle Courtyard Guildhouses, Barracks & Stables in the 4 Outer Quadrants!
       const houses = [
-        [10, 10], [10, 17], [31, 10], [31, 17],
-        [10, 31], [17, 31], [31, 31], [31, 25]
+        [11, 11], [11, 20], [20, 11],
+        [46, 11], [46, 20], [37, 11],
+        [11, 46], [11, 37], [20, 46],
+        [46, 46], [46, 37], [37, 46]
       ];
       for (let hi = 0; hi < houses.length; hi++) {
         const [hx, hz] = houses[hi];
@@ -2806,40 +3201,39 @@ export class World {
             if (lx < 0 || lx >= 16) continue;
             const eX = dx === 0 || dx === 5, eZ = dz === 0 || dz === 5;
             const isDoor = dz === 5 && dx === 2;
-            setLocal(lx, baseY, lz, BLOCK.OAK_PLANKS);
+            setLocal(lx, baseY, lz, woodPlanks);
             for (let dy = 1; dy <= 4; dy++) {
               if (eX || eZ) {
                 if (isDoor && dy <= 2) setLocal(lx, baseY + dy, lz, BLOCK.AIR);
-                else if (eX && eZ) setLocal(lx, baseY + dy, lz, BLOCK.OAK_LOG);
+                else if (eX && eZ) setLocal(lx, baseY + dy, lz, woodLog);
                 else if (dy === 2 && !isDoor && (dx === 2 || dz === 2)) setLocal(lx, baseY + dy, lz, BLOCK.GLASS);
-                else setLocal(lx, baseY + dy, lz, BLOCK.OAK_PLANKS);
+                else setLocal(lx, baseY + dy, lz, woodPlanks);
               }
             }
-            setLocal(lx, baseY + 5, lz, BLOCK.BRICKS);
-            if (!eX && !eZ) setLocal(lx, baseY + 6, lz, BLOCK.BRICKS);
+            setLocal(lx, baseY + 5, lz, roofBlk);
+            if (!eX && !eZ) setLocal(lx, baseY + 6, lz, roofBlk);
             if (dx === 2 && dz === 2) setLocal(lx, baseY + 4, lz, BLOCK.TORCH);
-            if (dx === 4 && dz === 1) placeChest(lx, baseY + 1, lz, makeSecretLoot(hi * 17, 1));
+            if (dx === 4 && dz === 1) placeChest(lx, baseY + 1, lz, makeSecretLoot(hi * 17 + mVar * 9, 2));
           }
         }
       }
 
-      // 2-Level Underground Citadel Dungeon Vaults
+      // 4. 2-Level Underground Mega Castle Dungeon Vaults!
       for (let lvl = 0; lvl < 2; lvl++) {
         const ly0 = levels[lvl];
         for (let lz = 6; lz <= 9; lz++) {
           for (let lx = 0; lx < 16; lx++) {
-            setLocal(lx, ly0, lz, BLOCK.STONE_BRICKS);
+            setLocal(lx, ly0, lz, wallMain);
             for (let dy = 1; dy <= 3; dy++) setLocal(lx, ly0 + dy, lz, BLOCK.AIR);
           }
         }
         for (let lx = 6; lx <= 9; lx++) {
           for (let lz = 0; lz < 16; lz++) {
-            setLocal(lx, ly0, lz, BLOCK.STONE_BRICKS);
+            setLocal(lx, ly0, lz, wallMain);
             for (let dy = 1; dy <= 3; dy++) setLocal(lx, ly0 + dy, lz, BLOCK.AIR);
           }
         }
         setLocal(7, ly0 + 4, 7, BLOCK.GLOWSTONE);
-        // 2 secret vaults per chunk per level
         for (const [vx, vz, salt] of [[2, 2, 13], [11, 11, 29]]) {
           for (let dz = 0; dz < 3; dz++) {
             for (let dx = 0; dx < 3; dx++) {
@@ -2848,7 +3242,7 @@ export class World {
             }
           }
           setLocal(vx + 1, ly0 + 3, vz + 1, BLOCK.TORCH);
-          placeChest(vx + 1, ly0 + 1, vz + 1, makeSecretLoot(salt + lvl * 50, lvl + 1));
+          placeChest(vx + 1, ly0 + 1, vz + 1, makeSecretLoot(salt + lvl * 50 + mVar * 11, lvl + 1));
         }
       }
 
@@ -2858,12 +3252,12 @@ export class World {
           this.megaStructures.set(mKey, {
             key: mKey,
             type: 'grand_citadel',
-            name: 'Grand Citadel',
+            name: mega.name || 'Mega Castle',
             x: centerWx,
             y: baseY + 1,
             z: centerWz,
-            radius: 24,
-            innerRadius: 18,
+            radius: 32,
+            innerRadius: 26,
             villagerCount,
             discovered: false,
             crowdSpawned: false
@@ -2871,14 +3265,195 @@ export class World {
         }
       }
     }
+  }
 
-    function dy_check(gx, gz) {
-      return ((gx === 1 || gx === 46) && gz % 8 === 0) || ((gz === 1 || gz === 46) && gx % 8 === 0);
+  // Deterministic Inter-Landmark Connecting Dirt Path Network (Villages <-> Great Pyramids <-> Mega Castles!)
+  _getRoadSegmentsForChunk(cx, cz) {
+    if (this.worldType === 'flat' || !this.generateStructures) return null;
+    const rgx = Math.floor(cx / 16);
+    const rgz = Math.floor(cz / 16);
+    const rKey = `${rgx},${rgz}`;
+    let segs = this._roadRegionCache.get(rKey);
+    if (!segs) {
+      segs = [];
+      const villages = [];
+      const megas = [];
+
+      // Collect villages & mega-structures in a generous surrounding window
+      const minVcx = (rgx - 2) * 16;
+      const maxVcx = (rgx + 3) * 16;
+      const minVcz = (rgz - 2) * 16;
+      const maxVcz = (rgz + 3) * 16;
+
+      // Starter hubs around spawn
+      if (rgx >= -2 && rgx <= 2 && rgz >= -2 && rgz <= 2) {
+        villages.push({ x: 3 * 16 + 8, z: 2 * 16 + 8 }); // Starter Grand Village
+        megas.push({ x: -7 * 16, z: -6 * 16 });          // Starter Great Pyramid
+        megas.push({ x: 12 * 16, z: -7 * 16 });          // Starter Mega Castle
+      }
+
+      // Repeating Villages on 16x16 grid (vcx % 16 === 5, vcz % 16 === 5)
+      for (let gx = Math.floor(minVcx / 16); gx <= Math.floor(maxVcx / 16); gx++) {
+        const vcx = gx * 16 + 5;
+        for (let gz = Math.floor(minVcz / 16); gz <= Math.floor(maxVcz / 16); gz++) {
+          const vcz = gz * 16 + 5;
+          if (this.isVillageCenter(vcx, vcz)) {
+            villages.push({ x: vcx * 16 + 8, z: vcz * 16 + 8 });
+          }
+        }
+      }
+
+      // Repeating Great Pyramids & Mega Castles on 36x36 grid
+      const minMgx = Math.floor((minVcx + 18) / 36) - 1;
+      const maxMgx = Math.floor((maxVcx + 18) / 36) + 1;
+      const minMgz = Math.floor((minVcz + 18) / 36) - 1;
+      const maxMgz = Math.floor((maxVcz + 18) / 36) + 1;
+      const GRID = 36;
+      for (let gx = minMgx; gx <= maxMgx; gx++) {
+        for (let gz = minMgz; gz <= maxMgz; gz++) {
+          if (gx === 0 && gz === 0) continue;
+          const hRoll = coordHash(gx * 59, gz * 83, this.seed + 1901);
+          if (hRoll < 0.25) continue;
+          const offX = 5 + Math.floor(coordHash(gx * 37, gz * 71, this.seed + 1913) * (GRID - 12));
+          const offZ = 5 + Math.floor(coordHash(gx * 97, gz * 41, this.seed + 1931) * (GRID - 12));
+          const ocx = gx * GRID - 18 + offX;
+          const ocz = gz * GRID - 18 + offZ;
+          megas.push({ x: (ocx + 2) * 16, z: (ocz + 2) * 16 });
+        }
+      }
+
+      const seenPair = new Set();
+      const addSeg = (a, b) => {
+        const key = a.x < b.x || (a.x === b.x && a.z < b.z)
+          ? `${a.x},${a.z}-${b.x},${b.z}`
+          : `${b.x},${b.z}-${a.x},${a.z}`;
+        if (seenPair.has(key)) return;
+        seenPair.add(key);
+        const len = Math.hypot(b.x - a.x, b.z - a.z);
+        if (len < 36 || len > 520) return;
+        const bend = (coordHash(a.x + b.x, a.z - b.z, this.seed + 4441) - 0.5) * Math.min(48, len * 0.22);
+        const pad = Math.abs(bend) + 10;
+        segs.push({
+          ax: a.x, az: a.z, bx: b.x, bz: b.z, bend, len,
+          minX: Math.min(a.x, b.x) - pad,
+          maxX: Math.max(a.x, b.x) + pad,
+          minZ: Math.min(a.z, b.z) - pad,
+          maxZ: Math.max(a.z, b.z) + pad
+        });
+      };
+
+      // Link every Village to its closest Great Pyramid / Mega Castle (up to 2 links) + closest Neighbor Village!
+      for (const v of villages) {
+        const sortedMegas = megas
+          .map((m) => ({ m, d: Math.hypot(m.x - v.x, m.z - v.z) }))
+          .filter((e) => e.d > 48 && e.d <= 480)
+          .sort((a, b) => a.d - b.d);
+        if (sortedMegas[0]) addSeg(v, sortedMegas[0].m);
+        if (sortedMegas[1] && sortedMegas[1].d <= 280) addSeg(v, sortedMegas[1].m);
+
+        let bestV = null, bestVd = 340;
+        for (const v2 of villages) {
+          if (v2 === v) continue;
+          const d = Math.hypot(v2.x - v.x, v2.z - v.z);
+          if (d > 64 && d < bestVd) { bestVd = d; bestV = v2; }
+        }
+        if (bestV) addSeg(v, bestV);
+      }
+
+      if (this._roadRegionCache.size > 48) this._roadRegionCache.clear();
+      this._roadRegionCache.set(rKey, segs);
+    }
+    return segs;
+  }
+
+  stampConnectingPaths(cx, cz, ox, oz, heights, biomes, setLocal, getLocal, noTreeMask) {
+    const segs = this._getRoadSegmentsForChunk(cx, cz);
+    if (!segs || segs.length === 0) return;
+
+    // Fast chunk-level AABB cull so 90%+ of chunks exit immediately!
+    const hits = [];
+    const cMaxX = ox + 15, cMaxZ = oz + 15;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (cMaxX < s.minX || ox > s.maxX || cMaxZ < s.minZ || oz > s.maxZ) continue;
+      hits.push(s);
+    }
+    if (hits.length === 0) return;
+
+    for (let lz = 0; lz < 16; lz++) {
+      const wz = oz + lz;
+      for (let lx = 0; lx < 16; lx++) {
+        const wx = ox + lx;
+        const idx2 = lx + (lz << 4);
+        const biome = biomes[idx2];
+        if (biome === 'Ocean' || biome === 'Deep Ocean') continue;
+
+        let minDist = 999;
+        let bestAlong = 0;
+        for (let hi = 0; hi < hits.length; hi++) {
+          const s = hits[hi];
+          const dx = s.bx - s.ax;
+          const dz = s.bz - s.az;
+          const invLen2 = 1 / (dx * dx + dz * dz);
+          const t = Math.max(0, Math.min(1, ((wx - s.ax) * dx + (wz - s.az) * dz) * invLen2));
+          // Gentle organic perpendicular arch so roads feel handcrafted, never ruler-straight!
+          const nx = -dz / s.len;
+          const nz = dx / s.len;
+          const curve = Math.sin(t * Math.PI) * s.bend;
+          const px = s.ax + dx * t + nx * curve;
+          const pz = s.az + dz * t + nz * curve;
+          const d = Math.hypot(wx - px, wz - pz);
+          if (d < minDist) {
+            minDist = d;
+            bestAlong = t * s.len;
+          }
+        }
+
+        if (minDist > 3.5) continue;
+        // Clear tree exclusion buffer around roads so canopies never block highways!
+        noTreeMask[idx2] = 1;
+        if (minDist > 1.75) {
+          // Occasional rustic roadside torch signpost every ~28 blocks along one road edge!
+          if (minDist >= 2.0 && minDist <= 2.7 && Math.abs((bestAlong % 28) - 14) < 0.75) {
+            const h = heights[idx2];
+            if (h > SEA_LEVEL + 1 && h < SEA_LEVEL + 52) {
+              setLocal(lx, h + 1, lz, BLOCK.OAK_LOG);
+              setLocal(lx, h + 2, lz, BLOCK.OAK_LOG);
+              setLocal(lx, h + 3, lz, BLOCK.TORCH);
+            }
+          }
+          continue;
+        }
+
+        const h = heights[idx2];
+        if (h > SEA_LEVEL + 64) continue;
+        const isDesertRoad = biome === 'Desert' || biome === 'Badlands';
+        if (h <= SEA_LEVEL) {
+          // Wooden Plank Bridge across rivers/lakes!
+          const by = SEA_LEVEL + 1;
+          const isRail = minDist > 1.15;
+          setLocal(lx, by, lz, BLOCK.OAK_PLANKS);
+          setLocal(lx, by + 1, lz, isRail ? BLOCK.OAK_LOG : BLOCK.AIR);
+          setLocal(lx, by + 2, lz, BLOCK.AIR);
+          setLocal(lx, by + 3, lz, BLOCK.AIR);
+          if (isRail && Math.floor(bestAlong) % 6 === 0) {
+            for (let py = Math.max(1, h); py < by; py++) setLocal(lx, py, lz, BLOCK.OAK_LOG);
+          }
+        } else {
+          // Terrain-hugging authentic Minecraft Dirt Path (or Sandstone Highway in Desert!)
+          const roadBlk = isDesertRoad ? BLOCK.SANDSTONE : BLOCK.DIRT_PATH;
+          setLocal(lx, h, lz, roadBlk);
+          setLocal(lx, h + 1, lz, BLOCK.AIR);
+          setLocal(lx, h + 2, lz, BLOCK.AIR);
+          setLocal(lx, h + 3, lz, BLOCK.AIR);
+        }
+      }
     }
   }
 
   // Standalone Underground Structures in normal chunks (Abandoned Mineshafts, Mossy Dungeon Crypts, Deep Lava Shrines!)
   buildUndergroundStructure(cx, cz, ox, oz, heights, setLocal) {
+    if (!this.generateStructures) return;
     const gx = Math.floor(cx / 4);
     const gz = Math.floor(cz / 4);
     const rx = Math.floor(coordHash(gx * 53, gz * 79, this.seed + 2503) * 4);
@@ -3258,6 +3833,11 @@ export class World {
     // Standalone Underground Structures (Abandoned Mineshafts, Mossy Dungeon Crypts, Deep Obsidian Lava Shrines)
     if (!isFlat && !megaPre) {
       this.buildUndergroundStructure(cx, cz, ox, oz, heights, setLocal);
+    }
+
+    // Inter-Landmark Connecting Dirt Paths linking Villages <-> Great Pyramids <-> Mega Castles!
+    if (!isFlat && !megaPre && !vInfoPre && !structTypePre) {
+      this.stampConnectingPaths(cx, cz, ox, oz, heights, biomes, setLocal, getLocal, noTreeMask);
     }
 
     // Also pad chunk borders adjacent to a neighboring Mega-Structure, Village or Structure so canopies NEVER poke inside!
@@ -3902,7 +4482,7 @@ export class World {
     const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
     const id = this.getBlock(x, y, z);
     const tillable = (
-      id === BLOCK.GRASS || id === BLOCK.DIRT ||
+      id === BLOCK.GRASS || id === BLOCK.DIRT || id === BLOCK.DIRT_PATH ||
       id === BLOCK.SAVANNA_GRASS || id === BLOCK.JUNGLE_GRASS || id === BLOCK.SWAMP_GRASS
     );
     if (!tillable || this.getBlock(x, y + 1, z) !== BLOCK.AIR) return false;
@@ -3911,7 +4491,21 @@ export class World {
     return true;
   }
 
-  updateCrops(dt, isDay = true) {
+  // Authentic Minecraft Shovel Grass/Dirt Path creation!
+  makeDirtPath(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    const pathable = (
+      id === BLOCK.GRASS || id === BLOCK.DIRT ||
+      id === BLOCK.SAVANNA_GRASS || id === BLOCK.JUNGLE_GRASS || id === BLOCK.SWAMP_GRASS
+    );
+    if (!pathable || this.getBlock(x, y + 1, z) !== BLOCK.AIR) return false;
+    this.setBlock(x, y, z, BLOCK.DIRT_PATH, true);
+    return true;
+  }
+
+  updateCrops(dt, isDay = true, farmSpeed = 1.0) {
+    const speedMult = typeof farmSpeed === 'number' && Number.isFinite(farmSpeed) ? Math.max(0, Math.min(20, farmSpeed)) : 1.0;
     // 1. Update Farmland Hydration (water within 4 blocks -> dark wet farmland; dry bare farmland reverts to dirt)
     if (this.activeFarmlands.size > 0) {
       let fTicks = 0;
@@ -3947,12 +4541,13 @@ export class World {
     }
 
     // 2. Grow Wheat Crops (REQUIRES nearby Water / Hydrated Farmland + daylight or torch/glowstone light!)
-    if (this.activeCrops.size > 0) {
+    if (this.activeCrops.size > 0 && speedMult > 0) {
       let cTicks = 0;
+      const cropDt = dt * speedMult;
       for (const [k, c] of this.activeCrops) {
-        c.timer -= dt;
+        c.timer -= cropDt;
         if (c.timer > 0) continue;
-        c.timer = 7.0 + Math.random() * 8.0; // Full 0->7 growth in ~60-90 seconds when watered!
+        c.timer = 7.0 + Math.random() * 8.0; // Scales directly with Farm Speed Multiplier!
         const cur = this.getBlock(c.x, c.y, c.z);
         if (!isWheatBlock(cur) || cur >= BLOCK.WHEAT_7) {
           this.activeCrops.delete(k);
@@ -5878,6 +6473,9 @@ export class World {
     this.fluidQueue.clear();
     this.activeCrops.clear();
     this.activeFarmlands.clear();
+    this._roadRegionCache.clear();
+    this._megaChunkCache.clear();
+    this._villageChunkCache.clear();
     this.doorStates.clear();
     this.megaStructures.clear();
     this.scene.remove(this.group);

@@ -1199,6 +1199,159 @@ export class EntityManager {
     this.blockDropMat = textures
       ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
       : null;
+
+    // Shared 16x24 Animated Pixel-Art Minecraft Flame Overlay for Burning Mobs (ZERO per-mob texture allocations!)
+    this._mobFireGeo = new THREE.PlaneGeometry(1, 1);
+    this._mobFireCanvas = null;
+    this._mobFireCtx = null;
+    this._mobFireTex = null;
+    this._mobFireMat = null;
+    this._mobFireFrame = -1;
+    this._mobFireAnimClock = 0;
+  }
+
+  _initMobFireResources() {
+    if (this._mobFireMat) return;
+    if (typeof document === 'undefined') return;
+    const c = document.createElement('canvas');
+    c.width = 16;
+    c.height = 24;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    this._mobFireCanvas = c;
+    this._mobFireCtx = ctx;
+    const tex = new THREE.CanvasTexture(c);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.generateMipmaps = false;
+    this._mobFireTex = tex;
+    this._mobFireMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      alphaTest: 0.35,
+      side: THREE.DoubleSide,
+      fog: false
+    });
+    this._drawMobFireFrame(0);
+  }
+
+  // Authentic Minecraft tall pixel-art flame animation (bright white core -> yellow -> orange -> licking red tips!)
+  _drawMobFireFrame(frame) {
+    const ctx = this._mobFireCtx;
+    if (!ctx) return;
+    ctx.clearRect(0, 0, 16, 24);
+    const f = frame & 7;
+    const phase = f * 0.785398;
+    const pal = [
+      '#c82d06', // 0: deep fiery red-orange outer edge
+      '#e65100', // 1: vivid orange flame
+      '#ff7b00', // 2: bright molten orange
+      '#ffad14', // 3: golden amber
+      '#ffe14d', // 4: bright yellow inner tongue
+      '#fff8c9'  // 5: white-hot core at base
+    ];
+    // 5 dancing flame columns across 16px width with tall center spire matching Minecraft entity fire!
+    for (let x = 0; x < 16; x++) {
+      const nx = (x - 7.5) / 7.5; // -1..1
+      const centerWeight = Math.max(0, 1 - nx * nx * 0.92);
+      const wave1 = Math.sin(x * 0.95 + phase * 2.0) * 2.6;
+      const wave2 = Math.cos(x * 1.75 - phase * 3.0) * 1.8;
+      const spire = (x >= 5 && x <= 10) ? (4.8 + Math.sin(phase * 2.0 + x * 0.6) * 2.2) : 0;
+      const colH = Math.max(0, Math.min(23, Math.floor(centerWeight * 16.5 + spire + wave1 + wave2)));
+      const yTop = 24 - colH;
+      for (let y = yTop; y < 24; y++) {
+        // Horizontal sway of rising flame tongues
+        const rise = (23 - y) / 23;
+        const flicker = Math.sin(y * 0.75 + phase * 3.0 + x * 0.55);
+        // Carve crisp pixel notches near flame tips so tips look like authentic dancing tongues
+        if (y < yTop + 3 && flicker < -0.22 && (x < 6 || x > 9)) continue;
+        // Core heat intensity: hottest at bottom center, cooler at outer & top edges
+        const heat = (1 - rise * 0.88) * 0.78 + centerWeight * 0.42 + flicker * 0.14;
+        let idx = 0;
+        if (heat > 0.96 && y >= 18) idx = 5;
+        else if (heat > 0.78) idx = 4;
+        else if (heat > 0.60) idx = 3;
+        else if (heat > 0.42) idx = 2;
+        else if (heat > 0.25) idx = 1;
+        else idx = 0;
+        ctx.fillStyle = pal[idx];
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    this._mobFireTex.needsUpdate = true;
+  }
+
+  _ensureMobFireMesh(m) {
+    if (m.fireGroup) return m.fireGroup;
+    this._initMobFireResources();
+    if (!this._mobFireMat) return null;
+    const fg = new THREE.Group();
+    const w = Math.max(0.75, (m.def.size ? m.def.size[0] : 0.8) * 1.22);
+    const d = Math.max(0.75, (m.def.size ? m.def.size[2] : 0.8) * 1.15);
+    const span = Math.max(w, d);
+    const h = Math.max(1.25, (m.height || 1.0) * 1.65);
+
+    // 4-plane wrap-around Minecraft entity flame rig (crossed core + front/back & side curtains!)
+    const configs = [
+      { ry: Math.PI * 0.25, sx: span * 1.08, sy: h, px: 0, pz: 0 },
+      { ry: -Math.PI * 0.25, sx: span * 1.08, sy: h, px: 0, pz: 0 },
+      { ry: 0, sx: w * 1.04, sy: h * 0.86, px: 0, pz: d * 0.34 },
+      { ry: 0, sx: w * 1.04, sy: h * 0.86, px: 0, pz: -d * 0.34 },
+      { ry: Math.PI * 0.5, sx: d * 1.04, sy: h * 0.86, px: w * 0.34, pz: 0 },
+      { ry: Math.PI * 0.5, sx: d * 1.04, sy: h * 0.86, px: -w * 0.34, pz: 0 }
+    ];
+    for (const cfg of configs) {
+      const plane = new THREE.Mesh(this._mobFireGeo, this._mobFireMat);
+      plane.scale.set(cfg.sx, cfg.sy, 1);
+      plane.position.set(cfg.px, cfg.sy * 0.47, cfg.pz);
+      plane.rotation.y = cfg.ry;
+      plane.castShadow = false;
+      plane.receiveShadow = false;
+      fg.add(plane);
+    }
+    fg.visible = false;
+    m.mesh.add(fg);
+    m.fireGroup = fg;
+    return fg;
+  }
+
+  // Scan 8 directions around a mob in lava/fire to find the closest safe dry block (or water) to jump toward!
+  _findLavaEscapeYaw(m) {
+    let bestYaw = null;
+    let bestScore = -1e9;
+    const px = m.pos.x;
+    const py = Math.floor(m.pos.y);
+    const pz = m.pos.z;
+    for (let i = 0; i < 8; i++) {
+      const yaw = (i / 8) * Math.PI * 2;
+      const sx = Math.sin(yaw);
+      const sz = Math.cos(yaw);
+      for (const dist of [1.6, 2.8]) {
+        const tx = Math.floor(px + sx * dist);
+        const tz = Math.floor(pz + sz * dist);
+        let score = 0;
+        const b0 = this.world.getBlock(tx, py, tz);
+        const b1 = this.world.getBlock(tx, py + 1, tz);
+        const b2 = this.world.getBlock(tx, py + 2, tz);
+        const bBelow = this.world.getBlock(tx, py - 1, tz);
+        if (b0 === BLOCK.LAVA || b1 === BLOCK.LAVA || b0 === BLOCK.FIRE || b1 === BLOCK.FIRE) {
+          score -= 100;
+        } else if (b0 === BLOCK.WATER || b1 === BLOCK.WATER) {
+          // Water immediately extinguishes fire — huge priority!
+          score += 55 - dist * 4;
+        } else if (!isBlockSolid(b1) && !isBlockSolid(b2) && (isBlockSolid(b0) || isBlockSolid(bBelow))) {
+          // Safe solid ledge right next to lava (either level or 1-block step-up!)
+          score += (isBlockSolid(b0) ? 40 : 35) - dist * 4;
+        } else {
+          score -= 15;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestYaw = yaw;
+        }
+      }
+    }
+    return bestYaw !== null ? bestYaw : (Math.random() * Math.PI * 2);
   }
 
   // Full 3D AABB collision test so animals NEVER clip or overlap with blocks!
@@ -1377,6 +1530,10 @@ export class EntityManager {
   }
 
   pickWildlifeForBiome(biome, ground, y = SEA_LEVEL + 6) {
+    // Open Ocean: only aquatic fish/ducks (handled above), or sea turtles on sandy shoals!
+    if (biome === 'Ocean' || biome === 'Deep Ocean') {
+      return ground === BLOCK.SAND && y >= SEA_LEVEL - 1 ? 'turtle' : null;
+    }
     // High Mountains & Alpine Peaks: ONLY Mountain Goats (never lowland farm animals on tall peaks!)
     if (biome === 'Mountains' || y > SEA_LEVEL + 44) {
       if (y > SEA_LEVEL + 90) return null;
@@ -1712,8 +1869,11 @@ export class EntityManager {
     this.sound.playHurt();
 
     if (mob.hp <= 0) {
+      const cookedMap = { raw_beef: 'cooked_beef', raw_pork: 'cooked_porkchop', raw_chicken: 'cooked_chicken' };
+      const isBurning = (mob.burnTimer || 0) > 0;
       for (const dropId of mob.def.drop) {
-        this.spawnDrop(dropId, 1, mob.pos.x, mob.pos.y + 0.4, mob.pos.z);
+        const finalDrop = isBurning && cookedMap[dropId] ? cookedMap[dropId] : dropId;
+        this.spawnDrop(finalDrop, 1, mob.pos.x, mob.pos.y + 0.4, mob.pos.z);
       }
       if (player) player.addXP(mob.def.xp || 2);
       this.removeMob(mob);
@@ -1950,6 +2110,7 @@ export class EntityManager {
 
     // 2. Update All Mobs & Wildlife (with full 3D AABB collision!)
     const nowSec = performance.now() * 0.001;
+    let anyMobBurning = false;
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
       if (difficulty === 'peaceful' && m.def.hostile) {
@@ -2085,12 +2246,7 @@ export class EntityManager {
       if (m.def.burnsInDay && !sky.isNight() && sky.weather === 'clear') {
         const surfY = this.world.getSurfaceY(m.pos.x, m.pos.z);
         if (m.pos.y >= surfY - 1.2) {
-          m.hp -= dt * 2.5;
-          m.hurtFlash = 0.15;
-          if (m.hp <= 0) {
-            this.removeMob(m);
-            continue;
-          }
+          m.burnTimer = Math.max(m.burnTimer || 0, 2.4);
         }
       }
 
@@ -2276,22 +2432,74 @@ export class EntityManager {
         }
       }
 
-      // Gravity, Water Buoyancy & Lava/Fire Hazard Damage!
+      // Gravity, Water Buoyancy, Lava Escape & Animated Fire Burning!
       const feetBlk = this.world.getBlock(m.pos.x, m.pos.y + 0.15, m.pos.z);
       const midBlk = this.world.getBlock(m.pos.x, m.pos.y + Math.min(0.85, m.height * 0.5), m.pos.z);
       const inWater = feetBlk === BLOCK.WATER;
       const inLava = feetBlk === BLOCK.LAVA || midBlk === BLOCK.LAVA;
       const inFire = feetBlk === BLOCK.FIRE || midBlk === BLOCK.FIRE;
+
+      if (inWater) {
+        // Water immediately extinguishes burning mobs!
+        m.burnTimer = 0;
+        m._fireDotTick = 0;
+      }
+
       if (inLava || inFire) {
+        // Catch on fire + actively steer & frantically jump away from lava/fire!
+        m.burnTimer = Math.max(m.burnTimer || 0, inLava ? 8.0 : 5.5);
+        m._lavaEscapeTimer = (m._lavaEscapeTimer || 0) - dt;
+        if (m._lavaEscapeTimer <= 0) {
+          m._lavaEscapeTimer = 0.32;
+          m.wanderDir = this._findLavaEscapeYaw(m);
+        }
+        m.fleeTimer = Math.max(m.fleeTimer || 0, 4.5);
+        m.panicZigTimer = 0.35; // keep steering toward the safe escape block!
+        m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 16));
+        const escSpeed = m.def.speed * (inLava ? 2.2 : 2.0);
+        moveX = Math.sin(m.yaw) * escSpeed;
+        moveZ = Math.cos(m.yaw) * escSpeed;
+
+        // Strong escape jumps out of lava pools so mobs visibly leap away onto dry land!
+        m._lavaJumpCd = (m._lavaJumpCd || 0) - dt;
+        if (m._lavaJumpCd <= 0) {
+          m._lavaJumpCd = 0.32;
+          m.vel.y = Math.max(m.vel.y, inLava ? 7.6 : 6.4);
+          m.vel.x = moveX * 1.15;
+          m.vel.z = moveZ * 1.15;
+        }
+
         m._lavaBurnTick = (m._lavaBurnTick || 0) + dt;
-        if (m._lavaBurnTick >= (inLava ? 0.5 : 0.75)) {
+        if (m._lavaBurnTick >= (inLava ? 0.55 : 0.8)) {
           m._lavaBurnTick = 0;
-          const deadNow = this.hitMob(m, inLava ? 4 : 2, { x: (Math.random() - 0.5), y: 0.5, z: (Math.random() - 0.5) }, null);
+          const deadNow = this.hitMob(m, inLava ? 3 : 2, { x: Math.sin(m.yaw), y: 0.65, z: Math.cos(m.yaw) }, null);
           if (deadNow && m.hp <= 0) continue;
         }
-        if (inLava) m.vel.y = Math.max(m.vel.y, 2.2);
       } else {
         m._lavaBurnTick = 0;
+      }
+
+      // Ongoing burning damage & animated 3D pixel flames after catching on fire!
+      if (m.burnTimer > 0) {
+        anyMobBurning = true;
+        m.burnTimer = Math.max(0, m.burnTimer - dt);
+        m._fireDotTick = (m._fireDotTick || 0) + dt;
+        if (!inLava && !inFire && m._fireDotTick >= 0.95) {
+          m._fireDotTick = 0;
+          const deadNow = this.hitMob(m, 1.5, { x: Math.sin(m.yaw) * 0.4, y: 0.3, z: Math.cos(m.yaw) * 0.4 }, null);
+          if (deadNow && m.hp <= 0) continue;
+        }
+        if (effects && Math.random() < dt * 5.0 && distToPlayer < 36) {
+          effects.spawnFireEmber(m.pos.x - 0.5, m.pos.y + m.height * 0.5, m.pos.z - 0.5);
+        }
+        const fg = this._ensureMobFireMesh(m);
+        if (fg) {
+          fg.visible = true;
+          const flick = 0.94 + Math.sin(nowSec * 26 + m.walkPhase) * 0.08;
+          fg.scale.set(1.0, flick, 1.0);
+        }
+      } else if (m.fireGroup && m.fireGroup.visible) {
+        m.fireGroup.visible = false;
       }
 
       if (m.def.floatsOnWater && inWater) {
@@ -2446,6 +2654,16 @@ export class EntityManager {
               : (speedMag > 0.2 ? Math.sin(m.walkPhase * 1.5) * 0.18 : 0));
         m.wings[0].rotation.z = wFlap;
         m.wings[1].rotation.z = -wFlap;
+      }
+    }
+
+    // Animate shared 16x24 pixel-art burning mob flame texture at 14 FPS ONLY while at least 1 mob is burning!
+    if (anyMobBurning && this._mobFireCtx) {
+      this._mobFireAnimClock += dt;
+      const frame = Math.floor(this._mobFireAnimClock * 14) & 7;
+      if (frame !== this._mobFireFrame) {
+        this._mobFireFrame = frame;
+        this._drawMobFireFrame(frame);
       }
     }
 

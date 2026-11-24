@@ -130,9 +130,11 @@ export function createLodKernel(seed, worldType) {
     const mountField = fbm2D(permH, wx * 0.00155 + 50, wz * 0.00155 - 50, octBiome);
     const octCont = detailLevel >= 3 ? 2 : (detailLevel >= 1 ? 3 : 4);
     const cont = fbm2D(permH, wx * 0.0018, wz * 0.0018, octCont);
+    const isOceanZone = cont < -0.175 && mountField < 0.04 && (wx * wx + wz * wz) > 140 * 140;
 
     let biome = 0;
-    if (mountField > 0.145) biome = 1;
+    if (isOceanZone) biome = 11;
+    else if (mountField > 0.145) biome = 1;
     else if (temp > 0.21 && moist < -0.05) biome = 8;
     else if (temp > 0.13 && moist < 0.01) biome = 2;
     else if (temp > 0.10 && moist < 0.11) biome = 6;
@@ -220,8 +222,17 @@ export function createLodKernel(seed, worldType) {
     }
 
     const terrace = detailLevel < 3 ? Math.sin(hills * 3.14159) * 0.5 * flatBlend : 0;
-    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve;
-    if (biome === 9 && mSmooth < 0.15) {
+    let oceanCarve = 0;
+    if (isOceanZone) {
+      let oRaw = (-0.175 - cont) / 0.18;
+      if (oRaw < 0) oRaw = 0;
+      else if (oRaw > 1) oRaw = 1;
+      oceanCarve = 10.5 + (oRaw * oRaw * (3 - 2 * oRaw)) * 18.5;
+    }
+    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve - oceanCarve;
+    if (isOceanZone) {
+      baseH = Math.min(baseH, SEA_LEVEL - 4.5 + hills * 2.5);
+    } else if (biome === 9 && mSmooth < 0.15) {
       baseH = Math.min(baseH, SEA_LEVEL + 3.5 + hills * 3.0);
       baseH = Math.max(baseH, SEA_LEVEL - 2.5);
     }
@@ -234,33 +245,33 @@ export function createLodKernel(seed, worldType) {
 
   function isVillageCenter(vcx, vcz) {
     if (isFlat) return false;
-    if (vcx === 2 && vcz === 1) return true;
-    if (((vcx % 11) + 11) % 11 !== 4 || ((vcz % 11) + 11) % 11 !== 4) return false;
-    return coordHash(vcx * 13, vcz * 17, seed + 555) > 0.25;
+    if (vcx === 3 && vcz === 2) return true;
+    if (((vcx % 16) + 16) % 16 !== 5 || ((vcz % 16) + 16) % 16 !== 5) return false;
+    return coordHash(vcx * 13, vcz * 17, seed + 555) > 0.24;
   }
 
   function isWatchtowerChunk(cx, cz) {
     if (isFlat) return false;
-    if (((cx % 9) + 9) % 9 !== 5 || ((cz % 9) + 9) % 9 !== 4) return false;
-    return coordHash(cx * 31, cz * 29, seed + 777) > 0.45;
+    if (((cx % 10) + 10) % 10 !== 5 || ((cz % 10) + 10) % 10 !== 4) return false;
+    return coordHash(cx * 31, cz * 29, seed + 777) > 0.55;
   }
 
-  // Exact match to World.getMegaStructureForChunk so Great Pyramids & Grand Citadels rise majestically on the horizon!
+  // Exact match to World.getMegaStructureForChunk so Great Pyramids & 64x64 Mega Castles rise majestically on the horizon!
   function getMegaOriginInGrid(gx, gz) {
     if (gx === 0 && gz === 0) {
-      return { type: 1, originCx: -7, originCz: -6, sizeChunks: 4 }; // Starter Great Pyramid!
+      return { type: 1, originCx: -9, originCz: -8, sizeChunks: 4 }; // Starter Great Pyramid!
     }
-    const GRID = 28;
+    const GRID = 36;
     const hRoll = coordHash(gx * 59, gz * 83, seed + 1901);
-    if (hRoll < 0.22) return null;
-    const isCitadel = (((gx + gz) & 1) === 1) && hRoll > 0.56;
-    const sizeChunks = isCitadel ? 3 : 4;
-    const offX = 4 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 10));
-    const offZ = 4 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 10));
+    if (hRoll < 0.25) return null;
+    const isCastle = (((gx + gz) & 1) === 1) || hRoll > 0.62;
+    const sizeChunks = 4;
+    const offX = 5 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 12));
+    const offZ = 5 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 12));
     return {
-      type: isCitadel ? 2 : 1,
-      originCx: gx * GRID - 14 + offX,
-      originCz: gz * GRID - 14 + offZ,
+      type: isCastle ? 2 : 1,
+      originCx: gx * GRID - 18 + offX,
+      originCz: gz * GRID - 18 + offZ,
       sizeChunks
     };
   }

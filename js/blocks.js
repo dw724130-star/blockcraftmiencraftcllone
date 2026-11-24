@@ -101,7 +101,8 @@ export const BLOCK = {
   WHEAT_4: 97,
   WHEAT_5: 98,
   WHEAT_6: 99,
-  WHEAT_7: 100
+  WHEAT_7: 100,
+  DIRT_PATH: 101
 };
 
 // Block numeric ID -> string item key
@@ -214,6 +215,7 @@ regBlock(BLOCK.DIAMOND_BLOCK, 'diamond_block', { name: 'Block of Diamond', hardn
 regBlock(BLOCK.LADDER, 'ladder', { name: 'Ladder', solid: false, transparent: true, cross: true, climbable: true, hardness: 0.5, tool: 'axe', sound: 'wood', faces: { all: 'ladder' } });
 regBlock(BLOCK.FARMLAND, 'farmland', { name: 'Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'farmland_top', side: 'dirt', bottom: 'dirt' } });
 regBlock(BLOCK.FARMLAND_WET, 'farmland_wet', { name: 'Hydrated Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', hiddenFromCreative: true, faces: { top: 'farmland_wet_top', side: 'dirt', bottom: 'dirt' } });
+regBlock(BLOCK.DIRT_PATH, 'dirt_path', { name: 'Dirt Path', hardness: 0.65, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'dirt_path_top', side: 'dirt_path_side', bottom: 'dirt' } });
 for (let st = 0; st <= 7; st++) {
   regBlock(BLOCK.WHEAT_0 + st, `wheat_stage_${st}`, {
     name: st === 7 ? 'Ripe Wheat' : 'Wheat Crop',
@@ -516,7 +518,7 @@ export function getItemCategory(def) {
   if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
     return 'utility';
   }
-  if (['grass', 'savanna_grass', 'jungle_grass', 'swamp_grass', 'dirt', 'mud', 'sand', 'red_sand', 'gravel', 'water', 'oak_log', 'oak_leaves', 'birch_log', 'birch_leaves', 'spruce_log', 'spruce_leaves', 'acacia_log', 'acacia_leaves', 'jungle_log', 'jungle_leaves', 'cherry_log', 'cherry_leaves', 'cactus', 'snow', 'ice', 'packed_ice', 'tall_grass', 'flower_red', 'flower_yellow', 'farmland', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'].includes(id)) {
+  if (['grass', 'savanna_grass', 'jungle_grass', 'swamp_grass', 'dirt', 'dirt_path', 'mud', 'sand', 'red_sand', 'gravel', 'water', 'oak_log', 'oak_leaves', 'birch_log', 'birch_leaves', 'spruce_log', 'spruce_leaves', 'acacia_log', 'acacia_leaves', 'jungle_log', 'jungle_leaves', 'cherry_log', 'cherry_leaves', 'cactus', 'snow', 'ice', 'packed_ice', 'tall_grass', 'flower_red', 'flower_yellow', 'farmland', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'].includes(id)) {
     return 'nature';
   }
   return 'building';

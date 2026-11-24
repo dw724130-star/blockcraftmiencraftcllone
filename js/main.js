@@ -260,7 +260,7 @@ class BlockCraftGame {
     this.player = null;
   }
 
-  async startNewWorld({ name, mode, worldType, seed, allowCheats = false, difficulty = 'normal', mobSpawnRate = 1.0, hungerRate = 1.0 }) {
+  async startNewWorld({ name, mode, worldType, seed, allowCheats = false, difficulty = 'normal', mobSpawnRate = 1.0, hungerRate = 1.0, farmSpeed = 1.0, generateStructures = true, bonusChest = false }) {
     if (this._loadingWorld) return;
     this.sound.unlock();
     const id = 'w_' + Date.now();
@@ -273,7 +273,10 @@ class BlockCraftGame {
       allowCheats: Boolean(allowCheats),
       difficulty: ['peaceful', 'easy', 'normal', 'hard'].includes(difficulty) ? difficulty : 'normal',
       mobSpawnRate: typeof mobSpawnRate === 'number' && Number.isFinite(mobSpawnRate) ? mobSpawnRate : 1.0,
-      hungerRate: typeof hungerRate === 'number' && Number.isFinite(hungerRate) ? hungerRate : 1.0
+      hungerRate: typeof hungerRate === 'number' && Number.isFinite(hungerRate) ? hungerRate : 1.0,
+      farmSpeed: typeof farmSpeed === 'number' && Number.isFinite(farmSpeed) ? farmSpeed : 1.0,
+      generateStructures: generateStructures !== false,
+      bonusChest: Boolean(bonusChest)
     };
     await this.initGameSession(this.worldMeta, null);
     await this.saveCurrentWorld(false);
@@ -296,7 +299,10 @@ class BlockCraftGame {
       allowCheats: data.allowCheats !== undefined ? Boolean(data.allowCheats) : Boolean(this.settings.allowCheats),
       difficulty: ['peaceful', 'easy', 'normal', 'hard'].includes(data.difficulty) ? data.difficulty : 'normal',
       mobSpawnRate: typeof data.mobSpawnRate === 'number' && Number.isFinite(data.mobSpawnRate) ? data.mobSpawnRate : 1.0,
-      hungerRate: typeof data.hungerRate === 'number' && Number.isFinite(data.hungerRate) ? data.hungerRate : 1.0
+      hungerRate: typeof data.hungerRate === 'number' && Number.isFinite(data.hungerRate) ? data.hungerRate : 1.0,
+      farmSpeed: typeof data.farmSpeed === 'number' && Number.isFinite(data.farmSpeed) ? data.farmSpeed : (typeof this.settings.farmSpeed === 'number' ? this.settings.farmSpeed : 1.0),
+      generateStructures: data.generateStructures !== false,
+      bonusChest: Boolean(data.bonusChest)
     };
     await this.initGameSession(this.worldMeta, data);
   }
@@ -305,7 +311,8 @@ class BlockCraftGame {
     return {
       difficulty: this.worldMeta?.difficulty || 'normal',
       mobSpawnRate: typeof this.worldMeta?.mobSpawnRate === 'number' ? this.worldMeta.mobSpawnRate : 1.0,
-      hungerRate: typeof this.worldMeta?.hungerRate === 'number' ? this.worldMeta.hungerRate : 1.0
+      hungerRate: typeof this.worldMeta?.hungerRate === 'number' ? this.worldMeta.hungerRate : 1.0,
+      farmSpeed: typeof this.worldMeta?.farmSpeed === 'number' ? this.worldMeta.farmSpeed : (typeof this.settings?.farmSpeed === 'number' ? this.settings.farmSpeed : 1.0)
     };
   }
 
@@ -386,6 +393,30 @@ class BlockCraftGame {
     return true;
   }
 
+  setFarmSpeed(val, silent = false) {
+    let rate = typeof val === 'number' ? val : NaN;
+    if (Number.isNaN(rate)) {
+      const raw = String(val || '').toLowerCase().trim();
+      const map = { off: 0, paused: 0, slow: 0.5, normal: 1.0, default: 1.0, fast: 2.0, turbo: 4.0, hyper: 8.0, instant: 10.0 };
+      rate = raw in map ? map[raw] : parseFloat(raw);
+    }
+    if (!Number.isFinite(rate)) return false;
+    rate = Math.max(0, Math.min(20, Math.round(rate * 100) / 100));
+    if (!this.worldMeta) this.worldMeta = {};
+    this.worldMeta.farmSpeed = rate;
+    this.settings.farmSpeed = rate;
+    saveSettings(this.settings);
+    if (this.running) this.saveCurrentWorld(false);
+    if (this.ui) {
+      this.ui.syncWorldRulesUI(this.worldMeta);
+      if (!silent) {
+        this.ui.addChatMessage(`Farm growth speed set to ${rate}×`);
+        this.ui.toast(`Farm Speed: ${rate}×`);
+      }
+    }
+    return true;
+  }
+
   async deleteSavedWorld(id) {
     await deleteWorld(id);
     await this.refreshWorldList();
@@ -413,7 +444,8 @@ class BlockCraftGame {
         worldType: meta.worldType,
         renderDistance: this.settings.renderDistance,
         maxDetailRadius: this.isTouch ? 5 : 10,
-        shaders: shaderMode
+        shaders: shaderMode,
+        generateStructures: meta.generateStructures !== false
       });
 
       // Wire fluid mixing (Obsidian/Cobblestone/Stone steam fizz) & Fire-to-TNT ignition!
@@ -520,6 +552,35 @@ class BlockCraftGame {
         const sy = this.world.getSurfaceY(startX, startZ);
         this.player.pos.set(startX, sy + 0.25, startZ);
         this.player.spawnPos.set(startX, sy + 0.25, startZ);
+
+        // Authentic Minecraft Bonus Chest right beside spawn (with 4 torches & starter supplies!)
+        if (meta.bonusChest) {
+          const cxB = Math.floor(startX) + 2;
+          const czB = Math.floor(startZ);
+          const cyB = this.world.getSurfaceY(cxB, czB) + 1;
+          this.world.setBlock(cxB, cyB, czB, BLOCK.CHEST, true);
+          const loot = new Array(27).fill(null);
+          const starter = [
+            { id: 'wooden_pickaxe', count: 1, durability: 60 },
+            { id: 'wooden_axe', count: 1, durability: 60 },
+            { id: 'wooden_shovel', count: 1, durability: 60 },
+            { id: 'wooden_hoe', count: 1, durability: 60 },
+            { id: 'oak_planks', count: 16 },
+            { id: 'stick', count: 8 },
+            { id: 'apple', count: 4 },
+            { id: 'bread', count: 4 },
+            { id: 'wheat_seeds', count: 8 },
+            { id: 'torch', count: 12 }
+          ];
+          for (let i = 0; i < starter.length; i++) loot[i] = starter[i];
+          this.world.chests.set(`${cxB},${cyB},${czB}`, loot);
+          for (const [tdx, tdz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const ty = this.world.getSurfaceY(cxB + tdx, czB + tdz) + 1;
+            if (Math.abs(ty - cyB) <= 2 && this.world.getBlock(cxB + tdx, ty, czB + tdz) === BLOCK.AIR) {
+              this.world.setBlock(cxB + tdx, ty, czB + tdz, BLOCK.TORCH, true);
+            }
+          }
+        }
       }
 
       this.player.onDamage = () => this.ui.flashDamage();
@@ -608,6 +669,9 @@ class BlockCraftGame {
       difficulty: this.worldMeta.difficulty || 'normal',
       mobSpawnRate: typeof this.worldMeta.mobSpawnRate === 'number' ? this.worldMeta.mobSpawnRate : 1.0,
       hungerRate: typeof this.worldMeta.hungerRate === 'number' ? this.worldMeta.hungerRate : 1.0,
+      farmSpeed: typeof this.worldMeta.farmSpeed === 'number' ? this.worldMeta.farmSpeed : 1.0,
+      generateStructures: this.worldMeta.generateStructures !== false,
+      bonusChest: Boolean(this.worldMeta.bonusChest),
       time: this.sky.time,
       dayCount: this.sky.dayCount,
       player: {
@@ -868,12 +932,24 @@ class BlockCraftGame {
         }
       }
 
-      // 2d. Hoe Tilling (Grass/Dirt -> Farmland / Hydrated Farmland!) & Wheat Seed Planting!
+      // 2d. Hoe Tilling (Grass/Dirt -> Farmland), Shovel Dirt Paths (Grass/Dirt -> Dirt Path) & Wheat Seed Planting!
       if (!isRepeat && heldDef && heldDef.toolType === 'hoe' && this.currentTarget) {
         const { x, y, z } = this.currentTarget;
         if (this.world.tillBlock(x, y, z)) {
           this.player.swingAnim = 1.0;
-          this.sound.playBlock('dirt', true);
+          if (this.sound.playTill) this.sound.playTill();
+          if (this.player.mode === 'survival') {
+            this.inventory.damageSelectedTool(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+      }
+      if (!isRepeat && heldDef && heldDef.toolType === 'shovel' && this.currentTarget) {
+        const { x, y, z } = this.currentTarget;
+        if (this.world.makeDirtPath(x, y, z)) {
+          this.player.swingAnim = 1.0;
+          if (this.sound.playTill) this.sound.playTill();
           if (this.player.mode === 'survival') {
             this.inventory.damageSelectedTool(1);
             this.ui.updateHotbar();
@@ -886,7 +962,7 @@ class BlockCraftGame {
         if (isFarmlandBlock(blockId) && this.world.getBlock(x, y + 1, z) === BLOCK.AIR) {
           this.player.swingAnim = 1.0;
           this.world.setBlock(x, y + 1, z, BLOCK.WHEAT_0, true);
-          this.sound.playBlock('grass', true);
+          if (this.sound.playPlant) this.sound.playPlant();
           if (blockId !== BLOCK.FARMLAND_WET && !this.world.isFarmlandHydrated(x, y, z) && !this._shownWaterFarmTip) {
             this._shownWaterFarmTip = true;
             this.ui.toast('Tip: Place water within 4 blocks so your wheat grows!');
@@ -1115,6 +1191,18 @@ class BlockCraftGame {
       }
       if (!this.setHungerRate(parts[1])) {
         this.ui.addChatMessage('Usage: /hungerrate off|slow|normal|fast|extreme (or a number 0 to 5)');
+        return false;
+      }
+      return true;
+    }
+    if (cmd === 'farmspeed' || cmd === 'cropspeed' || cmd === 'farmrate') {
+      if (!parts[1]) {
+        const cur = this.worldMeta?.farmSpeed ?? 1.0;
+        this.ui.addChatMessage(`Current farm growth speed: ${cur}× (Usage: /farmspeed off|slow|normal|fast|turbo|instant or 0..20)`);
+        return true;
+      }
+      if (!this.setFarmSpeed(parts[1])) {
+        this.ui.addChatMessage('Usage: /farmspeed off|slow|normal|fast|turbo|instant (or a number 0 to 20)');
         return false;
       }
       return true;
@@ -1505,6 +1593,14 @@ class BlockCraftGame {
       const isTillHover = !!(
         !mobHit && this.currentTarget && heldDef && heldDef.toolType === 'hoe' &&
         (this.currentTarget.blockId === BLOCK.GRASS || this.currentTarget.blockId === BLOCK.DIRT ||
+         this.currentTarget.blockId === BLOCK.DIRT_PATH ||
+         this.currentTarget.blockId === BLOCK.SAVANNA_GRASS || this.currentTarget.blockId === BLOCK.JUNGLE_GRASS ||
+         this.currentTarget.blockId === BLOCK.SWAMP_GRASS) &&
+        this.world.getBlock(this.currentTarget.x, this.currentTarget.y + 1, this.currentTarget.z) === BLOCK.AIR
+      );
+      const isPathHover = !!(
+        !mobHit && this.currentTarget && heldDef && heldDef.toolType === 'shovel' &&
+        (this.currentTarget.blockId === BLOCK.GRASS || this.currentTarget.blockId === BLOCK.DIRT ||
          this.currentTarget.blockId === BLOCK.SAVANNA_GRASS || this.currentTarget.blockId === BLOCK.JUNGLE_GRASS ||
          this.currentTarget.blockId === BLOCK.SWAMP_GRASS) &&
         this.world.getBlock(this.currentTarget.x, this.currentTarget.y + 1, this.currentTarget.z) === BLOCK.AIR
@@ -1520,7 +1616,7 @@ class BlockCraftGame {
       );
       const useMode = isVillagerHover || (!mobHit && isInteractiveBlock);
       const eatMode = !useMode && !isPickupFluid && !!(heldDef && heldDef.food);
-      const placeActionMode = isPickupFluid ? 'pickup' : (isTillHover ? 'till' : (isPlantHover ? 'plant' : (useMode ? 'use' : (eatMode ? 'eat' : 'place'))));
+      const placeActionMode = isPickupFluid ? 'pickup' : (isTillHover ? 'till' : (isPathHover ? 'path' : (isPlantHover ? 'plant' : (useMode ? 'use' : (eatMode ? 'eat' : 'place')))));
       const damageMode = mobHit;
       this.ui.updateActionButtons(placeActionMode, damageMode);
 
@@ -1575,7 +1671,7 @@ class BlockCraftGame {
       this.world.updateFurnaces(dt);
       this.world.updateLeafDecay(dt, this.player.pos);
       this.world.updateFluids(dt);
-      this.world.updateCrops(dt, !this.sky.isNight());
+      this.world.updateCrops(dt, !this.sky.isNight(), gameRules.farmSpeed);
       this.world.updateFire(dt, this.sky.weather === 'rain');
 
       // Spawn rising hot orange embers & soft smoke wisps from nearby active fires!

@@ -104,6 +104,19 @@ export class UIManager {
     this._mmLastPz = 1e9;
     this._mmLastSeed = null;
 
+    // Classic Minecraft Create New World state (synced with stone toggle buttons on both Main & More World Options!)
+    this.cwState = {
+      mode: 'survival',
+      worldType: 'infinite',
+      difficulty: 'normal',
+      allowCheats: false,
+      generateStructures: true,
+      bonusChest: false,
+      mobSpawnRate: 1.0,
+      hungerRate: 1.0,
+      farmSpeed: 1.0
+    };
+
     // Cache hot HUD DOM nodes to eliminate per-frame getElementById lookups!
     this.dom = {
       coords: document.getElementById('hud-coords'),
@@ -180,16 +193,75 @@ export class UIManager {
 
   showTitleView(viewName = 'home') {
     this.cancelKeybindListen();
-    const views = ['home', 'singleplayer', 'multiplayer', 'mods', 'settings', 'guide'];
+    const views = ['home', 'singleplayer', 'create-world', 'multiplayer', 'mods', 'settings', 'guide'];
     for (const v of views) {
       const el = document.getElementById(`title-view-${v}`);
       if (el) el.classList.toggle('hidden', v !== viewName);
+    }
+    if (viewName === 'create-world') {
+      document.getElementById('cw-page-main')?.classList.remove('hidden');
+      document.getElementById('cw-page-more')?.classList.add('hidden');
+      this.syncCreateWorldUI();
     }
     if (viewName === 'mods') this.renderModsUI();
     if (viewName === 'settings' && this.game) {
       this.syncSettingsUI(this.game.settings);
       this.syncCheatUI(this.game.areCheatsAllowed());
     }
+  }
+
+  syncCreateWorldUI() {
+    const s = this.cwState;
+    const setTxt = (id, txt) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = txt;
+    };
+    const nameEl = document.getElementById('new-world-name');
+    setTxt('cw-save-hint', (nameEl?.value.trim() || 'My World'));
+
+    // Game Mode
+    const isCre = s.mode === 'creative';
+    setTxt('cw-btn-mode', `Game Mode: ${isCre ? 'Creative' : 'Survival'}`);
+    setTxt('cw-sub-mode', isCre
+      ? 'Unlimited resources, free flying and destroy blocks instantly'
+      : 'Search for resources, crafting, gain levels, health and hunger');
+
+    // Difficulty
+    const diffNames = { peaceful: 'Peaceful', easy: 'Easy', normal: 'Normal', hard: 'Hard' };
+    const diffSubs = {
+      peaceful: 'No hostile mobs; health & hunger regenerate automatically',
+      easy: 'Gentle survival challenge with lower monster damage',
+      normal: 'Standard survival challenge & hostile mobs',
+      hard: 'Tougher monsters, higher damage & intense survival'
+    };
+    setTxt('cw-btn-difficulty', `Difficulty: ${diffNames[s.difficulty] || 'Normal'}`);
+    setTxt('cw-sub-difficulty', diffSubs[s.difficulty] || diffSubs.normal);
+
+    // World Type
+    const isFlat = s.worldType === 'flat';
+    const wtLbl = `World Type: ${isFlat ? 'Superflat' : 'Default'}`;
+    const wtSub = isFlat ? 'Completely flat plains ideal for creative building' : 'Infinite Biomes, Oceans, Villages & Pyramids';
+    setTxt('cw-btn-type', wtLbl);
+    setTxt('cw-sub-type', wtSub);
+    setTxt('cw-btn-type-2', wtLbl);
+    setTxt('cw-sub-type-2', wtSub);
+
+    // Allow Cheats
+    const cheatLbl = `Allow Cheats: ${s.allowCheats ? 'ON' : 'OFF'}`;
+    setTxt('cw-btn-cheats', cheatLbl);
+    setTxt('cw-btn-cheats-2', cheatLbl);
+
+    // Generate Structures & Bonus Chest
+    setTxt('cw-btn-structures', `Generate Structures: ${s.generateStructures ? 'ON' : 'OFF'}`);
+    setTxt('cw-btn-bonus', `Bonus Chest: ${s.bonusChest ? 'ON' : 'OFF'}`);
+
+    // Mob Spawn Rate, Hunger Speed, Farm Speed
+    const mobLabels = { 0: 'Off (0×)', 0.5: 'Low (0.5×)', 1: 'Normal (1.0×)', 1.8: 'High (1.8×)', 3: 'Swarm (3.0×)' };
+    const hunLabels = { 0: 'Off (0×)', 0.5: 'Slow (0.5×)', 1: 'Normal (1.0×)', 1.8: 'Fast (1.8×)', 3: 'Extreme (3.0×)' };
+    const farmLabels = { 0: 'Paused (0×)', 0.5: 'Slow (0.5×)', 1: 'Normal (1.0×)', 2: 'Fast (2.0×)', 4: 'Turbo (4.0×)', 10: 'Hyper (10×)' };
+    setTxt('cw-btn-mob-rate', `Mob Spawn Rate: ${mobLabels[s.mobSpawnRate] || `${s.mobSpawnRate}×`}`);
+    setTxt('cw-btn-hunger-rate', `Hunger Speed: ${hunLabels[s.hungerRate] || `${s.hungerRate}×`}`);
+    setTxt('cw-btn-farm-speed', `Farm Speed: ${farmLabels[s.farmSpeed] || `${s.farmSpeed}×`}`);
   }
 
   hydratePixelIcons() {
@@ -482,6 +554,17 @@ export class UIManager {
     document.getElementById('set-hunger-rate')?.addEventListener('change', (e) => {
       if (this.game) this.game.setHungerRate(parseFloat(e.target.value));
     });
+    document.getElementById('set-farm-speed')?.addEventListener('change', (e) => {
+      if (this.game) this.game.setFarmSpeed(parseFloat(e.target.value));
+    });
+    document.getElementById('title-set-farm-speed')?.addEventListener('change', (e) => {
+      const v = parseFloat(e.target.value);
+      this.cwState.farmSpeed = v;
+      if (this.game) {
+        this.game.setFarmSpeed(v, true);
+        this.syncSettingsUI(this.game.settings);
+      }
+    });
     document.getElementById('set-mc-ui').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('minecraftUI', e.target.checked);
     });
@@ -504,8 +587,8 @@ export class UIManager {
       if (this.game) this.game.setAllowCheats(e.target.checked);
     });
     document.getElementById('title-set-allow-cheats').addEventListener('change', (e) => {
-      const nw = document.getElementById('new-world-cheats');
-      if (nw) nw.checked = e.target.checked;
+      this.cwState.allowCheats = Boolean(e.target.checked);
+      this.syncCreateWorldUI();
       if (this.game) this.game.setAllowCheats(e.target.checked);
     });
     document.getElementById('btn-reset-keybinds').addEventListener('click', () => {
@@ -581,26 +664,90 @@ export class UIManager {
       if (this.game) this.game.quitToTitle();
     });
 
+    // Classic Minecraft Create New World screen stone cycle/toggle controls!
+    const cycleVal = (arr, cur) => arr[(arr.indexOf(cur) + 1) % arr.length];
+    document.getElementById('new-world-name')?.addEventListener('input', () => this.syncCreateWorldUI());
+    document.getElementById('cw-btn-mode')?.addEventListener('click', () => {
+      this.cwState.mode = this.cwState.mode === 'survival' ? 'creative' : 'survival';
+      if (this.cwState.mode === 'creative') this.cwState.allowCheats = true;
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-difficulty')?.addEventListener('click', () => {
+      this.cwState.difficulty = cycleVal(['peaceful', 'easy', 'normal', 'hard'], this.cwState.difficulty);
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    const toggleWorldType = () => {
+      this.cwState.worldType = this.cwState.worldType === 'infinite' ? 'flat' : 'infinite';
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    };
+    document.getElementById('cw-btn-type')?.addEventListener('click', toggleWorldType);
+    document.getElementById('cw-btn-type-2')?.addEventListener('click', toggleWorldType);
+    const toggleCheats = () => {
+      this.cwState.allowCheats = !this.cwState.allowCheats;
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    };
+    document.getElementById('cw-btn-cheats')?.addEventListener('click', toggleCheats);
+    document.getElementById('cw-btn-cheats-2')?.addEventListener('click', toggleCheats);
+    document.getElementById('cw-btn-structures')?.addEventListener('click', () => {
+      this.cwState.generateStructures = !this.cwState.generateStructures;
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-bonus')?.addEventListener('click', () => {
+      this.cwState.bonusChest = !this.cwState.bonusChest;
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-mob-rate')?.addEventListener('click', () => {
+      this.cwState.mobSpawnRate = cycleVal([0, 0.5, 1, 1.8, 3], this.cwState.mobSpawnRate);
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-hunger-rate')?.addEventListener('click', () => {
+      this.cwState.hungerRate = cycleVal([0, 0.5, 1, 1.8, 3], this.cwState.hungerRate);
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-farm-speed')?.addEventListener('click', () => {
+      this.cwState.farmSpeed = cycleVal([0, 0.5, 1, 2, 4, 10], this.cwState.farmSpeed);
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-more')?.addEventListener('click', () => {
+      this.sound.playPop();
+      document.getElementById('cw-page-main')?.classList.add('hidden');
+      document.getElementById('cw-page-more')?.classList.remove('hidden');
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-btn-done')?.addEventListener('click', () => {
+      this.sound.playPop();
+      document.getElementById('cw-page-more')?.classList.add('hidden');
+      document.getElementById('cw-page-main')?.classList.remove('hidden');
+      this.syncCreateWorldUI();
+    });
+
     // Create World button
     document.getElementById('btn-create-world').addEventListener('click', () => {
-      const name = document.getElementById('new-world-name').value.trim() || 'My World';
-      const mode = document.getElementById('new-world-mode').value;
-      const worldType = document.getElementById('new-world-type').value;
-      const difficulty = document.getElementById('new-world-difficulty')?.value || 'normal';
-      const mobSpawnRate = parseFloat(document.getElementById('new-world-mob-rate')?.value ?? '1');
-      const hungerRate = parseFloat(document.getElementById('new-world-hunger-rate')?.value ?? '1');
-      const seed = document.getElementById('new-world-seed').value.trim() || String(Math.floor(Math.random() * 9999999));
-      const allowCheats = Boolean(document.getElementById('new-world-cheats')?.checked);
+      const s = this.cwState;
+      const name = document.getElementById('new-world-name')?.value.trim() || 'My World';
+      const seed = document.getElementById('new-world-seed')?.value.trim() || String(Math.floor(Math.random() * 9999999));
       if (this.game) {
         this.game.startNewWorld({
           name,
-          mode,
-          worldType,
-          difficulty,
-          mobSpawnRate: Number.isFinite(mobSpawnRate) ? mobSpawnRate : 1.0,
-          hungerRate: Number.isFinite(hungerRate) ? hungerRate : 1.0,
+          mode: s.mode,
+          worldType: s.worldType,
+          difficulty: s.difficulty,
+          mobSpawnRate: Number.isFinite(s.mobSpawnRate) ? s.mobSpawnRate : 1.0,
+          hungerRate: Number.isFinite(s.hungerRate) ? s.hungerRate : 1.0,
+          farmSpeed: Number.isFinite(s.farmSpeed) ? s.farmSpeed : 1.0,
+          generateStructures: s.generateStructures !== false,
+          bonusChest: Boolean(s.bonusChest),
           seed,
-          allowCheats
+          allowCheats: Boolean(s.allowCheats)
         });
       }
     });
@@ -623,6 +770,13 @@ export class UIManager {
       const opts = [0, 0.5, 1, 1.8, 3];
       const closest = opts.reduce((a, b) => (Math.abs(b - hr) < Math.abs(a - hr) ? b : a), 1);
       hunSel.value = String(closest);
+    }
+    const farmSel = document.getElementById('set-farm-speed');
+    if (farmSel) {
+      const fr = typeof meta.farmSpeed === 'number' ? meta.farmSpeed : 1.0;
+      const opts = [0, 0.5, 1, 2, 4, 10];
+      const closest = opts.reduce((a, b) => (Math.abs(b - fr) < Math.abs(a - fr) ? b : a), 1);
+      farmSel.value = String(closest);
     }
   }
 
@@ -655,14 +809,19 @@ export class UIManager {
     if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
     const tCheatCb = document.getElementById('title-set-allow-cheats');
     if (tCheatCb) tCheatCb.checked = Boolean(settings.allowCheats);
-    const nwCheatCb = document.getElementById('new-world-cheats');
-    if (nwCheatCb) nwCheatCb.checked = Boolean(settings.allowCheats);
-    const nwDiff = document.getElementById('new-world-difficulty');
-    if (nwDiff && settings.difficulty) nwDiff.value = settings.difficulty;
-    const nwMob = document.getElementById('new-world-mob-rate');
-    if (nwMob && typeof settings.mobSpawnRate === 'number') nwMob.value = String(settings.mobSpawnRate);
-    const nwHun = document.getElementById('new-world-hunger-rate');
-    if (nwHun && typeof settings.hungerRate === 'number') nwHun.value = String(settings.hungerRate);
+    const farmVal = typeof settings.farmSpeed === 'number' ? settings.farmSpeed : 1.0;
+    const farmOpts = [0, 0.5, 1, 2, 4, 10];
+    const farmClosest = farmOpts.reduce((a, b) => (Math.abs(b - farmVal) < Math.abs(a - farmVal) ? b : a), 1);
+    const setFarmEl = document.getElementById('set-farm-speed');
+    if (setFarmEl) setFarmEl.value = String(farmClosest);
+    const titleFarmEl = document.getElementById('title-set-farm-speed');
+    if (titleFarmEl) titleFarmEl.value = String(farmClosest);
+    this.cwState.allowCheats = Boolean(settings.allowCheats);
+    if (settings.difficulty) this.cwState.difficulty = settings.difficulty;
+    if (typeof settings.mobSpawnRate === 'number') this.cwState.mobSpawnRate = settings.mobSpawnRate;
+    if (typeof settings.hungerRate === 'number') this.cwState.hungerRate = settings.hungerRate;
+    this.cwState.farmSpeed = farmClosest;
+    this.syncCreateWorldUI();
     const tShaders = document.getElementById('title-set-shaders');
     if (tShaders) tShaders.value = settings.shaders || 'ultra';
     const tRD = document.getElementById('title-set-render-dist');
@@ -959,10 +1118,10 @@ export class UIManager {
         this.dom.btnPlace.classList.toggle('mode-use', mode === 'use');
         this.dom.btnPlace.classList.toggle('mode-eat', mode === 'eat');
         this.dom.btnPlace.classList.toggle('mode-pickup', mode === 'pickup');
-        this.dom.btnPlace.classList.toggle('mode-till', mode === 'till' || mode === 'plant');
-        const lblMap = { use: 'USE', eat: 'EAT', pickup: 'PICK UP', till: 'TILL', plant: 'PLANT', place: 'PLACE' };
+        this.dom.btnPlace.classList.toggle('mode-till', mode === 'till' || mode === 'plant' || mode === 'path');
+        const lblMap = { use: 'USE', eat: 'EAT', pickup: 'PICK UP', till: 'TILL', path: 'PATH', plant: 'PLANT', place: 'PLACE' };
         this.dom.btnPlaceLbl.textContent = lblMap[mode] || 'PLACE';
-        const iconKey = mode === 'use' || mode === 'pickup' || mode === 'till' ? 'use' : (mode === 'eat' ? 'eat' : 'place');
+        const iconKey = mode === 'use' || mode === 'pickup' || mode === 'till' || mode === 'path' ? 'use' : (mode === 'eat' ? 'eat' : 'place');
         this.dom.btnPlaceIcon.src = this.textures.getUiIcon(iconKey);
       }
     }
@@ -2266,7 +2425,9 @@ export class UIManager {
         Jungle: '#2b9c30',
         Badlands: '#c96836',
         Swamp: '#4f663a',
-        'Cherry Grove': '#f2a2c2'
+        'Cherry Grove': '#f2a2c2',
+        Ocean: '#1e64b4',
+        'Deep Ocean': '#134280'
       };
       for (let sy = 0; sy < h; sy += step) {
         for (let sx = 0; sx < w; sx += step) {

@@ -4450,6 +4450,297 @@ body.mc-theme .inv-trash-dropzone {
   }
 }
 
+/* =========================================================
+   CLASSIC MINECRAFT CREATE NEW WORLD & UNIFIED UI ALIGNMENT
+   ========================================================= */
+.sp-select-body {
+  max-width: 780px;
+}
+
+.sp-full-worlds {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 260px;
+}
+
+.sp-list-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.sp-list-hint {
+  font-size: 12px;
+  color: #a8b2c4;
+}
+
+.sp-footer-grid {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+}
+
+.java-footer-btn {
+  min-width: min(260px, 42vw);
+  height: 46px;
+}
+
+/* Authentic Dark Tiled Dirt-Block Backdrop for Create New World (matches classic Minecraft!) */
+.cw-dirt-screen {
+  background-color: #21170e !important;
+  background-image:
+    radial-gradient(ellipse at center, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0.56) 100%),
+    repeating-conic-gradient(#2c1e13 0% 25%, #23180f 0% 50%),
+    repeating-linear-gradient(90deg, rgba(112, 76, 44, 0.12) 0 4px, rgba(0, 0, 0, 0.16) 4px 8px),
+    repeating-linear-gradient(0deg, rgba(96, 64, 36, 0.12) 0 4px, rgba(0, 0, 0, 0.14) 4px 8px) !important;
+  background-size: 100% 100%, 16px 16px, 32px 32px, 32px 32px !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  align-items: center;
+  justify-content: center;
+  padding: max(18px, var(--safe-top)) 16px max(18px, var(--safe-bottom));
+}
+
+.cw-stage {
+  width: min(740px, 96vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin: auto;
+}
+
+.cw-title {
+  margin: 0 0 2px;
+  color: #ffffff;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  text-shadow: 2px 2px 0 #1b1b1b;
+  text-align: center;
+}
+
+.cw-page {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.cw-input-block {
+  width: min(440px, 92vw);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.cw-input-label {
+  color: #c8c8c8;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 14px;
+  font-weight: 700;
+  text-shadow: 2px 2px 0 #111;
+}
+
+.cw-mc-input {
+  width: 100%;
+  height: 44px;
+  padding: 8px 12px;
+  background: #000000 !important;
+  color: #f5f5f5 !important;
+  border: 2px solid #a0a0a0 !important;
+  border-radius: 0 !important;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.85);
+}
+
+.cw-mc-input:focus {
+  border-color: #ffffff !important;
+}
+
+.cw-input-sub {
+  color: #a8a8a8;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 12.5px;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.cw-btn-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+
+.cw-option-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cw-option-cell.cw-span-2 {
+  grid-column: 1 / -1;
+  max-width: 360px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.cw-opt-btn {
+  width: 100%;
+  min-height: 44px;
+  font-family: 'Courier New', 'Menlo', monospace !important;
+  font-size: 14.5px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.2px;
+  border-radius: 0 !important;
+  background: linear-gradient(180deg, #8b8b8b 0%, #6f6f6f 52%, #5e5e5e 100%) !important;
+  border: 2px solid #121212 !important;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.34), inset -2px -3px 0 rgba(0, 0, 0, 0.42), 0 2px 0 rgba(0, 0, 0, 0.45) !important;
+  color: #ffffff !important;
+  text-shadow: 2px 2px 0 #262626 !important;
+  padding: 8px 10px !important;
+}
+
+.cw-opt-btn:hover {
+  background: linear-gradient(180deg, #7c89b8 0%, #6573a4 52%, #566392 100%) !important;
+  color: #ffffa0 !important;
+}
+
+.cw-opt-sub {
+  color: #b4b4b4;
+  font-family: 'Courier New', 'Menlo', monospace;
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-shadow: 1px 1px 0 #000;
+  padding-left: 2px;
+}
+
+.cw-center-row {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.cw-mid-btn {
+  min-width: min(320px, 82vw);
+  min-height: 44px;
+  border-radius: 0 !important;
+  font-family: 'Courier New', 'Menlo', monospace !important;
+  font-size: 15px !important;
+  font-weight: 800 !important;
+  background: linear-gradient(180deg, #8b8b8b 0%, #6f6f6f 52%, #5e5e5e 100%) !important;
+  border: 2px solid #121212 !important;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.34), inset -2px -3px 0 rgba(0, 0, 0, 0.42) !important;
+}
+
+.cw-mid-btn:hover {
+  background: linear-gradient(180deg, #7c89b8 0%, #6573a4 52%, #566392 100%) !important;
+  color: #ffffa0 !important;
+}
+
+.cw-bottom-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.cw-create-btn,
+.cw-cancel-btn {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 0 !important;
+  font-family: 'Courier New', 'Menlo', monospace !important;
+  font-size: 15.5px !important;
+  font-weight: 900 !important;
+  border: 2px solid #121212 !important;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.35), inset -2px -3px 0 rgba(0, 0, 0, 0.45) !important;
+  text-shadow: 2px 2px 0 #1c1c1c !important;
+}
+
+.cw-create-btn {
+  background: linear-gradient(180deg, #7b8ec9 0%, #6072ad 52%, #516196 100%) !important;
+  color: #ffffa0 !important;
+}
+
+.cw-create-btn:hover {
+  background: linear-gradient(180deg, #8ba0de 0%, #6f84c2 52%, #5d70ab 100%) !important;
+  color: #ffffff !important;
+}
+
+.cw-cancel-btn {
+  background: linear-gradient(180deg, #8b8b8b 0%, #6f6f6f 52%, #5e5e5e 100%) !important;
+  color: #ffffff !important;
+}
+
+/* Unified Classic Minecraft UI Alignment across ALL subscreens, Settings, Pause & In-Game Modals */
+body.mc-theme .java-subscreen:not(.cw-dirt-screen) {
+  background: rgba(14, 15, 19, 0.82);
+}
+
+body.mc-theme .java-sub-header,
+body.mc-theme .java-sub-footer {
+  background: rgba(18, 16, 15, 0.92);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+body.mc-theme .java-sub-header h2,
+body.mc-theme .mc-window-header,
+body.mc-theme .saved-worlds-box h3,
+body.mc-theme .mc-stone-btn,
+body.mc-theme .mc-btn {
+  font-family: 'Courier New', 'Menlo', monospace;
+}
+
+body.mc-theme .java-subscreen .mc-stone-btn,
+body.mc-theme .mc-window .mc-btn,
+body.mc-theme .mc-window .mc-stone-btn {
+  border-radius: 0 !important;
+  border: 2px solid #141414 !important;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.30), inset -2px -3px 0 rgba(0, 0, 0, 0.42) !important;
+  text-shadow: 2px 2px 0 #1f1f1f !important;
+}
+
+body.mc-theme .mc-window {
+  border-radius: 0 !important;
+  border: 2px solid #181818 !important;
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.16), inset -2px -2px 0 rgba(0, 0, 0, 0.5), 0 18px 46px rgba(0, 0, 0, 0.72) !important;
+}
+
+body.mc-theme .setting-row select,
+body.mc-theme .setting-row input[type="text"] {
+  border-radius: 0 !important;
+  border: 2px solid #888 !important;
+  background: #121212 !important;
+  color: #f4f4f4 !important;
+  font-family: 'Courier New', 'Menlo', monospace;
+  min-width: 158px;
+  padding: 6px 10px;
+}
+
+@media (max-width: 640px) {
+  .cw-btn-grid,
+  .cw-bottom-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
 
 
 
