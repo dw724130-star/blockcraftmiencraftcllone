@@ -319,16 +319,17 @@ export function createLodKernel(seed, worldType) {
   const AO_MUL = [1.0, 0.89, 0.79, 0.71];
 
   function buildRegion(rx, rz, tier) {
-    // 6-Tier Ultra-Detail Quadtree steps (with CELLS=64):
-    // T0=1m (64m/4ch FULL VOXEL!), T1=2m (128m/8ch), T2=4m (256m/16ch), T3=8m (512m/32ch), T4=16m (1km/64ch), T5=32m (2km/128ch!)
+    // 7-Tier Ultra-Detail Quadtree steps (with CELLS=64):
+    // T0=1m (64m/4ch FULL VOXEL!), T1=2m (128m/8ch), T2=4m (256m/16ch), T3=8m (512m/32ch),
+    // T4=16m (1km/64ch), T5=32m (2km/128ch), T6=64m (4km/256ch -> 1024-CHUNK HORIZON!)
     const step = 1 << tier;
     const detailLevel = tier === 0 ? 0 : (tier <= 2 ? 1 : (tier === 3 ? 2 : 3));
     const regionBlocks = CELLS * step;
     const ox = rx * regionBlocks;
     const oz = rz * regionBlocks;
     const halfStep = step >> 1;
-    // Ultra-far horizon tiers (T4=16m, T5=32m) gently quantize dry elevation for 85%+ greedy quad compression!
-    const yQuant = tier === 4 ? 2 : (tier >= 5 ? 3 : 1);
+    // Ultra-far horizon tiers (T4=16m, T5=32m, T6=64m) quantize dry elevation for 90%+ greedy quad compression!
+    const yQuant = tier === 4 ? 2 : (tier === 5 ? 3 : (tier >= 6 ? 4 : 1));
 
     // Pass 1A: Sample 66x66 padded base terrain heights & biomes
     for (let pz = 0; pz < PAD; pz++) {

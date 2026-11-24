@@ -80,7 +80,19 @@ export const BLOCK = {
   JUNGLE_GRASS: 76,
   SWAMP_GRASS: 77,
   LAVA: 78,
-  FIRE: 79
+  FIRE: 79,
+  OAK_DOOR_B: 80,
+  OAK_DOOR_T: 81,
+  BIRCH_DOOR_B: 82,
+  BIRCH_DOOR_T: 83,
+  SPRUCE_DOOR_B: 84,
+  SPRUCE_DOOR_T: 85,
+  ACACIA_DOOR_B: 86,
+  ACACIA_DOOR_T: 87,
+  JUNGLE_DOOR_B: 88,
+  JUNGLE_DOOR_T: 89,
+  CHERRY_DOOR_B: 90,
+  CHERRY_DOOR_T: 91
 };
 
 // Block numeric ID -> string item key
@@ -223,6 +235,31 @@ regBlock(BLOCK.SWAMP_GRASS, 'swamp_grass', { name: 'Swamp Grass', hardness: 0.7,
 // --- LAVA & FIRE ---
 regBlock(BLOCK.LAVA, 'lava', { name: 'Lava', solid: false, transparent: true, liquid: true, light: 15, hardness: -1, sound: 'water', drop: null, hiddenFromCreative: true, faces: { all: 'lava' } });
 regBlock(BLOCK.FIRE, 'fire', { name: 'Fire', solid: false, transparent: true, cross: true, light: 15, hardness: 0.05, sound: 'grass', drop: null, hiddenFromCreative: true, faces: { all: 'fire' } });
+
+// --- WOOD DOORS (All 6 wood types — 2-block-tall openable/closeable Minecraft doors!) ---
+export const DOOR_WOODS = [
+  { key: 'oak',    name: 'Oak Door',    bId: BLOCK.OAK_DOOR_B,    tId: BLOCK.OAK_DOOR_T,    planks: 'oak_planks' },
+  { key: 'birch',  name: 'Birch Door',  bId: BLOCK.BIRCH_DOOR_B,  tId: BLOCK.BIRCH_DOOR_T,  planks: 'birch_planks' },
+  { key: 'spruce', name: 'Spruce Door', bId: BLOCK.SPRUCE_DOOR_B, tId: BLOCK.SPRUCE_DOOR_T, planks: 'spruce_planks' },
+  { key: 'acacia', name: 'Acacia Door', bId: BLOCK.ACACIA_DOOR_B, tId: BLOCK.ACACIA_DOOR_T, planks: 'acacia_planks' },
+  { key: 'jungle', name: 'Jungle Door', bId: BLOCK.JUNGLE_DOOR_B, tId: BLOCK.JUNGLE_DOOR_T, planks: 'jungle_planks' },
+  { key: 'cherry', name: 'Cherry Door', bId: BLOCK.CHERRY_DOOR_B, tId: BLOCK.CHERRY_DOOR_T, planks: 'cherry_planks' }
+];
+for (const dw of DOOR_WOODS) {
+  regBlock(dw.bId, `${dw.key}_door`, {
+    name: dw.name, hardness: 2.2, tool: 'axe', sound: 'wood',
+    transparent: true, solid: true, isDoor: true, doorHalf: 'bottom',
+    doorPartner: dw.tId, doorWood: dw.key, interactive: 'door',
+    faces: { all: `${dw.key}_door_bottom`, side: `${dw.key}_door_bottom`, top: dw.planks, bottom: dw.planks }
+  });
+  regBlock(dw.tId, `${dw.key}_door_top`, {
+    name: dw.name, hardness: 2.2, tool: 'axe', sound: 'wood',
+    transparent: true, solid: true, isDoor: true, doorHalf: 'top',
+    doorPartner: dw.bId, doorWood: dw.key, interactive: 'door',
+    drop: `${dw.key}_door`, hiddenFromCreative: true,
+    faces: { all: `${dw.key}_door_top`, side: `${dw.key}_door_top`, top: dw.planks, bottom: dw.planks }
+  });
+}
 
 // --- MATERIALS & FOOD ---
 regItem('stick', { name: 'Stick', icon: 'stick' });
@@ -422,6 +459,18 @@ export function getBedPairForYaw(yaw) {
     : { foot: BLOCK.BED, head: BLOCK.BED_HEAD_N, dx: 0, dz: -1 };
 }
 
+export function isDoorBlock(id) {
+  return id >= BLOCK.OAK_DOOR_B && id <= BLOCK.CHERRY_DOOR_T;
+}
+
+export function isDoorTop(id) {
+  return isDoorBlock(id) && ((id - BLOCK.OAK_DOOR_B) & 1) === 1;
+}
+
+export function isDoorBottom(id) {
+  return isDoorBlock(id) && ((id - BLOCK.OAK_DOOR_B) & 1) === 0;
+}
+
 export function getItemCategory(def) {
   if (!def) return 'materials';
   if (def.spawnMob) return 'eggs';
@@ -429,6 +478,7 @@ export function getItemCategory(def) {
   if (def.toolType || def.bucketType) return 'tools';
   if (def.food) return 'food';
   if (!def.isBlock) return 'materials';
+  if (def.isDoor) return 'utility';
   const id = def.id;
   if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
     return 'utility';

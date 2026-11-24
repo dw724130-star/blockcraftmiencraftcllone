@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid } from './blocks.js';
+import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid, isDoorBlock } from './blocks.js';
 import { SEA_LEVEL } from './world.js';
 
 // Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
@@ -1183,6 +1183,9 @@ export class EntityManager {
     this.megaCrowds = new Map();
     this._crowdDummy = new THREE.Object3D();
     this._crowdColor = new THREE.Color();
+    this._crowdRootMat = new THREE.Matrix4();
+    this._crowdTmpMat = new THREE.Matrix4();
+    this._crowdLegMat = new THREE.Matrix4();
     this._crowdTick = 0;
     this.onPickup = null;
     this.onDiscoverMega = null;
@@ -1210,7 +1213,8 @@ export class EntityManager {
     for (let by = minY; by <= maxY; by++) {
       for (let bz = minZ; bz <= maxZ; bz++) {
         for (let bx = minX; bx <= maxX; bx++) {
-          if (isBlockSolid(this.world.getBlock(bx, by, bz))) return true;
+          const bid = this.world.getBlock(bx, by, bz);
+          if (isBlockSolid(bid) && !(isDoorBlock(bid) && this.world.isDoorOpenAt(bx, by, bz))) return true;
         }
       }
     }
@@ -2570,41 +2574,19 @@ export class EntityManager {
       });
     }
 
-    // 2. High-performance Instanced Villager Crowd for the remaining ~184 villagers (only 4 draw calls total!)
+    // 2. High-performance Instanced Villager Crowd — 100% IDENTICAL UV-Textured Models to Village Villagers!
+    // Grouped into 4 profession batches (Farmer, Blacksmith, Librarian, Cleric) using exact getVillagerTextures()!
     const count = Math.max(40, (ms.villagerCount || 200) - interactiveOffsets.length);
-    const robeGeo = new THREE.BoxGeometry(0.56, 1.18, 0.36);
-    const headGeo = new THREE.BoxGeometry(0.46, 0.54, 0.46);
-    const noseGeo = new THREE.BoxGeometry(0.12, 0.22, 0.16);
-    const armsGeo = new THREE.BoxGeometry(0.66, 0.24, 0.26);
-
-    const robeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-    const headMat = new THREE.MeshLambertMaterial({ color: 0xd9a882 });
-    const noseMat = new THREE.MeshLambertMaterial({ color: 0xc8926e });
-    const armsMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-
-    const robeMesh = new THREE.InstancedMesh(robeGeo, robeMat, count);
-    const headMesh = new THREE.InstancedMesh(headGeo, headMat, count);
-    const noseMesh = new THREE.InstancedMesh(noseGeo, noseMat, count);
-    const armsMesh = new THREE.InstancedMesh(armsGeo, armsMat, count);
-    robeMesh.frustumCulled = false;
-    headMesh.frustumCulled = false;
-    noseMesh.frustumCulled = false;
-    armsMesh.frustumCulled = false;
-
     const group = new THREE.Group();
-    group.add(robeMesh, headMesh, noseMesh, armsMesh);
     this.group.add(group);
 
-    const agents = [];
     const innerR = ms.innerRadius || 20;
-    const dummy = this._crowdDummy;
-    const col = this._crowdColor;
+    const perProf = [0, 0, 0, 0];
+    const profAgents = [[], [], [], []];
 
     for (let i = 0; i < count; i++) {
-      // Pick open floor spot inside the interior village streets/courtyards
       let ax = ms.x, az = ms.z;
       for (let tries = 0; tries < 24; tries++) {
-        // Favor avenues & open plaza ring around the oasis fountain
         const mode = (i + tries) % 3;
         let rx, rz;
         if (mode === 0) {
@@ -2630,48 +2612,121 @@ export class EntityManager {
           break;
         }
       }
-
-      const prof = VILLAGER_PROFESSIONS[i % VILLAGER_PROFESSIONS.length];
-      col.setHex(prof.robe);
-      robeMesh.setColorAt(i, col);
-      col.setHex(prof.trim);
-      armsMesh.setColorAt(i, col);
-
-      const yaw = Math.random() * Math.PI * 2;
-      agents.push({
+      const pIdx = i % VILLAGER_PROFESSIONS.length;
+      perProf[pIdx]++;
+      profAgents[pIdx].push({
         x: ax,
         y: ms.y,
         z: az,
-        yaw,
-        speed: 0.75 + Math.random() * 0.65,
+        yaw: Math.random() * Math.PI * 2,
+        speed: 0.72 + Math.random() * 0.62,
         phase: Math.random() * Math.PI * 2,
         turnTimer: 1.0 + Math.random() * 4.0,
         pauseTimer: Math.random() < 0.3 ? (0.8 + Math.random() * 2.5) : 0
       });
-
-      // Initialize transforms immediately
-      dummy.position.set(ax, ms.y + 0.59, az);
-      dummy.rotation.set(0, yaw, 0);
-      dummy.updateMatrix();
-      robeMesh.setMatrixAt(i, dummy.matrix);
     }
-    if (robeMesh.instanceColor) robeMesh.instanceColor.needsUpdate = true;
-    if (armsMesh.instanceColor) armsMesh.instanceColor.needsUpdate = true;
 
-    this.megaCrowds.set(ms.key, {
-      ms,
-      group,
-      robeMesh,
-      headMesh,
-      noseMesh,
-      armsMesh,
-      agents
-    });
+    const makeLocalMat = (px, py, pz, rx = 0, ry = 0, rz = 0) => {
+      const o = new THREE.Object3D();
+      o.position.set(px, py, pz);
+      o.rotation.set(rx, ry, rz);
+      o.updateMatrix();
+      return o.matrix.clone();
+    };
+
+    const batches = [];
+    const browMatShared = new THREE.MeshLambertMaterial({ color: 0x472d1b });
+    const bootMatShared = new THREE.MeshLambertMaterial({ color: 0x362417 });
+    const skinUnderShared = new THREE.MeshLambertMaterial({ color: 0xb88460 });
+
+    for (let pIdx = 0; pIdx < VILLAGER_PROFESSIONS.length; pIdx++) {
+      const pCount = perProf[pIdx];
+      if (pCount === 0) continue;
+      const profName = VILLAGER_PROFESSIONS[pIdx].name;
+      const vTex = this.textures && this.textures.getVillagerTextures ? this.textures.getVillagerTextures(profName) : null;
+      const st = vTex ? vTex.style : { robe: '#8c5e34', dark: '#5e3c1f', trim: '#d9b54a', sash: '#4a3019' };
+
+      const robeFrontMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.robeFront }) : new THREE.MeshLambertMaterial({ color: st.robe });
+      const robeSideMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.robeSide }) : robeFrontMat;
+      const robeBackMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.robeBack }) : robeFrontMat;
+      const robeDarkMat = new THREE.MeshLambertMaterial({ color: st.dark });
+      const trimMat = new THREE.MeshLambertMaterial({ color: st.trim });
+
+      const headFrontMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.headFront }) : skinUnderShared;
+      const headSideMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.headSide }) : skinUnderShared;
+      const headBackMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.headBack }) : skinUnderShared;
+      const headTopMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.headTop }) : skinUnderShared;
+      const noseMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.nose }) : skinUnderShared;
+
+      const torsoMats = [robeSideMat, robeSideMat, robeDarkMat, robeDarkMat, robeFrontMat, robeBackMat];
+      const headMats = [headSideMat, headSideMat, headTopMat, skinUnderShared, headFrontMat, headBackMat];
+
+      const parts = [];
+      const addPart = (geo, mat, px, py, pz, rx = 0, ry = 0, rz = 0, legSide = 0) => {
+        const mesh = new THREE.InstancedMesh(geo, mat, pCount);
+        mesh.frustumCulled = false;
+        group.add(mesh);
+        parts.push({ mesh, localMat: makeLocalMat(px, py, pz, rx, ry, rz), legSide });
+      };
+
+      // Exact Village Villager anatomy (torso, flared skirt, collar, 45° folded sleeves + forearm, 6-face head, nose, brow, swinging legs!)
+      addPart(new THREE.BoxGeometry(0.54, 0.78, 0.34), torsoMats, 0, 1.01, 0);
+      addPart(new THREE.BoxGeometry(0.58, 0.34, 0.38), torsoMats, 0, 0.58, 0);
+      addPart(new THREE.BoxGeometry(0.60, 0.11, 0.38), trimMat, 0, 1.37, 0);
+      addPart(new THREE.BoxGeometry(0.20, 0.44, 0.20), robeSideMat, -0.34, 1.15, 0.08, -0.78, 0, -0.12);
+      addPart(new THREE.BoxGeometry(0.20, 0.44, 0.20), robeSideMat, 0.34, 1.15, 0.08, -0.78, 0, 0.12);
+      addPart(new THREE.BoxGeometry(0.56, 0.21, 0.22), robeSideMat, 0, 0.96, 0.23);
+      addPart(new THREE.BoxGeometry(0.46, 0.58, 0.46), headMats, 0, 1.70, 0);
+      addPart(new THREE.BoxGeometry(0.12, 0.24, 0.15), noseMat, 0, 1.55, 0.29);
+      addPart(new THREE.BoxGeometry(0.38, 0.055, 0.04), browMatShared, 0, 1.81, 0.24);
+      // Swinging cuffed legs/boots (pivoted at hip Y=0.62)
+      addPart(new THREE.BoxGeometry(0.24, 0.58, 0.26), bootMatShared, -0.135, 0.31, 0, 0, 0, 0, -1);
+      addPart(new THREE.BoxGeometry(0.24, 0.58, 0.26), bootMatShared, 0.135, 0.31, 0, 0, 0, 0, 1);
+
+      // Exact Signature Profession Headwear & Gear matching createMobMesh('villager')!
+      if (profName === 'Farmer') {
+        const strawMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.strawTex }) : trimMat;
+        const ribbonMat = new THREE.MeshLambertMaterial({ color: 0xc9322c });
+        addPart(new THREE.BoxGeometry(0.84, 0.06, 0.84), strawMat, 0, 1.92, 0);
+        addPart(new THREE.BoxGeometry(0.54, 0.19, 0.54), strawMat, 0, 2.02, 0);
+        addPart(new THREE.BoxGeometry(0.56, 0.06, 0.56), ribbonMat, 0, 1.96, 0);
+      } else if (profName === 'Blacksmith') {
+        const apronMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.apronTex }) : robeDarkMat;
+        const brassMat = new THREE.MeshLambertMaterial({ color: 0xe3b13b });
+        addPart(new THREE.BoxGeometry(0.46, 0.74, 0.05), apronMat, 0, 0.78, 0.195);
+        addPart(new THREE.BoxGeometry(0.49, 0.10, 0.49), apronMat, 0, 1.88, 0);
+        addPart(new THREE.BoxGeometry(0.36, 0.10, 0.08), brassMat, 0, 1.89, 0.25);
+      } else if (profName === 'Librarian') {
+        const coverMat = new THREE.MeshLambertMaterial({ color: 0x8f1e1e });
+        const pageMat = new THREE.MeshLambertMaterial({ color: 0xf7efe0 });
+        const goldMat = new THREE.MeshLambertMaterial({ color: 0xf2c94c });
+        addPart(new THREE.BoxGeometry(0.56, 0.07, 0.54), coverMat, 0, 2.00, 0, 0, 0, 0.07);
+        addPart(new THREE.BoxGeometry(0.50, 0.09, 0.48), pageMat, 0, 2.06, 0, 0, 0, 0.07);
+        addPart(new THREE.BoxGeometry(0.56, 0.05, 0.54), coverMat, 0, 2.11, 0, 0, 0, 0.07);
+        addPart(new THREE.BoxGeometry(0.16, 0.72, 0.04), goldMat, 0, 0.84, 0.185);
+      } else {
+        const hoodMat = new THREE.MeshLambertMaterial({ color: 0x5c2182 });
+        const goldMat = new THREE.MeshLambertMaterial({ color: 0xf5cc42 });
+        addPart(new THREE.BoxGeometry(0.52, 0.14, 0.54), hoodMat, 0, 1.97, -0.02);
+        addPart(new THREE.BoxGeometry(0.54, 0.05, 0.56), goldMat, 0, 1.91, -0.02);
+        addPart(new THREE.BoxGeometry(0.52, 0.44, 0.14), hoodMat, 0, 1.71, -0.24);
+      }
+
+      batches.push({ parts, agents: profAgents[pIdx] });
+    }
+
+    this.megaCrowds.set(ms.key, { ms, group, batches });
+    // Immediately populate initial transforms so villagers appear on the very first frame!
+    this._updateMegaCrowds(0.016, { pos: { x: ms.x, z: ms.z } });
   }
 
   _updateMegaCrowds(dt, player) {
     this._crowdTick++;
     const dummy = this._crowdDummy;
+    const rootMat = this._crowdRootMat;
+    const tmpMat = this._crowdTmpMat;
+    const legMat = this._crowdLegMat;
+
     for (const crowd of this.megaCrowds.values()) {
       const ms = crowd.ms;
       const dist = Math.hypot(player.pos.x - ms.x, player.pos.z - ms.z);
@@ -2680,72 +2735,76 @@ export class EntityManager {
         continue;
       }
       crowd.group.visible = true;
-      // Throttle distant crowds to every other frame for silky 60 FPS!
-      if (dist > 72 && (this._crowdTick & 1) === 1) continue;
+      // Throttle distant crowds cleanly for silky 60 FPS on iPad!
+      if (dist > 68 && (this._crowdTick & 1) === 1) continue;
 
-      const stepDt = dist > 72 ? dt * 2 : dt;
+      const stepDt = dist > 68 ? dt * 2 : dt;
       const innerR = ms.innerRadius || 20;
-      const agents = crowd.agents;
 
-      for (let i = 0; i < agents.length; i++) {
-        const a = agents[i];
-        if (a.pauseTimer > 0) {
-          a.pauseTimer -= stepDt;
-        } else {
-          a.turnTimer -= stepDt;
-          if (a.turnTimer <= 0) {
-            a.turnTimer = 1.6 + Math.random() * 3.8;
-            if (Math.random() < 0.28) {
-              a.pauseTimer = 0.8 + Math.random() * 2.2;
+      for (let b = 0; b < crowd.batches.length; b++) {
+        const batch = crowd.batches[b];
+        const agents = batch.agents;
+        const parts = batch.parts;
+
+        for (let i = 0; i < agents.length; i++) {
+          const a = agents[i];
+          if (a.pauseTimer > 0) {
+            a.pauseTimer -= stepDt;
+          } else {
+            a.turnTimer -= stepDt;
+            if (a.turnTimer <= 0) {
+              a.turnTimer = 1.6 + Math.random() * 3.8;
+              if (Math.random() < 0.28) {
+                a.pauseTimer = 0.8 + Math.random() * 2.2;
+              } else {
+                a.yaw += (Math.random() - 0.5) * 2.2;
+              }
+            }
+            const nx = a.x + Math.sin(a.yaw) * a.speed * stepDt;
+            const nz = a.z + Math.cos(a.yaw) * a.speed * stepDt;
+            const outBounds = Math.abs(nx - ms.x) > innerR || Math.abs(nz - ms.z) > innerR;
+            const blk = this.world.getBlock(nx, a.y, nz);
+            const blkH = this.world.getBlock(nx, a.y + 1, nz);
+            const flr = this.world.getBlock(nx, a.y - 1, nz);
+            if (outBounds || isBlockSolid(blk) || blk === BLOCK.WATER || isBlockSolid(blkH) || !isBlockSolid(flr)) {
+              a.yaw += Math.PI * (0.65 + Math.random() * 0.7);
             } else {
-              a.yaw += (Math.random() - 0.5) * 2.2;
+              a.x = nx;
+              a.z = nz;
+              a.phase += stepDt * a.speed * 7.5;
             }
           }
-          const nx = a.x + Math.sin(a.yaw) * a.speed * stepDt;
-          const nz = a.z + Math.cos(a.yaw) * a.speed * stepDt;
-          const outBounds = Math.abs(nx - ms.x) > innerR || Math.abs(nz - ms.z) > innerR;
-          const blk = this.world.getBlock(nx, a.y, nz);
-          const blkH = this.world.getBlock(nx, a.y + 1, nz);
-          const flr = this.world.getBlock(nx, a.y - 1, nz);
-          if (outBounds || isBlockSolid(blk) || blk === BLOCK.WATER || isBlockSolid(blkH) || !isBlockSolid(flr)) {
-            a.yaw += Math.PI * (0.65 + Math.random() * 0.7);
-          } else {
-            a.x = nx;
-            a.z = nz;
-            a.phase += stepDt * a.speed * 7.5;
+
+          const walking = a.pauseTimer <= 0;
+          const bob = walking ? Math.abs(Math.sin(a.phase)) * 0.045 : 0;
+          const legSwing = walking ? Math.sin(a.phase) * 0.42 : 0;
+
+          dummy.position.set(a.x, a.y + bob, a.z);
+          dummy.rotation.set(0, a.yaw, 0);
+          dummy.updateMatrix();
+          rootMat.copy(dummy.matrix);
+
+          for (let p = 0; p < parts.length; p++) {
+            const pt = parts[p];
+            if (pt.legSide !== 0) {
+              // Animated swinging leg pivoting cleanly at hip Y = 0.62!
+              const ang = pt.legSide * legSwing;
+              dummy.position.set(pt.legSide * 0.135, 0.31, Math.sin(ang) * 0.18);
+              dummy.rotation.set(ang, 0, 0);
+              dummy.updateMatrix();
+              legMat.copy(dummy.matrix);
+              tmpMat.multiplyMatrices(rootMat, legMat);
+            } else {
+              tmpMat.multiplyMatrices(rootMat, pt.localMat);
+            }
+            pt.mesh.setMatrixAt(i, tmpMat);
           }
         }
 
-        const bob = a.pauseTimer > 0 ? 0 : Math.abs(Math.sin(a.phase)) * 0.06;
-        const sinY = Math.sin(a.yaw);
-        const cosY = Math.cos(a.yaw);
-
-        // Robe body
-        dummy.position.set(a.x, a.y + 0.59 + bob, a.z);
-        dummy.rotation.set(0, a.yaw, 0);
-        dummy.updateMatrix();
-        crowd.robeMesh.setMatrixAt(i, dummy.matrix);
-
-        // Head
-        dummy.position.set(a.x, a.y + 1.45 + bob, a.z);
-        dummy.updateMatrix();
-        crowd.headMesh.setMatrixAt(i, dummy.matrix);
-
-        // Signature villager nose facing forward
-        dummy.position.set(a.x + sinY * 0.28, a.y + 1.36 + bob, a.z + cosY * 0.28);
-        dummy.updateMatrix();
-        crowd.noseMesh.setMatrixAt(i, dummy.matrix);
-
-        // Folded villager arms in front
-        dummy.position.set(a.x + sinY * 0.16, a.y + 0.96 + bob, a.z + cosY * 0.16);
-        dummy.updateMatrix();
-        crowd.armsMesh.setMatrixAt(i, dummy.matrix);
+        for (let p = 0; p < parts.length; p++) {
+          parts[p].mesh.instanceMatrix.needsUpdate = true;
+        }
       }
-
-      crowd.robeMesh.instanceMatrix.needsUpdate = true;
-      crowd.headMesh.instanceMatrix.needsUpdate = true;
-      crowd.noseMesh.instanceMatrix.needsUpdate = true;
-      crowd.armsMesh.instanceMatrix.needsUpdate = true;
     }
   }
 
@@ -2755,14 +2814,18 @@ export class EntityManager {
     for (const p of this.projectiles) this.group.remove(p.mesh);
     for (const crowd of this.megaCrowds.values()) {
       this.group.remove(crowd.group);
-      crowd.robeMesh.geometry.dispose();
-      crowd.robeMesh.material.dispose();
-      crowd.headMesh.geometry.dispose();
-      crowd.headMesh.material.dispose();
-      crowd.noseMesh.geometry.dispose();
-      crowd.noseMesh.material.dispose();
-      crowd.armsMesh.geometry.dispose();
-      crowd.armsMesh.material.dispose();
+      if (crowd.batches) {
+        for (const batch of crowd.batches) {
+          for (const pt of batch.parts) {
+            pt.mesh.geometry.dispose();
+            if (Array.isArray(pt.mesh.material)) {
+              for (const mt of pt.mesh.material) mt.dispose();
+            } else {
+              pt.mesh.material.dispose();
+            }
+          }
+        }
+      }
     }
     this.megaCrowds.clear();
     this.mobs = [];

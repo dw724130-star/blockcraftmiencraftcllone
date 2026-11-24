@@ -34,7 +34,7 @@ function px(ctx, ox, oy, x, y, color, w = 1, h = 1) {
 }
 
 function keyIsSolidCubeIcon(key, def) {
-  return Boolean(def && def.isBlock && key !== 'bed');
+  return Boolean(def && def.isBlock && key !== 'bed' && !def.isDoor);
 }
 
 export class TextureManager {
@@ -735,6 +735,84 @@ export class TextureManager {
         }
       }
     });
+
+    // --- WOOD DOORS (All 6 Wood Types — Top Half with Signature Windows/Slats + Bottom Paneled Half!) ---
+    const doorStyles = [
+      { key: 'oak',    base: '#b8945f', dark: '#8d6c3d', light: '#cfa972', trim: '#6e512a', knob: '#4a4e57', win: 'oak' },
+      { key: 'birch',  base: '#dfd2a8', dark: '#bdb084', light: '#efe5c2', trim: '#9c8f66', knob: '#3c4048', win: 'birch' },
+      { key: 'spruce', base: '#6f4e2d', dark: '#50361d', light: '#856039', trim: '#382411', knob: '#7e8694', win: 'spruce' },
+      { key: 'acacia', base: '#ba6337', dark: '#944a24', light: '#cf7546', trim: '#6e3417', knob: '#3a3e46', win: 'acacia' },
+      { key: 'jungle', base: '#a87754', dark: '#82583a', light: '#be8c68', trim: '#5e3c24', knob: '#464a52', win: 'jungle' },
+      { key: 'cherry', base: '#e5b3bd', dark: '#c78c99', light: '#f4cdd5', trim: '#9e6270', knob: '#e6c24a', win: 'cherry' }
+    ];
+    for (const ds of doorStyles) {
+      this.addTile(`${ds.key}_door_bottom`, (c, x, y) => {
+        // Outer wood frame + recessed bottom panels + iron/gold hinges
+        px(c, x, y, 0, 0, ds.base, 16, 16);
+        px(c, x, y, 0, 0, ds.dark, 16, 2);
+        px(c, x, y, 0, 14, ds.trim, 16, 2);
+        px(c, x, y, 0, 0, ds.trim, 2, 16);
+        px(c, x, y, 14, 0, ds.trim, 2, 16);
+        // Vertical plank grain lines
+        for (let ix = 3; ix < 14; ix += 3) px(c, x, y, ix, 2, ds.dark, 1, 12);
+        // Recessed twin panels
+        px(c, x, y, 3, 3, ds.dark, 4, 10);
+        px(c, x, y, 4, 4, ds.light, 2, 8);
+        px(c, x, y, 9, 3, ds.dark, 4, 10);
+        px(c, x, y, 10, 4, ds.light, 2, 8);
+        // Hinge straps on left edge
+        px(c, x, y, 0, 3, '#4c525e', 2, 2);
+        px(c, x, y, 0, 11, '#4c525e', 2, 2);
+        // Handle plate near top right (aligns with top half)
+        px(c, x, y, 12, 0, ds.knob, 2, 2);
+      });
+
+      this.addTile(`${ds.key}_door_top`, (c, x, y) => {
+        px(c, x, y, 0, 0, ds.base, 16, 16);
+        px(c, x, y, 0, 0, ds.trim, 16, 2);
+        px(c, x, y, 0, 14, ds.dark, 16, 2);
+        px(c, x, y, 0, 0, ds.trim, 2, 16);
+        px(c, x, y, 14, 0, ds.trim, 2, 16);
+        // Cutout window / slatted top style unique to each Minecraft wood!
+        if (ds.win === 'oak') {
+          // Classic 4-pane see-through window
+          c.clearRect(x + 3, y + 3, 4, 4);
+          c.clearRect(x + 9, y + 3, 4, 4);
+          c.clearRect(x + 3, y + 9, 4, 4);
+          c.clearRect(x + 9, y + 9, 4, 4);
+          px(c, x, y, 7, 2, ds.dark, 2, 12);
+          px(c, x, y, 2, 7, ds.dark, 12, 2);
+        } else if (ds.win === 'acacia') {
+          // Horizontal open slatted bars
+          c.clearRect(x + 3, y + 3, 10, 2);
+          c.clearRect(x + 3, y + 7, 10, 2);
+          c.clearRect(x + 3, y + 11, 10, 2);
+        } else if (ds.win === 'jungle') {
+          // Tropical arched twin windows
+          c.clearRect(x + 3, y + 3, 4, 7);
+          c.clearRect(x + 9, y + 3, 4, 7);
+          px(c, x, y, 7, 2, ds.dark, 2, 11);
+        } else if (ds.win === 'cherry') {
+          // Shoji / pink lattice cutout window
+          c.clearRect(x + 3, y + 3, 10, 9);
+          px(c, x, y, 7, 3, ds.light, 2, 9);
+          px(c, x, y, 3, 7, ds.light, 10, 2);
+        } else if (ds.win === 'birch') {
+          // Cream paneled birch door with subtle upper slats
+          px(c, x, y, 3, 3, ds.light, 10, 10);
+          for (let iy = 4; iy <= 11; iy += 2) px(c, x, y, 4, iy, ds.dark, 8, 1);
+        } else {
+          // Spruce solid fortified planks + iron brace & ring
+          for (let ix = 4; ix <= 12; ix += 3) px(c, x, y, ix, 2, ds.dark, 1, 12);
+          px(c, x, y, 2, 4, '#4c525e', 12, 2);
+          px(c, x, y, 10, 9, ds.knob, 3, 3);
+          px(c, x, y, 11, 10, ds.dark, 1, 1);
+        }
+        // Top hinge & door knob
+        px(c, x, y, 0, 4, '#4c525e', 2, 2);
+        px(c, x, y, 12, 13, ds.knob, 2, 2);
+      });
+    }
   }
 
   // Lazy on-demand 16x16 (32x32) icon caching — cuts initial startup time dramatically!
@@ -784,6 +862,38 @@ export class TextureManager {
       diamond: { O: '#092a36', D: '#128996', M: '#2ad1db', L: '#7ef3fa', H: '#e3ffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       leather: { O: '#291509', D: '#693a1a', M: '#9c5a2d', L: '#c47a45', H: '#de9864', S: '#7d5225', s: '#a6743c', d: '#4f3215' }
     };
+
+    if (def && def.isDoor && def.doorWood) {
+      // Crisp 16x16 2D Wood Door item sprite (matching each wood type!)
+      const doorPals = {
+        oak:    { O: '#3d2a12', F: '#8d6c3d', B: '#b8945f', L: '#cfa972', K: '#505661', W: '#a8d6f0' },
+        birch:  { O: '#574e36', F: '#bdb084', B: '#dfd2a8', L: '#f2e8c7', K: '#3d424a', W: '#cfc399' },
+        spruce: { O: '#24160a', F: '#50361d', B: '#6f4e2d', L: '#87623b', K: '#929aa8', W: '#593d22' },
+        acacia: { O: '#4a210d', F: '#944a24', B: '#ba6337', L: '#d67b4b', K: '#3f444d', W: '#a8d6f0' },
+        jungle: { O: '#3d2415', F: '#82583a', B: '#a87754', L: '#c4916c', K: '#484d57', W: '#a8d6f0' },
+        cherry: { O: '#633540', F: '#c78c99', B: '#e5b3bd', L: '#f7d5dc', K: '#f0cc52', W: '#d9f2ff' }
+      };
+      const pal = doorPals[def.doorWood] || doorPals.oak;
+      drawGrid([
+        '....OOOOOOOO....',
+        '...OFFFFFFFFO...',
+        '...OFWWFFWWFO...',
+        '...OFWWFFWWFO...',
+        '...OFFFFFFFFO...',
+        '...OFWWFFWWFO...',
+        '...OFWWFFWWFO...',
+        '...OFFFFFFFFO...',
+        '...OFBBBBBKFO...',
+        '...OFBBLBBKFO...',
+        '...OFBBLBBBFO...',
+        '...OFBBLBBBFO...',
+        '...OFBBBBBBFO...',
+        '...OFBBLBBBFO...',
+        '...OFFFFFFFFO...',
+        '....OOOOOOOO....'
+      ], pal);
+      return;
+    }
 
     if (def.spawnMob) {
       // Authentic Minecraft Two-Tone Spotted Mob Spawn Egg (16x16 pixel art!)
@@ -3037,5 +3147,255 @@ export class TextureManager {
       p(2, 2, '#ef4444', 2, 2); p(4, 4, '#ef4444', 2, 2); p(6, 6, '#ef4444', 2, 2);
       p(6, 2, '#ef4444', 2, 2); p(2, 6, '#ef4444', 2, 2);
     });
+  }
+
+  // Classic Pixel-Art Minecraft Steve 6-Face Texture Set (shared by 3rd-person Player & 3D Inventory Doll!)
+  getSteveTextures() {
+    if (this._steveTextures) return this._steveTextures;
+    const makeTex = (w, h, fn) => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      const p = (x, y, col, pw = 1, ph = 1) => { ctx.fillStyle = col; ctx.fillRect(x, y, pw, ph); };
+      fn(p, ctx);
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.generateMipmaps = false;
+      return tex;
+    };
+
+    const skin = '#c6906c', skinD = '#b07b58', skinL = '#d4a07d', nose = '#9e6849';
+    const hair = '#382213', hairD = '#29170b', hairL = '#4c301c';
+    const shirt = '#14a6ad', shirtD = '#0d828a', shirtL = '#23bcc2', shirtSh = '#09636b';
+    const jean = '#36308a', jeanD = '#262169', jeanL = '#463fa3';
+    const shoe = '#4c4c4c', shoeD = '#303030', shoeL = '#666666';
+
+    const headFront = makeTex(8, 8, (p) => {
+      p(0, 0, skin, 8, 8);
+      // Subtle cheek & forehead pixel shading
+      p(0, 2, skinL, 8, 1); p(0, 7, skinD, 8, 1);
+      // Classic Steve Hair Bangs & Sideburns
+      p(0, 0, hair, 8, 2);
+      p(1, 0, hairL, 2, 1); p(5, 0, hairD, 2, 1);
+      p(0, 2, hair, 1, 1); p(7, 2, hair, 1, 1);
+      // Crisp Steve White + Indigo-Blue Eyes
+      p(1, 4, '#ffffff', 1, 1); p(2, 4, '#43348f', 1, 1);
+      p(5, 4, '#43348f', 1, 1); p(6, 4, '#ffffff', 1, 1);
+      // Nose
+      p(3, 5, nose, 2, 1);
+      // Iconic Steve Goatee & Smile!
+      p(2, 6, '#5c3822', 1, 2); p(5, 6, '#5c3822', 1, 2);
+      p(3, 7, '#5c3822', 2, 1);
+      p(3, 6, '#a4694c', 2, 1);
+    });
+
+    const headSide = makeTex(8, 8, (p) => {
+      p(0, 0, skin, 8, 8);
+      p(0, 0, hair, 8, 2);
+      p(0, 2, hair, 6, 2);
+      p(0, 4, hairD, 4, 2);
+      p(1, 1, hairL, 3, 1);
+      p(5, 3, skinD, 1, 2);
+      p(0, 7, skinD, 8, 1);
+    });
+
+    const headBack = makeTex(8, 8, (p) => {
+      p(0, 0, hair, 8, 6);
+      p(0, 6, skinD, 8, 2);
+      p(1, 1, hairL, 2, 2); p(5, 2, hairD, 2, 3);
+      p(2, 4, hairD, 3, 2);
+    });
+
+    const headTop = makeTex(8, 8, (p) => {
+      p(0, 0, hair, 8, 8);
+      p(1, 1, hairL, 3, 2); p(4, 3, hairD, 3, 3); p(2, 5, hairL, 2, 2);
+    });
+
+    const headBottom = makeTex(8, 8, (p) => {
+      p(0, 0, skinD, 8, 8);
+    });
+
+    const torsoFront = makeTex(8, 12, (p) => {
+      p(0, 0, shirt, 8, 12);
+      // Classic Steve V-neck collar showing neck skin
+      p(2, 0, skin, 4, 1); p(3, 1, skinD, 2, 1);
+      // Shirt creases & tucked cyan hem shadow
+      p(0, 0, shirtL, 1, 10); p(7, 0, shirtD, 1, 11);
+      p(1, 3, shirtL, 2, 1); p(5, 5, shirtD, 2, 1);
+      p(0, 10, shirtD, 8, 2);
+      p(0, 11, shirtSh, 6, 1);
+      p(6, 11, jean, 2, 1); // iconic untucked shirt-corner glimpse of jeans!
+    });
+
+    const torsoBack = makeTex(8, 12, (p) => {
+      p(0, 0, shirt, 8, 12);
+      p(0, 0, shirtD, 8, 1);
+      p(1, 2, shirtL, 6, 2);
+      p(2, 6, shirtD, 4, 2);
+      p(0, 10, shirtSh, 8, 2);
+    });
+
+    const torsoSide = makeTex(4, 12, (p) => {
+      p(0, 0, shirtD, 4, 12);
+      p(1, 1, shirt, 2, 9);
+      p(0, 10, shirtSh, 4, 2);
+    });
+
+    const armFront = makeTex(4, 12, (p) => {
+      // Short teal sleeve (top 4 px) + warm tan forearm/hand (bottom 8 px)
+      p(0, 0, shirt, 4, 4);
+      p(0, 0, shirtL, 4, 1); p(0, 3, shirtD, 4, 1);
+      p(0, 4, skin, 4, 8);
+      p(0, 4, skinD, 4, 1);
+      p(1, 6, skinL, 2, 3);
+      p(0, 11, skinD, 4, 1);
+    });
+
+    const armSide = makeTex(4, 12, (p) => {
+      p(0, 0, shirtD, 4, 4);
+      p(1, 0, shirt, 2, 3);
+      p(0, 4, skinD, 4, 8);
+      p(1, 5, skin, 2, 6);
+    });
+
+    const legFront = makeTex(4, 12, (p) => {
+      // Classic Steve Indigo Jeans + Gray Boots!
+      p(0, 0, jean, 4, 10);
+      p(0, 0, jeanD, 4, 1);
+      p(1, 2, jeanL, 2, 5);
+      p(3, 1, jeanD, 1, 9);
+      p(0, 9, jeanD, 4, 1);
+      // Boots at bottom 2 rows
+      p(0, 10, shoe, 4, 2);
+      p(0, 10, shoeL, 3, 1);
+      p(0, 11, shoeD, 4, 1);
+    });
+
+    const legSide = makeTex(4, 12, (p) => {
+      p(0, 0, jeanD, 4, 10);
+      p(1, 1, jean, 2, 8);
+      p(0, 10, shoeD, 4, 2);
+      p(1, 10, shoe, 2, 1);
+    });
+
+    this._steveTextures = {
+      headFront, headSide, headBack, headTop, headBottom,
+      torsoFront, torsoBack, torsoSide,
+      armFront, armSide, legFront, legSide
+    };
+    return this._steveTextures;
+  }
+
+  // Pixel-Art 3D Armor Textures (Leather, Iron, Gold, Diamond) with open Helmet Visor & Sculpted Crest!
+  getArmorTextures(tier) {
+    if (!this._armorTexCache) this._armorTexCache = {};
+    if (this._armorTexCache[tier]) return this._armorTexCache[tier];
+
+    const pals = {
+      leather: { base: '#965c34', dark: '#63391c', light: '#bc7c4d', rim: '#d9a473', buckle: '#c8b282' },
+      iron:    { base: '#cfd6de', dark: '#8c96a3', light: '#edf2f7', rim: '#ffffff', buckle: '#555d69' },
+      golden:  { base: '#f2c12e', dark: '#b3740e', light: '#ffe36e', rim: '#fff9c4', buckle: '#d93829' },
+      diamond: { base: '#38d9e0', dark: '#148d9c', light: '#8ef8fc', rim: '#e0ffff', buckle: '#1a4966' }
+    };
+    const pal = pals[tier] || pals.iron;
+
+    const makeTex = (w, h, fn) => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      const p = (x, y, col, pw = 1, ph = 1) => { ctx.fillStyle = col; ctx.fillRect(x, y, pw, ph); };
+      fn(p, ctx);
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.generateMipmaps = false;
+      return tex;
+    };
+
+    // Helmet front with transparent open face cutout so Steve's eyes & face stay clearly visible!
+    const helmFront = makeTex(8, 8, (p) => {
+      p(0, 0, pal.base, 8, 3);
+      p(0, 0, pal.light, 8, 1);
+      p(1, 1, pal.rim, 6, 1);
+      p(0, 2, pal.dark, 8, 1);
+      // Noseguard bridge + cheek guards
+      p(3, 2, pal.base, 2, 2);
+      p(3, 3, pal.dark, 2, 1);
+      p(0, 3, pal.base, 1, 3);
+      p(7, 3, pal.base, 1, 3);
+      p(0, 5, pal.dark, 1, 1);
+      p(7, 5, pal.dark, 1, 1);
+    });
+
+    const helmSide = makeTex(8, 8, (p) => {
+      p(0, 0, pal.base, 8, 6);
+      p(0, 0, pal.light, 8, 1);
+      p(0, 5, pal.dark, 8, 1);
+      p(1, 2, pal.light, 4, 1);
+      p(2, 4, pal.dark, 4, 1);
+    });
+
+    const helmTop = makeTex(8, 8, (p) => {
+      p(0, 0, pal.base, 8, 8);
+      p(1, 1, pal.light, 6, 6);
+      p(3, 0, pal.rim, 2, 8);
+      p(0, 0, pal.dark, 8, 1);
+      p(0, 7, pal.dark, 8, 1);
+    });
+
+    const chestFront = makeTex(8, 12, (p) => {
+      p(0, 0, pal.base, 8, 12);
+      // Collar notch & shoulder armor trim
+      p(2, 0, pal.dark, 4, 2);
+      p(0, 0, pal.rim, 2, 1); p(6, 0, pal.rim, 2, 1);
+      // Sculpted pectoral bevel & royal crest
+      p(1, 2, pal.light, 6, 3);
+      p(2, 3, pal.rim, 4, 1);
+      p(1, 5, pal.dark, 6, 1);
+      p(2, 6, pal.light, 4, 3);
+      // Belt & buckle at waist
+      p(0, 9, pal.dark, 8, 2);
+      p(3, 9, pal.buckle, 2, 2);
+      p(0, 11, pal.base, 8, 1);
+    });
+
+    const chestBack = makeTex(8, 12, (p) => {
+      p(0, 0, pal.base, 8, 12);
+      p(0, 0, pal.dark, 8, 1);
+      p(1, 1, pal.light, 6, 4);
+      p(3, 1, pal.dark, 2, 8);
+      p(0, 9, pal.dark, 8, 2);
+    });
+
+    const pauldron = makeTex(4, 6, (p) => {
+      p(0, 0, pal.base, 4, 6);
+      p(0, 0, pal.rim, 4, 1);
+      p(1, 1, pal.light, 2, 3);
+      p(0, 4, pal.dark, 4, 2);
+    });
+
+    const legging = makeTex(4, 8, (p) => {
+      p(0, 0, pal.base, 4, 8);
+      p(0, 0, pal.dark, 4, 1);
+      p(1, 1, pal.light, 2, 5);
+      p(0, 6, pal.dark, 4, 1);
+      p(1, 4, pal.rim, 2, 1); // knee cap highlight
+    });
+
+    const boot = makeTex(4, 4, (p) => {
+      p(0, 0, pal.light, 4, 1);
+      p(0, 1, pal.base, 4, 2);
+      p(1, 1, pal.rim, 2, 1);
+      p(0, 3, pal.dark, 4, 1);
+    });
+
+    const out = { helmFront, helmSide, helmTop, chestFront, chestBack, pauldron, legging, boot, pal };
+    this._armorTexCache[tier] = out;
+    return out;
   }
 }

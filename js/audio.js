@@ -340,4 +340,22 @@ export class SoundManager {
       osc.stop(t0 + 0.105);
     }
   }
+
+  playDoorToggle(opening = true) {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Crisp wooden door creak + latch click!
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(opening ? 145 : 220, now);
+    osc.frequency.exponentialRampToValueAtTime(opening ? 255 : 115, now + 0.085);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  }
 }

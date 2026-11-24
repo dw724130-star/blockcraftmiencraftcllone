@@ -1,9 +1,256 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid } from './blocks.js';
+import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock } from './blocks.js';
 
 const PLAYER_RADIUS = 0.3;
 const PLAYER_HEIGHT = 1.75;
 const EYE_HEIGHT = 1.56;
+
+// Shared Classic Minecraft Steve 3D Model + Visible 3D Armor Shells (used by BOTH 3rd-Person Player AND Inventory Doll!)
+export function createSteveModel(textures) {
+  const root = new THREE.Group();
+  const sTex = textures && textures.getSteveTextures ? textures.getSteveTextures() : null;
+
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xc6906c });
+  const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x14a6ad });
+  const jeanTopMat = new THREE.MeshLambertMaterial({ color: 0x262169 });
+  const shoeBotMat = new THREE.MeshLambertMaterial({ color: 0x303030 });
+
+  const headMats = sTex ? [
+    new THREE.MeshLambertMaterial({ map: sTex.headSide }),
+    new THREE.MeshLambertMaterial({ map: sTex.headSide }),
+    new THREE.MeshLambertMaterial({ map: sTex.headTop }),
+    new THREE.MeshLambertMaterial({ map: sTex.headBottom }),
+    new THREE.MeshLambertMaterial({ map: sTex.headBack }),
+    new THREE.MeshLambertMaterial({ map: sTex.headFront })
+  ] : skinMat;
+
+  const torsoMats = sTex ? [
+    new THREE.MeshLambertMaterial({ map: sTex.torsoSide }),
+    new THREE.MeshLambertMaterial({ map: sTex.torsoSide }),
+    sleeveMat,
+    jeanTopMat,
+    new THREE.MeshLambertMaterial({ map: sTex.torsoBack }),
+    new THREE.MeshLambertMaterial({ map: sTex.torsoFront })
+  ] : sleeveMat;
+
+  const armMats = sTex ? [
+    new THREE.MeshLambertMaterial({ map: sTex.armSide }),
+    new THREE.MeshLambertMaterial({ map: sTex.armSide }),
+    sleeveMat,
+    skinMat,
+    new THREE.MeshLambertMaterial({ map: sTex.armFront }),
+    new THREE.MeshLambertMaterial({ map: sTex.armFront })
+  ] : skinMat;
+
+  const legMats = sTex ? [
+    new THREE.MeshLambertMaterial({ map: sTex.legSide }),
+    new THREE.MeshLambertMaterial({ map: sTex.legSide }),
+    jeanTopMat,
+    shoeBotMat,
+    new THREE.MeshLambertMaterial({ map: sTex.legFront }),
+    new THREE.MeshLambertMaterial({ map: sTex.legFront })
+  ] : jeanTopMat;
+
+  const bodyPivot = new THREE.Group();
+  root.add(bodyPivot);
+
+  const placeholderMat = new THREE.MeshLambertMaterial({ color: 0xd0d6de });
+
+  // Legs (pivoted at hip Y = 0.70, classic Steve 4x12x4 proportions!)
+  const makeLeg = (xOff) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(xOff, 0.70, 0);
+    const legMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.70, 0.24), legMats);
+    legMesh.position.set(0, -0.35, 0);
+    legMesh.castShadow = true;
+    pivot.add(legMesh);
+
+    // 3D Legging Greave Shell
+    const legArmor = new THREE.Mesh(new THREE.BoxGeometry(0.285, 0.48, 0.285), placeholderMat);
+    legArmor.position.set(0, -0.24, 0);
+    legArmor.visible = false;
+    pivot.add(legArmor);
+
+    // 3D Armored Boot Shell
+    const bootArmor = new THREE.Mesh(new THREE.BoxGeometry(0.305, 0.24, 0.315), placeholderMat);
+    bootArmor.position.set(0, -0.59, -0.01);
+    bootArmor.visible = false;
+    pivot.add(bootArmor);
+
+    bodyPivot.add(pivot);
+    return { pivot, legArmor, bootArmor };
+  };
+  const leftLegObj = makeLeg(-0.125);
+  const rightLegObj = makeLeg(0.125);
+
+  // Torso (Y = 0.70 .. 1.40, classic Steve 8x12x4 proportions!)
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.49, 0.70, 0.25), torsoMats);
+  torso.position.set(0, 1.05, 0);
+  torso.castShadow = true;
+  bodyPivot.add(torso);
+
+  // 3D Chestplate Cuirass Shell
+  const chestArmor = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.73, 0.315), placeholderMat);
+  chestArmor.position.set(0, 1.05, 0);
+  chestArmor.visible = false;
+  bodyPivot.add(chestArmor);
+
+  // 3D Leggings Waist Belt Shell
+  const waistArmor = new THREE.Mesh(new THREE.BoxGeometry(0.535, 0.16, 0.295), placeholderMat);
+  waistArmor.position.set(0, 0.74, 0);
+  waistArmor.visible = false;
+  bodyPivot.add(waistArmor);
+
+  // Arms (pivoted at shoulder Y = 1.38, classic Steve 4x12x4 proportions!)
+  const makeArm = (xOff, isRight) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(xOff, 1.38, 0);
+    const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.70, 0.24), armMats);
+    armMesh.position.set(0, -0.33, 0);
+    armMesh.castShadow = true;
+    pivot.add(armMesh);
+
+    // 3D Chestplate Shoulder Pauldron Shell
+    const pauldronArmor = new THREE.Mesh(new THREE.BoxGeometry(0.285, 0.34, 0.285), placeholderMat);
+    pauldronArmor.position.set(0, -0.15, 0);
+    pauldronArmor.visible = false;
+    pivot.add(pauldronArmor);
+
+    let heldItem = null;
+    if (isRight) {
+      heldItem = new THREE.Mesh(
+        new THREE.BoxGeometry(0.24, 0.24, 0.24),
+        new THREE.MeshLambertMaterial({ color: 0xc9b393 })
+      );
+      heldItem.position.set(0, -0.62, -0.18);
+      heldItem.visible = false;
+      pivot.add(heldItem);
+    }
+    bodyPivot.add(pivot);
+    return { pivot, pauldronArmor, heldItem };
+  };
+  const leftArmObj = makeArm(-0.365, false);
+  const rightArmObj = makeArm(0.365, true);
+
+  // Head (pivoted at neck Y = 1.40, classic Steve 8x8x8 proportions!)
+  const headPivot = new THREE.Group();
+  headPivot.position.set(0, 1.40, 0);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.48, 0.48), headMats);
+  head.position.set(0, 0.24, 0);
+  head.castShadow = true;
+  headPivot.add(head);
+
+  // 3D Helmet Shell (with open front face visor cutout so Steve's eyes & goatee shine through!)
+  const helmArmor = new THREE.Mesh(new THREE.BoxGeometry(0.545, 0.545, 0.545), placeholderMat);
+  helmArmor.position.set(0, 0.245, 0);
+  helmArmor.visible = false;
+  headPivot.add(helmArmor);
+
+  bodyPivot.add(headPivot);
+
+  return {
+    root,
+    bodyPivot,
+    headPivot,
+    leftLeg: leftLegObj.pivot,
+    rightLeg: rightLegObj.pivot,
+    leftArm: leftArmObj.pivot,
+    rightArm: rightArmObj.pivot,
+    heldItem: rightArmObj.heldItem,
+    armorMeshes: {
+      helm: helmArmor,
+      chest: chestArmor,
+      pauldronL: leftArmObj.pauldronArmor,
+      pauldronR: rightArmObj.pauldronArmor,
+      waist: waistArmor,
+      legL: leftLegObj.legArmor,
+      legR: rightLegObj.legArmor,
+      bootL: leftLegObj.bootArmor,
+      bootR: rightLegObj.bootArmor
+    },
+    _textures: textures,
+    _armorMatCache: {},
+    _lastArmorSig: ''
+  };
+}
+
+function resolveArmorTier(item) {
+  if (!item || !item.id) return null;
+  if (item.id.startsWith('diamond')) return 'diamond';
+  if (item.id.startsWith('iron')) return 'iron';
+  if (item.id.startsWith('golden') || item.id.startsWith('gold')) return 'golden';
+  if (item.id.startsWith('leather')) return 'leather';
+  return null;
+}
+
+export function updateSteveArmor(model, armorArray) {
+  if (!model || !model.armorMeshes) return;
+  const t0 = resolveArmorTier(armorArray && armorArray[0]);
+  const t1 = resolveArmorTier(armorArray && armorArray[1]);
+  const t2 = resolveArmorTier(armorArray && armorArray[2]);
+  const t3 = resolveArmorTier(armorArray && armorArray[3]);
+  const sig = `${t0 || ''}|${t1 || ''}|${t2 || ''}|${t3 || ''}`;
+  if (sig === model._lastArmorSig) return;
+  model._lastArmorSig = sig;
+
+  const getTierMats = (tier) => {
+    if (!tier) return null;
+    if (model._armorMatCache[tier]) return model._armorMatCache[tier];
+    const at = model._textures && model._textures.getArmorTextures ? model._textures.getArmorTextures(tier) : null;
+    if (!at) return null;
+    const clearMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+    const helmFrontM = new THREE.MeshLambertMaterial({ map: at.helmFront, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
+    const helmSideM = new THREE.MeshLambertMaterial({ map: at.helmSide, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
+    const helmTopM = new THREE.MeshLambertMaterial({ map: at.helmTop });
+    const chestFrontM = new THREE.MeshLambertMaterial({ map: at.chestFront });
+    const chestBackM = new THREE.MeshLambertMaterial({ map: at.chestBack });
+    const pauldronM = new THREE.MeshLambertMaterial({ map: at.pauldron });
+    const leggingM = new THREE.MeshLambertMaterial({ map: at.legging });
+    const bootM = new THREE.MeshLambertMaterial({ map: at.boot });
+    const bundle = {
+      helm: [helmSideM, helmSideM, helmTopM, clearMat, helmSideM, helmFrontM],
+      chest: [chestBackM, chestBackM, chestBackM, chestBackM, chestBackM, chestFrontM],
+      pauldron: pauldronM,
+      legging: leggingM,
+      boot: bootM
+    };
+    model._armorMatCache[tier] = bundle;
+    return bundle;
+  };
+
+  const am = model.armorMeshes;
+  const m0 = getTierMats(t0);
+  am.helm.visible = !!m0;
+  if (m0) am.helm.material = m0.helm;
+
+  const m1 = getTierMats(t1);
+  am.chest.visible = !!m1;
+  am.pauldronL.visible = !!m1;
+  am.pauldronR.visible = !!m1;
+  if (m1) {
+    am.chest.material = m1.chest;
+    am.pauldronL.material = m1.pauldron;
+    am.pauldronR.material = m1.pauldron;
+  }
+
+  const m2 = getTierMats(t2);
+  am.waist.visible = !!m2;
+  am.legL.visible = !!m2;
+  am.legR.visible = !!m2;
+  if (m2) {
+    am.waist.material = m2.legging;
+    am.legL.material = m2.legging;
+    am.legR.material = m2.legging;
+  }
+
+  const m3 = getTierMats(t3);
+  am.bootL.visible = !!m3;
+  am.bootR.visible = !!m3;
+  if (m3) {
+    am.bootL.material = m3.boot;
+    am.bootR.material = m3.boot;
+  }
+}
 
 export class Player {
   constructor(camera, world, inventory, sound, textures = null) {
@@ -169,101 +416,7 @@ export class Player {
   }
 
   buildPlayerModel() {
-    const root = new THREE.Group();
-    const skinMat = new THREE.MeshLambertMaterial({ color: 0xdba882 });
-    const hairMat = new THREE.MeshLambertMaterial({ color: 0x3b2718 });
-    const shirtMat = new THREE.MeshLambertMaterial({ color: 0x26a6b8 });
-    const pantsMat = new THREE.MeshLambertMaterial({ color: 0x2e3b8e });
-    const shoeMat = new THREE.MeshLambertMaterial({ color: 0x424242 });
-    const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const eyePupilMat = new THREE.MeshBasicMaterial({ color: 0x34286e });
-
-    const bodyPivot = new THREE.Group();
-    root.add(bodyPivot);
-
-    // Legs (pivoted at hip Y = 0.72)
-    const makeLeg = (xOff) => {
-      const pivot = new THREE.Group();
-      pivot.position.set(xOff, 0.72, 0);
-      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.56, 0.24), pantsMat);
-      upper.position.set(0, -0.28, 0);
-      const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.16, 0.26), shoeMat);
-      shoe.position.set(0, -0.64, 0.01);
-      upper.castShadow = true;
-      pivot.add(upper, shoe);
-      bodyPivot.add(pivot);
-      return pivot;
-    };
-    const leftLeg = makeLeg(-0.13);
-    const rightLeg = makeLeg(0.13);
-
-    // Torso (Y = 0.72 .. 1.38)
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.66, 0.26), shirtMat);
-    torso.position.set(0, 1.05, 0);
-    torso.castShadow = true;
-    bodyPivot.add(torso);
-
-    // Arms (pivoted at shoulder Y = 1.34)
-    const makeArm = (xOff, isRight) => {
-      const pivot = new THREE.Group();
-      pivot.position.set(xOff, 1.34, 0);
-      const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), shirtMat);
-      sleeve.position.set(0, -0.12, 0);
-      const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.42, 0.2), skinMat);
-      forearm.position.set(0, -0.45, 0);
-      forearm.castShadow = true;
-      pivot.add(sleeve, forearm);
-
-      let heldItem = null;
-      if (isRight) {
-        heldItem = new THREE.Mesh(
-          new THREE.BoxGeometry(0.24, 0.24, 0.24),
-          new THREE.MeshLambertMaterial({ color: 0xc9b393 })
-        );
-        heldItem.position.set(0, -0.62, -0.18);
-        heldItem.visible = false;
-        pivot.add(heldItem);
-      }
-      bodyPivot.add(pivot);
-      return { pivot, heldItem };
-    };
-    const leftArm = makeArm(-0.36, false);
-    const rightArm = makeArm(0.36, true);
-
-    // Head (pivoted at neck Y = 1.38)
-    const headPivot = new THREE.Group();
-    headPivot.position.set(0, 1.38, 0);
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.46, 0.46), skinMat);
-    head.position.set(0, 0.23, 0);
-    head.castShadow = true;
-    const hairTop = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.14, 0.48), hairMat);
-    hairTop.position.set(0, 0.42, 0);
-    const hairBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.34, 0.12), hairMat);
-    hairBack.position.set(0, 0.24, 0.2);
-
-    // Eyes facing -Z (forward look direction)
-    const ew1 = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.06, 0.02), eyeWhiteMat);
-    ew1.position.set(-0.11, 0.24, -0.235);
-    const ep1 = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.025), eyePupilMat);
-    ep1.position.set(-0.085, 0.24, -0.238);
-    const ew2 = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.06, 0.02), eyeWhiteMat);
-    ew2.position.set(0.11, 0.24, -0.235);
-    const ep2 = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.025), eyePupilMat);
-    ep2.position.set(0.085, 0.24, -0.238);
-
-    headPivot.add(head, hairTop, hairBack, ew1, ep1, ew2, ep2);
-    bodyPivot.add(headPivot);
-
-    return {
-      root,
-      bodyPivot,
-      headPivot,
-      leftLeg,
-      rightLeg,
-      leftArm: leftArm.pivot,
-      rightArm: rightArm.pivot,
-      heldItem: rightArm.heldItem
-    };
+    return createSteveModel(this.textures);
   }
 
   attachToScene(scene) {
@@ -371,7 +524,8 @@ export class Player {
     for (let y = minY; y <= maxY; y++) {
       for (let z = minZ; z <= maxZ; z++) {
         for (let x = minX; x <= maxX; x++) {
-          if (isBlockSolid(this.world.getBlock(x, y, z))) return true;
+          const bid = this.world.getBlock(x, y, z);
+          if (isBlockSolid(bid) && !(isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z))) return true;
         }
       }
     }
@@ -752,8 +906,9 @@ export class Player {
       0.08 + swingArc * 0.22 + 0.26 * eb + eatChompX * 2.2
     );
 
-    // Animate 3D Player Model (for 3rd-person views)
+    // Animate 3D Player Model (for 3rd-person views) + sync visible 3D Armor!
     const pm = this.playerModel;
+    updateSteveArmor(pm, this.inventory.armor);
     pm.root.position.copy(this.pos);
     pm.root.rotation.y = this.yaw;
 

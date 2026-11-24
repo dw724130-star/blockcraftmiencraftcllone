@@ -1,11 +1,13 @@
+import * as THREE from 'three';
 import { ITEMS, getItemCategory } from './blocks.js';
 import { RECIPES, matchCraftingGrid, canCraftRecipe, quickCraftRecipe, matchesItemTag, SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
 import { DEFAULT_KEYBINDS } from './storage.js';
+import { createSteveModel, updateSteveArmor } from './player.js';
 
-// Smooth 22-stop non-linear Render Distance scale (2..512 chunks — easy touch precision on iPad!)
-const RD_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512];
+// Smooth 24-stop non-linear Render Distance scale (2..1024 chunks — easy touch precision on iPad!)
+const RD_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
 function rdFromIdx(idx) {
   return RD_STOPS[Math.max(0, Math.min(RD_STOPS.length - 1, idx | 0))];
 }
@@ -19,7 +21,7 @@ function rdToIdx(chunks) {
   return best;
 }
 function rdLabel(v) {
-  return v > 128 ? `${v} (Ultra LOD)` : (v > 10 ? `${v} (LOD)` : `${v}`);
+  return v >= 768 ? `${v} (Mega LOD)` : (v > 128 ? `${v} (Ultra LOD)` : (v > 10 ? `${v} (LOD)` : `${v}`));
 }
 
 const KEYBIND_ACTIONS = [
@@ -260,17 +262,25 @@ export class UIManager {
       document.getElementById('btn-craft-book')?.classList.remove('active');
     });
 
-    // Live interactive Steve preview head tracking inside classic Player Inventory!
-    this._steveLookX = 0.18;
-    this._steveLookY = 0.05;
-    document.getElementById('inventory-modal')?.addEventListener('pointermove', (e) => {
+    // Live smooth 3D Steve cursor tracking across the entire viewport while Player Inventory is open!
+    this._steveTargetX = 0.22;
+    this._steveTargetY = 0.04;
+    this._steveLookX = 0.22;
+    this._steveLookY = 0.04;
+    this._stevePreviewRAF = null;
+    this._inv3d = null;
+    const onInvPointer = (e) => {
+      if (this.activeModal !== 'inventory-modal') return;
       const box = document.getElementById('inv-player-preview');
-      if (!box || this.activeModal !== 'inventory-modal') return;
+      if (!box) return;
       const r = box.getBoundingClientRect();
-      this._steveLookX = Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width * 0.5)) / 180));
-      this._steveLookY = Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height * 0.28)) / 160));
-      this.renderPlayerPreview();
-    });
+      const cx = r.left + r.width * 0.5;
+      const cy = r.top + r.height * 0.28;
+      this._steveTargetX = Math.max(-1, Math.min(1, (e.clientX - cx) / 210));
+      this._steveTargetY = Math.max(-1, Math.min(1, (e.clientY - cy) / 180));
+    };
+    window.addEventListener('pointermove', onInvPointer, { passive: true });
+    window.addEventListener('pointerdown', onInvPointer, { passive: true });
 
     // Creative search, categories, stack mode & clear inventory
     document.getElementById('creative-search')?.addEventListener('input', (e) => {
@@ -1163,118 +1173,91 @@ export class UIManager {
     this.updateStats();
   }
 
-  // Crisp articulated Minecraft Steve character preview (wearing equipped armor!) inside the black Inventory viewport
-  renderPlayerPreview() {
+  // Live 3D Articulated Minecraft Steve + Equipped 3D Armor Doll inside Inventory (100% identical to 3rd-person player!)
+  _ensureInv3DPreview() {
+    if (this._inv3d) return this._inv3d;
     const canvas = document.getElementById('inv-steve-canvas');
-    if (!canvas || !this.game) return;
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, w, h);
+    if (!canvas) return null;
+    try {
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setSize(canvas.width, canvas.height, false);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.setClearColor(0x000000, 1);
 
-    const lx = (this._steveLookX || 0.18) * 5;
-    const ly = (this._steveLookY || 0.05) * 4;
-    const inv = this.game.inventory;
-    const armorColor = (slotIdx) => {
-      const a = inv.armor[slotIdx];
-      if (!a) return null;
-      if (a.id.startsWith('diamond')) return { main: '#4ce2e8', dark: '#279aa3', rim: '#a5f8fc' };
-      if (a.id.startsWith('iron')) return { main: '#d8dee6', dark: '#949ea8', rim: '#ffffff' };
-      if (a.id.startsWith('golden') || a.id.startsWith('gold')) return { main: '#f5c731', dark: '#b3740e', rim: '#fff59d' };
-      if (a.id.startsWith('leather')) return { main: '#8f5934', dark: '#5e391f', rim: '#b87b4f' };
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(32, canvas.width / canvas.height, 0.1, 20);
+      camera.position.set(0, 1.05, 3.65);
+      camera.lookAt(0, 0.96, 0);
+
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x6b7280, 1.15);
+      const key = new THREE.DirectionalLight(0xfff7e6, 1.05);
+      key.position.set(2.4, 3.6, 3.4);
+      const rim = new THREE.DirectionalLight(0xb8dcff, 0.42);
+      rim.position.set(-2.5, 1.8, -2.0);
+      scene.add(hemi, key, rim);
+
+      const steve = createSteveModel(this.textures);
+      steve.root.rotation.y = Math.PI; // face directly toward the inventory camera (+Z)
+      scene.add(steve.root);
+
+      this._inv3d = { renderer, scene, camera, steve };
+      return this._inv3d;
+    } catch {
       return null;
-    };
+    }
+  }
 
-    const helm = armorColor(0);
-    const chest = armorColor(1);
-    const legs = armorColor(2);
-    const boots = armorColor(3);
-
-    const cx = Math.round(w * 0.5);
-    const rect3D = (x, y, bw, bh, frontCol, sideCol, topCol) => {
-      ctx.fillStyle = sideCol;
-      ctx.fillRect(x - 4, y + 2, 4, bh);
-      if (topCol) {
-        ctx.fillStyle = topCol;
-        ctx.fillRect(x - 4, y - 3, bw + 4, 4);
-      }
-      ctx.fillStyle = frontCol;
-      ctx.fillRect(x, y, bw, bh);
-    };
-
-    // Legs (classic Steve indigo trousers + armor leggings + boots)
-    const legTop = 122;
-    const legH = 54;
-    const legCol = legs ? legs.main : '#3b3291';
-    const legDark = legs ? legs.dark : '#2a236e';
-    rect3D(cx - 17, legTop, 16, legH, legCol, legDark, null);
-    rect3D(cx + 1, legTop, 16, legH, legCol, legDark, null);
-    // Shoes / Boots
-    const bootCol = boots ? boots.main : '#4c4c4c';
-    const bootDark = boots ? boots.dark : '#2e2e2e';
-    rect3D(cx - 17, legTop + legH - 14, 16, 14, bootCol, bootDark, null);
-    rect3D(cx + 1, legTop + legH - 14, 16, 14, bootCol, bootDark, null);
-
-    // Torso (classic Steve cyan tunic + equipped Chestplate)
-    const torsoTop = 74;
-    const torsoCol = chest ? chest.main : '#11a5a8';
-    const torsoDark = chest ? chest.dark : '#0a7378';
-    rect3D(cx - 17, torsoTop, 34, 48, torsoCol, torsoDark, torsoCol);
-    // Subtle tunic neckline & shadow
-    if (!chest) {
-      ctx.fillStyle = '#0d888c';
-      ctx.fillRect(cx - 17, torsoTop + 36, 34, 12);
-      ctx.fillStyle = '#b98562';
-      ctx.fillRect(cx - 6, torsoTop, 12, 6);
-    } else {
-      ctx.fillStyle = chest.rim;
-      ctx.fillRect(cx - 13, torsoTop + 6, 26, 4);
+  _drawInv3DFrame() {
+    if (this.activeModal !== 'inventory-modal' || !this.game) {
+      this._stevePreviewRAF = null;
+      return;
+    }
+    const ctx3d = this._ensureInv3DPreview();
+    if (!ctx3d) {
+      this._stevePreviewRAF = null;
+      return;
     }
 
-    // Arms (skin + cyan sleeves or armor pauldrons)
-    const armCol = '#b57e5b';
-    const armDark = '#8b5c3e';
-    rect3D(cx - 31, torsoTop + 2, 13, 46, armCol, armDark, null);
-    rect3D(cx + 18, torsoTop + 2, 13, 46, armCol, armDark, null);
-    rect3D(cx - 31, torsoTop + 2, 13, 16, torsoCol, torsoDark, torsoCol);
-    rect3D(cx + 18, torsoTop + 2, 13, 16, torsoCol, torsoDark, torsoCol);
+    // Smooth spring-like cursor following for Steve's head & gentle torso lean!
+    this._steveLookX += (this._steveTargetX - this._steveLookX) * 0.20;
+    this._steveLookY += (this._steveTargetY - this._steveLookY) * 0.20;
 
-    // Head (classic Steve face + hair + beard + equipped Helmet + subtle cursor look!)
-    const hx = Math.round(cx - 18 + lx * 0.5);
-    const hy = Math.round(36 + ly * 0.5);
-    rect3D(hx, hy, 36, 36, '#c6906c', '#986748', '#422918');
-    // Classic Steve Hair
-    ctx.fillStyle = '#3b2414';
-    ctx.fillRect(hx, hy, 36, 10);
-    ctx.fillRect(hx, hy + 10, 5, 5);
-    ctx.fillRect(hx + 31, hy + 10, 5, 5);
-    // Eyes (subtle shift toward pointer!)
-    const ex = Math.round(lx * 0.35);
-    const ey = Math.round(ly * 0.25);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(hx + 5 + ex, hy + 16 + ey, 9, 5);
-    ctx.fillRect(hx + 22 + ex, hy + 16 + ey, 9, 5);
-    ctx.fillStyle = '#3c3080';
-    ctx.fillRect(hx + 9 + ex, hy + 16 + ey, 5, 5);
-    ctx.fillRect(hx + 22 + ex, hy + 16 + ey, 5, 5);
-    // Nose & Goatee/Smile
-    ctx.fillStyle = '#9f6a4b';
-    ctx.fillRect(hx + 15 + ex, hy + 21 + ey, 6, 4);
-    ctx.fillStyle = '#4e311d';
-    ctx.fillRect(hx + 11 + ex, hy + 25 + ey, 14, 7);
-    ctx.fillStyle = '#b47a58';
-    ctx.fillRect(hx + 14 + ex, hy + 26 + ey, 8, 4);
+    const { renderer, scene, camera, steve } = ctx3d;
+    updateSteveArmor(steve, this.game.inventory.armor);
 
-    // Helmet overlay if equipped!
-    if (helm) {
-      ctx.fillStyle = helm.main;
-      ctx.fillRect(hx - 2, hy - 3, 40, 14);
-      ctx.fillRect(hx - 2, hy + 11, 6, 12);
-      ctx.fillRect(hx + 32, hy + 11, 6, 12);
-      ctx.fillStyle = helm.rim;
-      ctx.fillRect(hx + 2, hy, 32, 3);
+    const t = performance.now() * 0.001;
+    const lx = this._steveLookX;
+    const ly = this._steveLookY;
+
+    // Head looks cleanly toward the cursor; torso gently turns to follow just like Minecraft!
+    steve.root.rotation.y = Math.PI + lx * 0.36;
+    steve.bodyPivot.rotation.x = -ly * 0.07;
+    steve.headPivot.rotation.y = lx * 0.62;
+    steve.headPivot.rotation.x = -ly * 0.46;
+
+    // Subtle living idle breath sway on arms & legs
+    const breath = Math.sin(t * 2.2) * 0.025;
+    steve.leftArm.rotation.z = 0.06 + breath;
+    steve.rightArm.rotation.z = -0.06 - breath;
+    steve.leftArm.rotation.x = Math.sin(t * 1.4) * 0.03;
+    steve.rightArm.rotation.x = -Math.sin(t * 1.4) * 0.03;
+    steve.leftLeg.rotation.x = 0.03;
+    steve.rightLeg.rotation.x = -0.03;
+
+    renderer.render(scene, camera);
+    this._stevePreviewRAF = requestAnimationFrame(() => this._drawInv3DFrame());
+  }
+
+  renderPlayerPreview() {
+    if (!this.game) return;
+    const ctx3d = this._ensureInv3DPreview();
+    if (!ctx3d) return;
+    updateSteveArmor(ctx3d.steve, this.game.inventory.armor);
+    if (!this._stevePreviewRAF && this.activeModal === 'inventory-modal') {
+      this._drawInv3DFrame();
+    } else if (this.activeModal === 'inventory-modal') {
+      ctx3d.renderer.render(ctx3d.scene, ctx3d.camera);
     }
   }
 

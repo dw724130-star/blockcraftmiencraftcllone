@@ -136,12 +136,19 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV, near & far planes — supports up to 512-chunk Distant Horizons LOD (8,192 blocks!)
-    // Slightly raising near plane above 160 chunks boosts 24-bit Z-buffer precision by 60% at 8 km with zero close clipping!
+    // Camera FOV, near & far planes — supports up to 1024-chunk Distant Horizons LOD (16,384 blocks!)
+    // Slightly raising near plane above 160/512 chunks preserves crisp 24-bit Z-buffer precision out to 16.4 km!
     this.camera.fov = this.settings.fov;
-    this.camera.near = this.settings.renderDistance > 160 ? 0.16 : 0.1;
-    this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 1400);
+    this.camera.near = this.settings.renderDistance > 512 ? 0.24 : (this.settings.renderDistance > 160 ? 0.16 : 0.1);
+    this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 2000);
     this.camera.updateProjectionMatrix();
+
+    // Adaptive iPad / Touch DPR scaling at ultra-far 512-1024 chunk LODs so Apple GPU stays locked at 60 FPS!
+    const rawDpr = window.devicePixelRatio || 1;
+    const maxDpr = this.isTouch
+      ? (this.settings.renderDistance > 256 ? 1.1 : 1.25)
+      : 1.5;
+    this.renderer.setPixelRatio(Math.min(rawDpr, maxDpr));
     if (this.player) {
       this.player.baseFov = this.settings.fov;
       this.player.flightSpeed = typeof this.settings.flightSpeed === 'number' ? this.settings.flightSpeed : 1.0;
@@ -388,7 +395,7 @@ class BlockCraftGame {
         seed: meta.seed,
         worldType: meta.worldType,
         renderDistance: this.settings.renderDistance,
-        maxDetailRadius: this.isTouch ? 6 : 10,
+        maxDetailRadius: this.isTouch ? 5 : 10,
         shaders: shaderMode
       });
 
@@ -433,6 +440,9 @@ class BlockCraftGame {
         }
         if (Array.isArray(saved.furnaces)) {
           for (const [k, v] of saved.furnaces) this.world.furnaces.set(k, v);
+        }
+        if (Array.isArray(saved.doorStates)) {
+          for (const [k, v] of saved.doorStates) this.world.doorStates.set(k, v);
         }
       }
 
@@ -600,7 +610,8 @@ class BlockCraftGame {
       inventory: this.inventory.serialize(),
       modifiedBlocks: Array.from(this.world.modifiedBlocks.entries()),
       chests: Array.from(this.world.chests.entries()),
-      furnaces: Array.from(this.world.furnaces.entries())
+      furnaces: Array.from(this.world.furnaces.entries()),
+      doorStates: Array.from(this.world.doorStates.entries())
     };
     await saveWorld(record);
     if (showToast) this.ui.toast('World Saved!');
@@ -747,6 +758,11 @@ class BlockCraftGame {
             }
             return;
           }
+          if (bdef.interactive === 'door') {
+            const opened = this.world.toggleDoor(x, y, z);
+            if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
+            return;
+          }
           if (bdef.interactive === 'bed') {
             this.player.spawnPos.set(x + 0.5, y + 1.15, z + 0.5);
             const isEveningOrNight = this.sky.isNight() || this.sky.time < 0.255 || this.sky.time > 0.72;
@@ -869,6 +885,29 @@ class BlockCraftGame {
           const insideY = ty >= Math.floor(this.player.pos.y) && ty <= Math.floor(this.player.pos.y + 1.65);
           return dx < 0.78 && dz < 0.78 && insideY;
         };
+
+        if (heldDef.isDoor) {
+          if (isRepeat) return;
+          const curBot = this.world.getBlock(px, py, pz);
+          const curTop = this.world.getBlock(px, py + 1, pz);
+          if (isBlockSolid(curBot) || isBlockSolid(curTop) || insidePlayer(px, py, pz) || insidePlayer(px, py + 1, pz)) {
+            this.ui.toast('Need 2 vertical blocks of space to place a Door!');
+            return;
+          }
+          // Face the player cleanly (0=North -Z, 1=East +X, 2=South +Z, 3=West -X)
+          const fx = -Math.sin(this.player.yaw);
+          const fz = -Math.cos(this.player.yaw);
+          let facing = 0;
+          if (Math.abs(fx) > Math.abs(fz)) facing = fx > 0 ? 3 : 1;
+          else facing = fz > 0 ? 0 : 2;
+          this.world.placeDoor(px, py, pz, heldDef.blockId, facing);
+          this.sound.playBlock(heldDef.sound, true);
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
 
         if (heldDef.blockId === BLOCK.BED) {
           if (isRepeat) return;
@@ -1495,14 +1534,22 @@ class BlockCraftGame {
         if (this._shakeTimer <= 0) this._shakeIntensity = 0;
       }
 
-      this.ui.updateTopHUD(this.player, curBiome, this.sky, this.currentFps);
-      this.ui.updateEffectsHUD(this.player.statusEffects);
+      // Throttled HUD & Minimap updates (eliminates 60Hz DOM thrashing on iPad Safari!)
+      this._hudTimer = (this._hudTimer || 0) + dt;
+      if (this._hudTimer >= 0.10) {
+        this._hudTimer = 0;
+        this.ui.updateTopHUD(this.player, curBiome, this.sky, this.currentFps);
+        this.ui.updateEffectsHUD(this.player.statusEffects);
+      }
       this.minimapTimer += dt;
-      if (this.minimapTimer >= 0.16) {
+      const mmInterval = this.isTouch ? 0.24 : 0.16;
+      if (this.minimapTimer >= mmInterval) {
         this.minimapTimer = 0;
         this.ui.renderMinimap(this.player, this.world, this.entities, curBiome);
       }
-      if (this.player.headInWater || this.player.air < this.player.maxAir) {
+      const airBucket = Math.ceil(this.player.air);
+      if ((this.player.headInWater || this.player.air < this.player.maxAir) && airBucket !== this._lastAirHud) {
+        this._lastAirHud = airBucket;
         this.ui.updateStats();
       }
 

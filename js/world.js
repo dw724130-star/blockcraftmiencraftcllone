@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo } from './blocks.js';
+import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { LodWorkerPool } from './lod-mesher.js';
@@ -316,6 +316,7 @@ export class World {
     this.modsByChunk = new Map(); // numeric chunkKey -> Array<[lx, y, lz, blockId]>
     this.chests = new Map(); // "x,y,z" -> Array(27)
     this.furnaces = new Map(); // "x,y,z" -> { input, fuel, output, burnTime, burnMax, cookTime }
+    this.doorStates = new Map(); // "x,y,z" (bottom block) -> { facing: 0..3, open: boolean }
     this.villageChunks = new Map(); // numeric chunkKey -> { x, y, z, biome, spawned: bool }
     this.persistentLeaves = new Set(); // "x,y,z" of player-placed leaves that should not decay
     this.leafDecayQueue = new Map(); // "x,y,z" -> { x, y, z, timer }
@@ -354,7 +355,9 @@ export class World {
       uFogNear: { value: 45.0 },
       uFogFar: { value: 110.0 },
       uLodInnerCenter: { value: new THREE.Vector2(0, 0) },
-      uLodInnerRadiusSq: { value: 0.0 }
+      uLodInnerRadiusSq: { value: 0.0 },
+      uLodBlendInner: { value: 0.0 },
+      uLodBlendOuter: { value: 14.0 }
     };
 
     // 1. Opaque Terrain Material — Greedy Atlas Tiling + 20x BSL Atmospheric Lighting, Specular Rim, Underwater Caustics & Emissive Bloom!
@@ -486,9 +489,12 @@ export class World {
     // - `this.lodMatOuter` (ZERO `discard`!) on 90%+ of outer LOD tiles -> keeps hardware Early-Z / Apple HSR enabled!
     const buildLodMat = (withInnerCutout) => {
       const mat = new THREE.MeshLambertMaterial({
-        vertexColors: true
+        vertexColors: true,
+        polygonOffset: withInnerCutout,
+        polygonOffsetFactor: withInnerCutout ? 2 : 0,
+        polygonOffsetUnits: withInnerCutout ? 2 : 0
       });
-      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v27' : 'lod_outer_v27');
+      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v28' : 'lod_outer_v28');
       mat.onBeforeCompile = (shader) => {
         const uniforms = {
           uTime: this.shaderUniforms.uTime,
@@ -508,7 +514,8 @@ export class World {
         };
         if (withInnerCutout) {
           uniforms.uLodInnerCenter = this.shaderUniforms.uLodInnerCenter;
-          uniforms.uLodInnerRadiusSq = this.shaderUniforms.uLodInnerRadiusSq;
+          uniforms.uLodBlendInner = this.shaderUniforms.uLodBlendInner;
+          uniforms.uLodBlendOuter = this.shaderUniforms.uLodBlendOuter;
         }
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = `
@@ -539,14 +546,21 @@ export class World {
           uniform float uRainFactor;
           uniform float uFogNear;
           uniform float uFogFar;
-          ${withInnerCutout ? 'uniform vec2 uLodInnerCenter;\nuniform float uLodInnerRadiusSq;' : ''}
+          ${withInnerCutout ? 'uniform vec2 uLodInnerCenter;\nuniform float uLodBlendInner;\nuniform float uLodBlendOuter;' : ''}
           varying vec3 vWorldPos;
           varying vec3 vWorldNorm;
           varying float vMat;
         ` + shader.fragmentShader;
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <fog_fragment>',
-          `${withInnerCutout ? 'vec2 lodDelta = vWorldPos.xz - uLodInnerCenter;\nif (dot(lodDelta, lodDelta) < uLodInnerRadiusSq) discard;' : ''}
+          `${withInnerCutout ? `vec2 lodDelta = vWorldPos.xz - uLodInnerCenter;
+           float lodDistXZ = length(lodDelta);
+           if (lodDistXZ < uLodBlendInner) discard;
+           if (lodDistXZ < uLodBlendOuter) {
+             float fadeT = (lodDistXZ - uLodBlendInner) / max(0.001, uLodBlendOuter - uLodBlendInner);
+             float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+             if (fadeT < ign) discard;
+           }` : ''}
 
            vec3 viewVec = vWorldPos - cameraPosition;
            float dist = length(viewVec);
@@ -965,7 +979,7 @@ export class World {
       this._transTable[id] = isTr ? 1 : 0;
       this._litTable[id] = def.light > 0 ? 1 : 0;
       this._specialTable[id] = (
-        isTr || def.cross || def.liquid || isBedBlock(id) ||
+        isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) ||
         id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE
       ) ? 1 : 0;
       const faceUVs = new Array(6);
@@ -3288,6 +3302,7 @@ export class World {
     if (blockId === BLOCK.AIR) {
       this.chests.delete(bKey);
       this.furnaces.delete(bKey);
+      this.doorStates.delete(bKey);
     } else if (blockId === BLOCK.CHEST && !this.chests.has(bKey)) {
       this.chests.set(bKey, new Array(27).fill(null));
     } else if (blockId === BLOCK.FURNACE && !this.furnaces.has(bKey)) {
@@ -3335,6 +3350,14 @@ export class World {
 
     // Trigger leaf decay checks whenever a tree log or leaf is removed
     if (prevId !== blockId) {
+      // Breaking either half of a 2-block-tall Wood Door cleanly removes its partner half!
+      if (blockId === BLOCK.AIR && isDoorBlock(prevId)) {
+        const partnerY = isDoorTop(prevId) ? y - 1 : y + 1;
+        this.doorStates.delete(`${x},${Math.min(y, partnerY)},${z}`);
+        if (isDoorBlock(this.getBlock(x, partnerY, z))) {
+          this.setBlock(x, partnerY, z, BLOCK.AIR, record);
+        }
+      }
       if (LOG_BLOCK_SET.has(prevId)) {
         this.scheduleLeafDecayAround(x, y, z, LEAF_MAX_WOOD_DIST);
       } else if (LEAF_BLOCK_SET.has(prevId)) {
@@ -3915,6 +3938,36 @@ export class World {
               addBedOriented(0.02, 0.34, 0.0, 0.98, 0.56, 0.96, bedRedUV, bedRedUV, bedWoodUV);
               addBedOriented(0.02, 0.20, 0.94, 0.98, 0.46, 0.98, bedWoodUV, bedWoodUV, bedWoodUV);
             }
+            continue;
+          }
+
+          // Sculpted 3/16-thick 3D Openable/Closeable Wood Door Geometry (with transparent window cutouts!)
+          if (isDoorBlock(id)) {
+            const st = this.getDoorState(wx, y, wz);
+            const edge = st.open ? ((st.facing + 3) & 3) : st.facing;
+            const thick = 0.1875;
+            let dx0 = 0, dx1 = 1, dz0 = 0, dz1 = 1;
+            if (edge === 0) { dz0 = 0; dz1 = thick; }
+            else if (edge === 1) { dx0 = 1 - thick; dx1 = 1; }
+            else if (edge === 2) { dz0 = 1 - thick; dz1 = 1; }
+            else { dx0 = 0; dx1 = thick; }
+
+            const skyF = calcSkyLight(lx, y, lz);
+            const faceUV = uvTable[id][2]; // door top or bottom face tile
+            const edgeUV = uvTable[id][0]; // matching wood plank UV for thin rim
+            const bx0 = wx + dx0, bx1 = wx + dx1, by0 = y, by1 = y + 1, bz0 = wz + dz0, bz1 = wz + dz1;
+            const wideX = (edge === 0 || edge === 2);
+            const uZ = wideX ? faceUV : edgeUV;
+            const uX = wideX ? edgeUV : faceUV;
+            const sTop = 0.96 * skyF, sBot = 0.62 * skyF, sX = 0.88 * skyF, sZ = 0.80 * skyF;
+
+            // Render in bStatic (alpha-tested cutout material so Oak/Acacia/Jungle/Cherry door windows are see-through!)
+            bStatic.pushQuad(bx0,by1,bz1,edgeUV.u0,edgeUV.v0,sTop, bx1,by1,bz1,edgeUV.u1,edgeUV.v0,sTop, bx1,by1,bz0,edgeUV.u1,edgeUV.v1,sTop, bx0,by1,bz0,edgeUV.u0,edgeUV.v1,sTop, 0,1,0);
+            bStatic.pushQuad(bx0,by0,bz0,edgeUV.u0,edgeUV.v0,sBot, bx1,by0,bz0,edgeUV.u1,edgeUV.v0,sBot, bx1,by0,bz1,edgeUV.u1,edgeUV.v1,sBot, bx0,by0,bz1,edgeUV.u0,edgeUV.v1,sBot, 0,-1,0);
+            bStatic.pushQuad(bx1,by0,bz1,uX.u0,uX.v0,sX, bx1,by0,bz0,uX.u1,uX.v0,sX, bx1,by1,bz0,uX.u1,uX.v1,sX, bx1,by1,bz1,uX.u0,uX.v1,sX, 1,0,0);
+            bStatic.pushQuad(bx0,by0,bz0,uX.u0,uX.v0,sX, bx0,by0,bz1,uX.u1,uX.v0,sX, bx0,by1,bz1,uX.u1,uX.v1,sX, bx0,by1,bz0,uX.u0,uX.v1,sX, -1,0,0);
+            bStatic.pushQuad(bx0,by0,bz1,uZ.u0,uZ.v0,sZ, bx1,by0,bz1,uZ.u1,uZ.v0,sZ, bx1,by1,bz1,uZ.u1,uZ.v1,sZ, bx0,by1,bz1,uZ.u0,uZ.v1,sZ, 0,0,1);
+            bStatic.pushQuad(bx1,by0,bz0,uZ.u0,uZ.v0,sZ, bx0,by0,bz0,uZ.u1,uZ.v0,sZ, bx0,by1,bz0,uZ.u1,uZ.v1,sZ, bx1,by1,bz0,uZ.u0,uZ.v1,sZ, 0,0,-1);
             continue;
           }
 
@@ -4613,12 +4666,64 @@ export class World {
       this._shadowNeedsUpdate = true;
     }
 
-    // 4. Distant Horizons 128-Chunk 4-Tier Quadtree LOD Ring (off-thread Web Workers + Greedy Meshing!)
-    // Update GPU circular cutout so LOD NEVER overlaps or z-fights with full-detail chunks or caves!
-    this.shaderUniforms.uLodInnerCenter.value.set(px, pz);
-    const innerCutBlocks = Math.max(0, (r - 1.15) * CHUNK_SIZE);
-    this.shaderUniforms.uLodInnerRadiusSq.value = innerCutBlocks * innerCutBlocks;
-    this.updateLodAround(pcx, pcz, r, fullRD, Math.max(1.2, budgetMs * 0.42), camDirX, camDirZ);
+    // 4. Seamless Contiguous Ready-Radius + Soft 14m Dither Crossfade into Distant Horizons LOD!
+    // Measure exact contiguous meshed radius along pre-sorted spiral so LOD NEVER leaves an empty hole!
+    const lodActive = fullRD > r;
+    let readyChunks = r;
+    if (lodActive && this._spiralOffsets && this._spiralOffsets.length > 0) {
+      readyChunks = r;
+      for (let i = 0; i < this._spiralOffsets.length; i++) {
+        const off = this._spiralOffsets[i];
+        const c = this.chunks.get(this.chunkKey(pcx + off.dx, pcz + off.dz));
+        if (!c || !c.meshed) {
+          readyChunks = Math.max(0, Math.sqrt(off.d2) - 0.5);
+          break;
+        }
+      }
+      // Only refresh chunk visibility flags when readyChunks changes or player moves chunk (avoids per-frame O(N) loop!)
+      const qReady = Math.round(readyChunks * 4);
+      if (movedChunk || qReady !== this._lastVisReadyQ || this.meshQueue.length > 0) {
+        this._lastVisReadyQ = qReady;
+        const visLimSq = (readyChunks + 0.95) * (readyChunks + 0.95);
+        for (const chunk of this.chunks.values()) {
+          if (!chunk.meshed || chunk.meshes.length === 0) continue;
+          const dx = chunk.cx - pcx;
+          const dz = chunk.cz - pcz;
+          const shouldVis = (dx * dx + dz * dz) <= visLimSq;
+          if (chunk.meshes[0].visible !== shouldVis) {
+            for (let mi = 0; mi < chunk.meshes.length; mi++) chunk.meshes[mi].visible = shouldVis;
+          }
+        }
+      }
+    } else if (!lodActive && this._lastVisReadyQ !== -1) {
+      this._lastVisReadyQ = -1;
+      for (const chunk of this.chunks.values()) {
+        if (chunk.meshes.length > 0 && !chunk.meshes[0].visible) {
+          for (let mi = 0; mi < chunk.meshes.length; mi++) chunk.meshes[mi].visible = true;
+        }
+      }
+    }
+
+    const targetReadyBlocks = Math.max(0, (readyChunks - 0.45) * CHUNK_SIZE);
+    if (this._smoothReadyBlocks === undefined) this._smoothReadyBlocks = targetReadyBlocks;
+    // Shrink immediately if flying faster than chunks build (zero holes!), glide smoothly outward as chunks finish!
+    if (targetReadyBlocks < this._smoothReadyBlocks) {
+      this._smoothReadyBlocks = targetReadyBlocks;
+    } else {
+      this._smoothReadyBlocks += (targetReadyBlocks - this._smoothReadyBlocks) * 0.14;
+    }
+
+    const centerX = pcx * CHUNK_SIZE + 8;
+    const centerZ = pcz * CHUNK_SIZE + 8;
+    this.shaderUniforms.uLodInnerCenter.value.set(centerX, centerZ);
+    const blendOuter = Math.max(0, this._smoothReadyBlocks);
+    const blendInner = Math.max(0, blendOuter - 14.0);
+    this.shaderUniforms.uLodBlendInner.value = blendInner;
+    this.shaderUniforms.uLodBlendOuter.value = blendOuter;
+    this.shaderUniforms.uLodInnerRadiusSq.value = blendInner * blendInner;
+
+    const effectiveLodInnerR = Math.max(0, this._smoothReadyBlocks / CHUNK_SIZE);
+    this.updateLodAround(pcx, pcz, effectiveLodInnerR, fullRD, Math.max(1.2, budgetMs * 0.42), camDirX, camDirZ);
   }
 
   _ensureLodPool() {
@@ -4662,7 +4767,7 @@ export class World {
       if (!canRemove) {
         const { tier, rx, rz } = rec;
         // Check if replaced by coarser parent (merged)
-        if (tier < 5) {
+        if (tier < 6) {
           const pKey = `${tier + 1}:${rx >> 1},${rz >> 1}`;
           if (active.has(pKey) && this.lodRegions.has(pKey)) canRemove = true;
         }
@@ -4717,8 +4822,8 @@ export class World {
     const pool = this._ensureLodPool();
     const isTouchLOD = this.maxDetailRadius <= 6;
 
-    // Re-evaluate zero-overlap 6-tier Quadtree LOD partition every 2 chunks or on renderDistance change!
-    // T0=2m (4x4ch), T1=4m (8x8ch), T2=8m (16x16ch), T3=16m (32x32ch), T4=32m (64x64ch), T5=64m (128x128ch -> 512ch!)
+    // Re-evaluate zero-overlap 7-tier Quadtree LOD partition every 2 chunks or on renderDistance change!
+    // T0=1m (4x4ch), T1=2m (8x8ch), T2=4m (16x16ch), T3=8m (32x32ch), T4=16m (64x64ch), T5=32m (128x128ch), T6=64m (256x256ch -> 1024ch!)
     const prx = pcx >> 1;
     const prz = pcz >> 1;
 
@@ -4727,16 +4832,16 @@ export class World {
       this._lastLodRz = prz;
       this._lastLodRD = fullRD;
 
-      const TIER_CHUNKS = [4, 8, 16, 32, 64, 128];
-      // Logarithmic split thresholds: ultra-lean ~80 frustum draw calls on iPad even at 512 chunks!
+      const TIER_CHUNKS = [4, 8, 16, 32, 64, 128, 256];
+      // Logarithmic split thresholds: ultra-lean ~95-115 frustum draw calls on iPad even at 1024 chunks (16.4 km!)
       const SPLIT_DIST = isTouchLOD
-        ? [0, 14, 34, 76, 164, 316]
-        : [0, 22, 52, 108, 216, 368];
-      const clampedRD = Math.min(512, fullRD);
+        ? [0, 13, 30, 68, 152, 310, 620]
+        : [0, 20, 48, 100, 208, 390, 720];
+      const clampedRD = Math.min(1024, fullRD);
       const maxDistLimit = clampedRD + 2;
-      const innerCullDist = Math.max(0, detailR - 1.35);
-      const innerCutoutCheck = detailR + 2.5;
-      const rootTier = clampedRD > 128 ? 5 : 3;
+      const innerCullDist = Math.max(0, detailR - 2.4);
+      const innerCutoutCheck = detailR + 3.0;
+      const rootTier = clampedRD > 512 ? 6 : (clampedRD > 128 ? 5 : 3);
       const rootSpan = TIER_CHUNKS[rootTier];
 
       const pxC = pcx + 0.5;
@@ -5156,6 +5261,53 @@ export class World {
     }
   }
 
+  // --- WOOD DOOR HELPERS (2-block-tall open/close state keyed on bottom half!) ---
+  getDoorState(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    const by = isDoorTop(id) ? y - 1 : y;
+    const st = this.doorStates.get(`${x},${by},${z}`);
+    return st || { facing: 0, open: false };
+  }
+
+  isDoorOpenAt(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    if (!isDoorBlock(id)) return false;
+    const by = isDoorTop(id) ? y - 1 : y;
+    const st = this.doorStates.get(`${x},${by},${z}`);
+    return !!(st && st.open);
+  }
+
+  placeDoor(wx, wy, wz, bottomBlockId, facing = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    this.doorStates.set(`${x},${y},${z}`, { facing: facing & 3, open: false });
+    this.setBlock(x, y, z, bottomBlockId, true);
+    this.setBlock(x, y + 1, z, bottomBlockId + 1, true);
+  }
+
+  toggleDoor(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    if (!isDoorBlock(id)) return false;
+    const by = isDoorTop(id) ? y - 1 : y;
+    const key = `${x},${by},${z}`;
+    let st = this.doorStates.get(key);
+    if (!st) {
+      st = { facing: 0, open: false };
+      this.doorStates.set(key, st);
+    }
+    st.open = !st.open;
+    const cx = x >> 4, cz = z >> 4;
+    this.markDirty(cx, cz);
+    const lx = x & 15, lz = z & 15;
+    if (lx === 0) this.markDirty(cx - 1, cz);
+    if (lx === 15) this.markDirty(cx + 1, cz);
+    if (lz === 0) this.markDirty(cx, cz - 1);
+    if (lz === 15) this.markDirty(cx, cz + 1);
+    return st.open;
+  }
+
   dispose() {
     for (const chunk of this.chunks.values()) {
       for (const m of chunk.meshes) {
@@ -5184,6 +5336,7 @@ export class World {
     this.activeFires.clear();
     this.fluidLevels.clear();
     this.fluidQueue.clear();
+    this.doorStates.clear();
     this.megaStructures.clear();
     this.scene.remove(this.group);
     this.scene.remove(this.lodGroup);
