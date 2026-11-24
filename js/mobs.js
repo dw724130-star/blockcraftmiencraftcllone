@@ -1180,7 +1180,12 @@ export class EntityManager {
     this.ambienceTimer = 4.0;
     this.initialPopulated = false;
     this._pendingVillageSpawns = [];
+    this.megaCrowds = new Map();
+    this._crowdDummy = new THREE.Object3D();
+    this._crowdColor = new THREE.Color();
+    this._crowdTick = 0;
     this.onPickup = null;
+    this.onDiscoverMega = null;
 
     this.group = new THREE.Group();
     this.scene.add(this.group);
@@ -1225,7 +1230,7 @@ export class EntityManager {
     return false;
   }
 
-  // Verify a full 3D water volume for fish so they never clip riverbanks!
+  // Verify a full 3D water volume for fish so they never clip riverbanks or swim in lava!
   isWaterVolume(x, y, z, pad = 0.32) {
     const pts = [
       [x, y, z],
@@ -1234,7 +1239,7 @@ export class EntityManager {
       [x, y + 0.22, z], [x, y - 0.22, z]
     ];
     for (const [px, py, pz] of pts) {
-      if (!isBlockLiquid(this.world.getBlock(px, py, pz))) return false;
+      if (this.world.getBlock(px, py, pz) !== BLOCK.WATER) return false;
     }
     return true;
   }
@@ -1823,11 +1828,27 @@ export class EntityManager {
         }
       }
     }
+    // 0b. Mega-Structure 200+ Villager Crowds & Interactive Plaza Villagers!
+    if (this.world.megaStructures && this.world.megaStructures.size > 0) {
+      for (const ms of this.world.megaStructures.values()) {
+        const d = Math.hypot(player.pos.x - ms.x, player.pos.z - ms.z);
+        if (!ms.discovered && d < ms.radius + 16) {
+          ms.discovered = true;
+          if (this.onDiscoverMega) this.onDiscoverMega(ms);
+        }
+        if (!ms.crowdSpawned && d < 105) {
+          ms.crowdSpawned = true;
+          this._spawnMegaCrowd(ms);
+        }
+      }
+      this._updateMegaCrowds(dt, player);
+    }
+
     if (this._pendingVillageSpawns.length > 0) {
       for (let k = 0; k < 2 && this._pendingVillageSpawns.length > 0; k++) {
         const sp = this._pendingVillageSpawns.shift();
-        const sy = this.world.getSurfaceY(sp.sx, sp.sz);
-        this.spawnMob(sp.mType, sp.sx, Math.max(sp.baseY, sy), sp.sz, sp.prof);
+        const yPos = sp.exactY ? sp.baseY : Math.max(sp.baseY, this.world.getSurfaceY(sp.sx, sp.sz));
+        this.spawnMob(sp.mType, sp.sx, yPos, sp.sz, sp.prof);
       }
     }
 
@@ -2251,13 +2272,29 @@ export class EntityManager {
         }
       }
 
-      // Gravity & Water Buoyancy
-      const inWater = isBlockLiquid(this.world.getBlock(m.pos.x, m.pos.y + 0.15, m.pos.z));
+      // Gravity, Water Buoyancy & Lava/Fire Hazard Damage!
+      const feetBlk = this.world.getBlock(m.pos.x, m.pos.y + 0.15, m.pos.z);
+      const midBlk = this.world.getBlock(m.pos.x, m.pos.y + Math.min(0.85, m.height * 0.5), m.pos.z);
+      const inWater = feetBlk === BLOCK.WATER;
+      const inLava = feetBlk === BLOCK.LAVA || midBlk === BLOCK.LAVA;
+      const inFire = feetBlk === BLOCK.FIRE || midBlk === BLOCK.FIRE;
+      if (inLava || inFire) {
+        m._lavaBurnTick = (m._lavaBurnTick || 0) + dt;
+        if (m._lavaBurnTick >= (inLava ? 0.5 : 0.75)) {
+          m._lavaBurnTick = 0;
+          const deadNow = this.hitMob(m, inLava ? 4 : 2, { x: (Math.random() - 0.5), y: 0.5, z: (Math.random() - 0.5) }, null);
+          if (deadNow && m.hp <= 0) continue;
+        }
+        if (inLava) m.vel.y = Math.max(m.vel.y, 2.2);
+      } else {
+        m._lavaBurnTick = 0;
+      }
+
       if (m.def.floatsOnWater && inWater) {
         const surfaceY = Math.floor(m.pos.y + 0.15) + 0.72;
         m.vel.y = (surfaceY - m.pos.y) * 5.0;
       } else {
-        m.vel.y -= (inWater ? 6 : 22) * dt;
+        m.vel.y -= (inWater || inLava ? 6 : 22) * dt;
         if (inWater) m.vel.y = Math.max(m.vel.y, 1.8);
       }
 
@@ -2503,10 +2540,231 @@ export class EntityManager {
     }
   }
 
+  _spawnMegaCrowd(ms) {
+    // 1. Spawn 16 full interactive articulated villagers + 4 Iron Golems around the interior plaza & avenues!
+    const interactiveOffsets = [
+      [-5.5, -1.5], [-5.5, 1.5], [5.5, -1.5], [5.5, 1.5],
+      [-1.5, -5.5], [1.5, -5.5], [-1.5, 5.5], [1.5, 5.5],
+      [-9.5, 0.5], [9.5, -0.5], [0.5, -9.5], [-0.5, 9.5],
+      [-13.5, 0.5], [13.5, -0.5], [0.5, -13.5], [-0.5, 13.5]
+    ];
+    for (let i = 0; i < interactiveOffsets.length; i++) {
+      const [ox, oz] = interactiveOffsets[i];
+      this._pendingVillageSpawns.push({
+        mType: 'villager',
+        sx: ms.x + ox,
+        sz: ms.z + oz,
+        baseY: ms.y,
+        exactY: true,
+        prof: VILLAGER_PROFESSIONS[i % VILLAGER_PROFESSIONS.length]
+      });
+    }
+    for (const [ox, oz] of [[-7.5, -7.5], [7.5, -7.5], [-7.5, 7.5], [7.5, 7.5]]) {
+      this._pendingVillageSpawns.push({
+        mType: 'iron_golem',
+        sx: ms.x + ox,
+        sz: ms.z + oz,
+        baseY: ms.y,
+        exactY: true,
+        prof: null
+      });
+    }
+
+    // 2. High-performance Instanced Villager Crowd for the remaining ~184 villagers (only 4 draw calls total!)
+    const count = Math.max(40, (ms.villagerCount || 200) - interactiveOffsets.length);
+    const robeGeo = new THREE.BoxGeometry(0.56, 1.18, 0.36);
+    const headGeo = new THREE.BoxGeometry(0.46, 0.54, 0.46);
+    const noseGeo = new THREE.BoxGeometry(0.12, 0.22, 0.16);
+    const armsGeo = new THREE.BoxGeometry(0.66, 0.24, 0.26);
+
+    const robeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const headMat = new THREE.MeshLambertMaterial({ color: 0xd9a882 });
+    const noseMat = new THREE.MeshLambertMaterial({ color: 0xc8926e });
+    const armsMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+
+    const robeMesh = new THREE.InstancedMesh(robeGeo, robeMat, count);
+    const headMesh = new THREE.InstancedMesh(headGeo, headMat, count);
+    const noseMesh = new THREE.InstancedMesh(noseGeo, noseMat, count);
+    const armsMesh = new THREE.InstancedMesh(armsGeo, armsMat, count);
+    robeMesh.frustumCulled = false;
+    headMesh.frustumCulled = false;
+    noseMesh.frustumCulled = false;
+    armsMesh.frustumCulled = false;
+
+    const group = new THREE.Group();
+    group.add(robeMesh, headMesh, noseMesh, armsMesh);
+    this.group.add(group);
+
+    const agents = [];
+    const innerR = ms.innerRadius || 20;
+    const dummy = this._crowdDummy;
+    const col = this._crowdColor;
+
+    for (let i = 0; i < count; i++) {
+      // Pick open floor spot inside the interior village streets/courtyards
+      let ax = ms.x, az = ms.z;
+      for (let tries = 0; tries < 24; tries++) {
+        // Favor avenues & open plaza ring around the oasis fountain
+        const mode = (i + tries) % 3;
+        let rx, rz;
+        if (mode === 0) {
+          rx = (Math.random() - 0.5) * 3.2;
+          rz = (Math.random() - 0.5) * (innerR * 1.9);
+        } else if (mode === 1) {
+          rx = (Math.random() - 0.5) * (innerR * 1.9);
+          rz = (Math.random() - 0.5) * 3.2;
+        } else {
+          const ang = Math.random() * Math.PI * 2;
+          const rad = 4.6 + Math.random() * (innerR - 4.8);
+          rx = Math.cos(ang) * rad;
+          rz = Math.sin(ang) * rad;
+        }
+        const tx = ms.x + rx;
+        const tz = ms.z + rz;
+        const bFoot = this.world.getBlock(tx, ms.y, tz);
+        const bHead = this.world.getBlock(tx, ms.y + 1, tz);
+        const bFloor = this.world.getBlock(tx, ms.y - 1, tz);
+        if (!isBlockSolid(bFoot) && bFoot !== BLOCK.WATER && !isBlockSolid(bHead) && isBlockSolid(bFloor)) {
+          ax = tx;
+          az = tz;
+          break;
+        }
+      }
+
+      const prof = VILLAGER_PROFESSIONS[i % VILLAGER_PROFESSIONS.length];
+      col.setHex(prof.robe);
+      robeMesh.setColorAt(i, col);
+      col.setHex(prof.trim);
+      armsMesh.setColorAt(i, col);
+
+      const yaw = Math.random() * Math.PI * 2;
+      agents.push({
+        x: ax,
+        y: ms.y,
+        z: az,
+        yaw,
+        speed: 0.75 + Math.random() * 0.65,
+        phase: Math.random() * Math.PI * 2,
+        turnTimer: 1.0 + Math.random() * 4.0,
+        pauseTimer: Math.random() < 0.3 ? (0.8 + Math.random() * 2.5) : 0
+      });
+
+      // Initialize transforms immediately
+      dummy.position.set(ax, ms.y + 0.59, az);
+      dummy.rotation.set(0, yaw, 0);
+      dummy.updateMatrix();
+      robeMesh.setMatrixAt(i, dummy.matrix);
+    }
+    if (robeMesh.instanceColor) robeMesh.instanceColor.needsUpdate = true;
+    if (armsMesh.instanceColor) armsMesh.instanceColor.needsUpdate = true;
+
+    this.megaCrowds.set(ms.key, {
+      ms,
+      group,
+      robeMesh,
+      headMesh,
+      noseMesh,
+      armsMesh,
+      agents
+    });
+  }
+
+  _updateMegaCrowds(dt, player) {
+    this._crowdTick++;
+    const dummy = this._crowdDummy;
+    for (const crowd of this.megaCrowds.values()) {
+      const ms = crowd.ms;
+      const dist = Math.hypot(player.pos.x - ms.x, player.pos.z - ms.z);
+      if (dist > 125) {
+        crowd.group.visible = false;
+        continue;
+      }
+      crowd.group.visible = true;
+      // Throttle distant crowds to every other frame for silky 60 FPS!
+      if (dist > 72 && (this._crowdTick & 1) === 1) continue;
+
+      const stepDt = dist > 72 ? dt * 2 : dt;
+      const innerR = ms.innerRadius || 20;
+      const agents = crowd.agents;
+
+      for (let i = 0; i < agents.length; i++) {
+        const a = agents[i];
+        if (a.pauseTimer > 0) {
+          a.pauseTimer -= stepDt;
+        } else {
+          a.turnTimer -= stepDt;
+          if (a.turnTimer <= 0) {
+            a.turnTimer = 1.6 + Math.random() * 3.8;
+            if (Math.random() < 0.28) {
+              a.pauseTimer = 0.8 + Math.random() * 2.2;
+            } else {
+              a.yaw += (Math.random() - 0.5) * 2.2;
+            }
+          }
+          const nx = a.x + Math.sin(a.yaw) * a.speed * stepDt;
+          const nz = a.z + Math.cos(a.yaw) * a.speed * stepDt;
+          const outBounds = Math.abs(nx - ms.x) > innerR || Math.abs(nz - ms.z) > innerR;
+          const blk = this.world.getBlock(nx, a.y, nz);
+          const blkH = this.world.getBlock(nx, a.y + 1, nz);
+          const flr = this.world.getBlock(nx, a.y - 1, nz);
+          if (outBounds || isBlockSolid(blk) || blk === BLOCK.WATER || isBlockSolid(blkH) || !isBlockSolid(flr)) {
+            a.yaw += Math.PI * (0.65 + Math.random() * 0.7);
+          } else {
+            a.x = nx;
+            a.z = nz;
+            a.phase += stepDt * a.speed * 7.5;
+          }
+        }
+
+        const bob = a.pauseTimer > 0 ? 0 : Math.abs(Math.sin(a.phase)) * 0.06;
+        const sinY = Math.sin(a.yaw);
+        const cosY = Math.cos(a.yaw);
+
+        // Robe body
+        dummy.position.set(a.x, a.y + 0.59 + bob, a.z);
+        dummy.rotation.set(0, a.yaw, 0);
+        dummy.updateMatrix();
+        crowd.robeMesh.setMatrixAt(i, dummy.matrix);
+
+        // Head
+        dummy.position.set(a.x, a.y + 1.45 + bob, a.z);
+        dummy.updateMatrix();
+        crowd.headMesh.setMatrixAt(i, dummy.matrix);
+
+        // Signature villager nose facing forward
+        dummy.position.set(a.x + sinY * 0.28, a.y + 1.36 + bob, a.z + cosY * 0.28);
+        dummy.updateMatrix();
+        crowd.noseMesh.setMatrixAt(i, dummy.matrix);
+
+        // Folded villager arms in front
+        dummy.position.set(a.x + sinY * 0.16, a.y + 0.96 + bob, a.z + cosY * 0.16);
+        dummy.updateMatrix();
+        crowd.armsMesh.setMatrixAt(i, dummy.matrix);
+      }
+
+      crowd.robeMesh.instanceMatrix.needsUpdate = true;
+      crowd.headMesh.instanceMatrix.needsUpdate = true;
+      crowd.noseMesh.instanceMatrix.needsUpdate = true;
+      crowd.armsMesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
   clearAll() {
     for (const m of this.mobs) this.group.remove(m.mesh);
     for (const d of this.drops) this.group.remove(d.mesh);
     for (const p of this.projectiles) this.group.remove(p.mesh);
+    for (const crowd of this.megaCrowds.values()) {
+      this.group.remove(crowd.group);
+      crowd.robeMesh.geometry.dispose();
+      crowd.robeMesh.material.dispose();
+      crowd.headMesh.geometry.dispose();
+      crowd.headMesh.material.dispose();
+      crowd.noseMesh.geometry.dispose();
+      crowd.noseMesh.material.dispose();
+      crowd.armsMesh.geometry.dispose();
+      crowd.armsMesh.material.dispose();
+    }
+    this.megaCrowds.clear();
     this.mobs = [];
     this.drops = [];
     this.projectiles = [];

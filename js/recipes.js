@@ -33,6 +33,7 @@ export const AUTO_SMELT_ORES = {
 
 export const FUEL_VALUES = {
   coal: 80,
+  lava_bucket: 200,
   oak_planks: 15,
   birch_planks: 15,
   spruce_planks: 15,
@@ -66,6 +67,7 @@ const RAW_RECIPES = [
   { out: 'crafting_table', count: 1, pattern: ['PP', 'PP'], map: { P: 'any_planks' } },
   { out: 'torch', count: 4, pattern: ['C', 'S'], map: { C: 'coal', S: 'stick' } },
   { out: 'flint_and_steel', count: 1, ingredients: { iron_ingot: 1, flint: 1 } },
+  { out: 'bucket', count: 1, table: true, pattern: ['I I', ' I '], map: { I: 'iron_ingot' } },
   { out: 'sandstone', count: 1, pattern: ['SS', 'SS'], map: { S: 'sand' } },
   { out: 'stone_bricks', count: 4, pattern: ['SS', 'SS'], map: { S: 'stone' } },
 

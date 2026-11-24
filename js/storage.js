@@ -31,6 +31,10 @@ export const DEFAULT_SETTINGS = {
   renderDistance: TOUCH_DEFAULT ? 5 : 6,
   sensitivity: 1.0,
   fov: 72,
+  flightSpeed: 1.0,    // Creative Flight Speed multiplier (1.0x .. 10.0x)
+  difficulty: 'normal',
+  mobSpawnRate: 1.0,
+  hungerRate: 1.0,
   controlStyle: 'joystick', // 'joystick' | 'dpad'
   showTouch: true,
   sound: true,

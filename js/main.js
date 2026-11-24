@@ -95,6 +95,17 @@ class BlockCraftGame {
 
     this.bindControlActions();
     window.addEventListener('resize', () => this.onResize());
+    // Ensure settings & world changes are NEVER lost on reload or tab close!
+    window.addEventListener('pagehide', () => {
+      saveSettings(this.settings);
+      if (this.running) this.saveCurrentWorld(false);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        saveSettings(this.settings);
+        if (this.running) this.saveCurrentWorld(false);
+      }
+    });
 
     // Register Service Worker for iPad PWA
     if ('serviceWorker' in navigator) {
@@ -131,7 +142,10 @@ class BlockCraftGame {
     this.camera.near = this.settings.renderDistance > 160 ? 0.16 : 0.1;
     this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 1400);
     this.camera.updateProjectionMatrix();
-    if (this.player) this.player.baseFov = this.settings.fov;
+    if (this.player) {
+      this.player.baseFov = this.settings.fov;
+      this.player.flightSpeed = typeof this.settings.flightSpeed === 'number' ? this.settings.flightSpeed : 1.0;
+    }
 
     // Shaders & Cinematic ACES Filmic Tone Mapping (20x BSL vibrancy!)
     const sh = this.settings.shaders || 'ultra';
@@ -169,6 +183,7 @@ class BlockCraftGame {
     this.settings.allowCheats = flag;
     if (this.worldMeta) this.worldMeta.allowCheats = flag;
     saveSettings(this.settings);
+    if (this.running) this.saveCurrentWorld(false);
     if (this.ui) {
       this.ui.syncCheatUI(flag);
       this.ui.toast(flag ? 'Cheats Enabled' : 'Cheats Disabled');
@@ -287,6 +302,9 @@ class BlockCraftGame {
     if (!next) return false;
     if (!this.worldMeta) this.worldMeta = {};
     this.worldMeta.difficulty = next;
+    this.settings.difficulty = next;
+    saveSettings(this.settings);
+    if (this.running) this.saveCurrentWorld(false);
     if (next === 'peaceful' && this.entities) {
       this.entities.despawnHostiles();
     }
@@ -312,6 +330,9 @@ class BlockCraftGame {
     rate = Math.max(0, Math.min(5, Math.round(rate * 100) / 100));
     if (!this.worldMeta) this.worldMeta = {};
     this.worldMeta.mobSpawnRate = rate;
+    this.settings.mobSpawnRate = rate;
+    saveSettings(this.settings);
+    if (this.running) this.saveCurrentWorld(false);
     if (this.ui) {
       this.ui.syncWorldRulesUI(this.worldMeta);
       if (!silent) {
@@ -333,6 +354,9 @@ class BlockCraftGame {
     rate = Math.max(0, Math.min(5, Math.round(rate * 100) / 100));
     if (!this.worldMeta) this.worldMeta = {};
     this.worldMeta.hungerRate = rate;
+    this.settings.hungerRate = rate;
+    saveSettings(this.settings);
+    if (this.running) this.saveCurrentWorld(false);
     if (this.ui) {
       this.ui.syncWorldRulesUI(this.worldMeta);
       if (!silent) {
@@ -367,6 +391,16 @@ class BlockCraftGame {
         maxDetailRadius: this.isTouch ? 6 : 10,
         shaders: shaderMode
       });
+
+      // Wire fluid mixing (Obsidian/Cobblestone/Stone steam fizz) & Fire-to-TNT ignition!
+      this.world.onFluidMix = (fx, fy, fz, resBlockId) => {
+        if (this.sound && this.sound.playFizz) this.sound.playFizz();
+        const def = getBlockDef(resBlockId);
+        if (this.effects && def) this.effects.spawnBlockBreak(fx, fy, fz, def);
+      };
+      this.world.onFireIgniteTnt = (tx, ty, tz) => {
+        this.igniteTnt(tx, ty, tz, 2.6);
+      };
 
       // Wire natural leaf decay particles & authentic apple/stick drops!
       this.world.onLeafDecay = (lx, ly, lz, leafBlockId) => {
@@ -423,6 +457,7 @@ class BlockCraftGame {
 
       this.player = new Player(this.camera, this.world, this.inventory, this.sound, this.textures);
       this.player.mode = meta.mode;
+      this.player.flightSpeed = typeof this.settings.flightSpeed === 'number' ? this.settings.flightSpeed : 1.0;
       this.player.attachToScene(this.scene);
 
       // Find guaranteed dry-land spawn for new worlds (never spawn underwater!)
@@ -491,6 +526,12 @@ class BlockCraftGame {
         else if (this.ui.activeModal === 'crafting-modal') this.ui.renderCraftingModal();
         else if (this.ui.activeModal === 'chest-modal') this.ui.renderChestModal();
         else if (this.ui.activeModal === 'furnace-modal') this.ui.renderFurnaceModal();
+      };
+      this.entities.onDiscoverMega = (ms) => {
+        const msg = ms.type === 'great_pyramid'
+          ? `Discovered ${ms.name}! (${ms.villagerCount} Villagers & 130+ Underground Secrets!)`
+          : `Discovered ${ms.name}! (${ms.villagerCount} Villagers & Deep Dungeon Vaults!)`;
+        this.ui.showToast(msg);
       };
       this.entities.populateInitialWildlife(this.player.pos);
 
@@ -592,6 +633,7 @@ class BlockCraftGame {
     this.ui.updateFlyUI(this.player.mode === 'creative', this.player.flying);
     this.ui.updateStats();
     this.ui.toast(`Switched to ${mode.toUpperCase()} mode`);
+    if (this.running) this.saveCurrentWorld(false);
     return true;
   }
 
@@ -731,6 +773,83 @@ class BlockCraftGame {
             this._lastFullToast = now;
             this.ui.toast('Hunger & health are already full!');
           }
+        }
+        return;
+      }
+
+      // 2b. Flint and Steel places Fire on any solid surface (in addition to lighting TNT above!)
+      if (!isRepeat && heldDef && heldDef.id === 'flint_and_steel' && this.currentTarget) {
+        const fx = this.currentTarget.x + this.currentTarget.nx;
+        const fy = this.currentTarget.y + this.currentTarget.ny;
+        const fz = this.currentTarget.z + this.currentTarget.nz;
+        const existing = this.world.getBlock(fx, fy, fz);
+        if (existing === BLOCK.AIR || existing === BLOCK.TALL_GRASS || existing === BLOCK.FLOWER_RED || existing === BLOCK.FLOWER_YELLOW) {
+          this.player.swingAnim = 1.0;
+          this.world.setBlock(fx, fy, fz, BLOCK.FIRE, true);
+          if (this.sound.playFlintSteel) this.sound.playFlintSteel();
+          if (this.player.mode === 'survival') {
+            this.inventory.damageSelectedTool(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+      }
+
+      // 2c. Water Bucket, Lava Bucket & Empty Bucket (Place & Scoop Flowing Fluids!)
+      if (!isRepeat && heldDef && heldDef.bucketType && this.currentTarget) {
+        this.player.swingAnim = 1.0;
+        if (heldDef.bucketType === 'water' || heldDef.bucketType === 'lava') {
+          const px = this.currentTarget.x + this.currentTarget.nx;
+          const py = this.currentTarget.y + this.currentTarget.ny;
+          const pz = this.currentTarget.z + this.currentTarget.nz;
+          const fBlk = heldDef.bucketType === 'lava' ? BLOCK.LAVA : BLOCK.WATER;
+          this.world.placeFluidSource(px, py, pz, fBlk);
+          if (this.sound.playSplash) this.sound.playSplash();
+          if (this.player.mode === 'survival') {
+            this.inventory.slots[this.inventory.selected] = this.inventory.makeStack('bucket', 1);
+            this.ui.updateHotbar();
+          }
+          return;
+        } else if (heldDef.bucketType === 'empty') {
+          const { x, y, z, blockId } = this.currentTarget;
+          if ((blockId === BLOCK.WATER || blockId === BLOCK.LAVA) && this.world.getFluidLevel(x, y, z) === 0) {
+            this.world.setBlock(x, y, z, BLOCK.AIR, true);
+            if (this.sound.playSplash) this.sound.playSplash();
+            const filledId = blockId === BLOCK.LAVA ? 'lava_bucket' : 'water_bucket';
+            const selSlot = this.inventory.slots[this.inventory.selected];
+            if (this.player.mode === 'survival') {
+              if (selSlot && selSlot.count > 1) {
+                selSlot.count--;
+                this.inventory.addItem(filledId, 1);
+              } else {
+                this.inventory.slots[this.inventory.selected] = this.inventory.makeStack(filledId, 1);
+              }
+              this.ui.updateHotbar();
+            } else {
+              this.inventory.addItem(filledId, 1);
+              this.ui.updateHotbar();
+            }
+            return;
+          }
+        }
+      }
+
+      // 2d. Mob Spawn Eggs (spawn ANY mob in the game right where you aim!)
+      if (!isRepeat && heldDef && heldDef.spawnMob && this.currentTarget && this.entities) {
+        const px = this.currentTarget.x + this.currentTarget.nx + 0.5;
+        const py = this.currentTarget.y + this.currentTarget.ny;
+        const pz = this.currentTarget.z + this.currentTarget.nz + 0.5;
+        const biome = this.world.getBiomeAt(Math.floor(px), Math.floor(pz));
+        this.player.swingAnim = 1.0;
+        const spawned = this.entities.spawnMob(heldDef.spawnMob, px, py, pz, null, biome);
+        if (spawned) {
+          this.sound.playPop();
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+        } else {
+          this.ui.toast('Not enough space to spawn here!');
         }
         return;
       }
@@ -1263,11 +1382,13 @@ class BlockCraftGame {
       this.player.update(dt, input, this.mods, gameRules);
       this.ui.setUnderwater(this.player.headInWater);
 
-      // Raycast targeted block & Villager / Wildlife (zero Vector3 allocations!)
+      // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
       const lookMob = this.entities.raycastMob(eye, dir, 5.2);
-      this.currentTarget = this.world.raycast(eye, dir, 5.5);
+      const heldForRay = this.inventory.getHeldDef();
+      const rayHitLiquids = !!(heldForRay && heldForRay.bucketType === 'empty');
+      this.currentTarget = this.world.raycast(eye, dir, 5.5, rayHitLiquids);
 
       const mobHit = !!(lookMob && (!this.currentTarget || (lookMob._hitDist ?? lookMob.pos.distanceTo(eye)) <= this.currentTarget.dist + 0.35));
       const targetDef = this.currentTarget ? getBlockDef(this.currentTarget.blockId) : null;
@@ -1335,6 +1456,8 @@ class BlockCraftGame {
       this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
       this.world.updateFurnaces(dt);
       this.world.updateLeafDecay(dt, this.player.pos);
+      this.world.updateFluids(dt);
+      this.world.updateFire(dt, this.sky.weather === 'rain');
 
       // Cache biome lookup per 4x4 block cell (eliminates 120x/sec Simplex noise!)
       const bx4 = Math.floor(this.player.pos.x) >> 2;

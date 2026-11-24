@@ -688,6 +688,53 @@ export class TextureManager {
     makeGrassTiles('savanna_grass', ['#787a2e', '#8c8f38', '#a1a343', '#b3b54e', '#c2c45c'], 110);
     makeGrassTiles('jungle_grass', ['#247a27', '#2f9132', '#3aa83d', '#48bd4b', '#5ad15d'], 120);
     makeGrassTiles('swamp_grass', ['#3a4d2b', '#475c34', '#546b3e', '#627a48', '#6f8754'], 130);
+
+    // Molten Glowing Magma Lava Tile (vibrant crusted orange-red magma pools!)
+    this.addTile('lava', (c, x, y) => {
+      const cols = ['#b82208', '#d9410d', '#f56a14', '#ff9e1c', '#ffe252', '#fff7a8'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 141);
+          const fine = pxHash(ix, iy, 142);
+          const v = clump * 0.65 + fine * 0.35;
+          const idx = Math.min(5, Math.max(0, Math.floor(v * 6)));
+          px(c, x, y, ix, iy, cols[idx]);
+        }
+      }
+      // Bright incandescent magma veins
+      px(c, x, y, 3, 4, '#fff7a8', 3, 1);
+      px(c, x, y, 10, 9, '#fff7a8', 3, 1);
+      px(c, x, y, 6, 13, '#ffe252', 4, 1);
+    });
+
+    // Blazing Flickering Multi-Tongue Pixel Fire Tile (transparent cutout cross!)
+    this.addTile('fire', (c, x, y) => {
+      const grid = [
+        '................',
+        '.......O........',
+        '......OYO...O...',
+        '...O..OYO..OYO..',
+        '..OYO.OYYO.OYO..',
+        '..OYO.OYYO.OYYO.',
+        '.OYYOOYYWYOYYYO.',
+        '.OYYYOYYWWYYYYO.',
+        '.OYYYYYYWWYYYYO.',
+        'OYYYYYWWWWWYYYYO',
+        'OYYYYWWWWWWYYYYO',
+        'OYYYWWWWWWRWYYYO',
+        'OYYWWWWWWRRWWYYO',
+        'OYYWWWWWWWWWYYYO',
+        '.OYYYYWWWWYYYYO.',
+        '..OOOOOOOOOOOO..'
+      ];
+      const pal = { O: '#d93208', R: '#ff5912', Y: '#ff9e1c', W: '#fff48f' };
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const col = pal[grid[iy][ix]];
+          if (col) px(c, x, y, ix, iy, col);
+        }
+      }
+    });
   }
 
   // Lazy on-demand 16x16 (32x32) icon caching — cuts initial startup time dramatically!
@@ -737,6 +784,45 @@ export class TextureManager {
       diamond: { O: '#092a36', D: '#128996', M: '#2ad1db', L: '#7ef3fa', H: '#e3ffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       leather: { O: '#291509', D: '#693a1a', M: '#9c5a2d', L: '#c47a45', H: '#de9864', S: '#7d5225', s: '#a6743c', d: '#4f3215' }
     };
+
+    if (def.spawnMob) {
+      // Authentic Minecraft Two-Tone Spotted Mob Spawn Egg (16x16 pixel art!)
+      const shadeHex = (hex, mul) => {
+        const n = parseInt(hex.slice(1), 16);
+        const r = Math.max(0, Math.min(255, Math.round(((n >> 16) & 255) * mul)));
+        const g = Math.max(0, Math.min(255, Math.round(((n >> 8) & 255) * mul)));
+        const b = Math.max(0, Math.min(255, Math.round((n & 255) * mul)));
+        return `rgb(${r},${g},${b})`;
+      };
+      const base = def.eggBase || '#e0d8c8';
+      const spot = def.eggSpot || '#555555';
+      drawGrid([
+        '................',
+        '......OOOO......',
+        '....OOHHHBOO....',
+        '...OHHBBBBBSO...',
+        '...OHBBSBBBBDO..',
+        '..OHBBSSBBSBBDO.',
+        '..OBBBBBBBSSBDO.',
+        '..OBSSBGBBBBBDO.',
+        '..OBSSBBBBBBDO..',
+        '..OBBBBBSSBBDO..',
+        '..OBBBSSSSBBDDO.',
+        '...OBBBBBBBDDDO.',
+        '...ODBBSSDDDDO..',
+        '....ODDDDDDDO...',
+        '.....OOOOOOO....',
+        '................'
+      ], {
+        O: '#18181f',
+        H: shadeHex(base, 1.28),
+        B: base,
+        G: shadeHex(base, 1.12),
+        D: shadeHex(base, 0.70),
+        S: spot
+      });
+      return;
+    }
 
     if (def.toolType && def.toolType !== 'flint_and_steel') {
       const matKey = key.split('_')[0];
@@ -1738,6 +1824,69 @@ export class TextureManager {
           '..........OOO...',
           '................'
         ], { O: '#16181f', H: '#ffffff', L: '#d6dde6', M: '#9aa4b3', D: '#656e7d', f: '#3d424d', l: '#6e7687', d: '#23262e', Y: '#fff08a', F: '#ff8a24' });
+        break;
+
+      case 'bucket':
+        drawGrid([
+          '................',
+          '................',
+          '....OOOOOOOO....',
+          '..OOHHLLLLMMOO..',
+          '.OHLDDDDDDDDMMO.',
+          '.OLODDDDDDDDOMO.',
+          '.OHLMMMMMMMMMDO.',
+          '..OHLMMMMMMMDO..',
+          '..OHLMMMMMMMDO..',
+          '..OLMMMMMMMMDO..',
+          '...OLMMMMMMDO...',
+          '...OMMMMMMDDO...',
+          '....OMMMMMDO....',
+          '....ODDDDDDO....',
+          '.....OOOOOO.....',
+          '................'
+        ], { O: '#1b1f26', H: '#ffffff', L: '#dde4ed', M: '#aeb8c7', D: '#677180' });
+        break;
+
+      case 'water_bucket':
+        drawGrid([
+          '................',
+          '................',
+          '....OOOOOOOO....',
+          '..OOHHLLLLMMOO..',
+          '.OHLWWWWWWWWMMO.',
+          '.OLOWwwWWwwwOMO.',
+          '.OHLMMMMMMMMMDO.',
+          '..OHLMMMMMMMDO..',
+          '..OHLMMMMMMMDO..',
+          '..OLMMMMMMMMDO..',
+          '...OLMMMMMMDO...',
+          '...OMMMMMMDDO...',
+          '....OMMMMMDO....',
+          '....ODDDDDDO....',
+          '.....OOOOOO.....',
+          '................'
+        ], { O: '#1b1f26', H: '#ffffff', L: '#dde4ed', M: '#aeb8c7', D: '#677180', W: '#2878e6', w: '#78c6ff' });
+        break;
+
+      case 'lava_bucket':
+        drawGrid([
+          '................',
+          '................',
+          '....OOOOOOOO....',
+          '..OOHHLLLLMMOO..',
+          '.OHLFFYYYYFFMMO.',
+          '.OLOFYYWWYYFOMO.',
+          '.OHLMMMMMMMMMDO.',
+          '..OHLMMMMMMMDO..',
+          '..OHLMMMMMMMDO..',
+          '..OLMMMMMMMMDO..',
+          '...OLMMMMMMDO...',
+          '...OMMMMMMDDO...',
+          '....OMMMMMDO....',
+          '....ODDDDDDO....',
+          '.....OOOOOO.....',
+          '................'
+        ], { O: '#1b1f26', H: '#ffffff', L: '#dde4ed', M: '#aeb8c7', D: '#677180', F: '#e03e0d', Y: '#ff9d1c', W: '#fff48f' });
         break;
 
       default:

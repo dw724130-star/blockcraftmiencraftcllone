@@ -354,6 +354,18 @@ export class UIManager {
         }
       });
     }
+    const titleFS = document.getElementById('title-set-flight-speed');
+    if (titleFS) {
+      titleFS.addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        const lbl = document.getElementById('title-val-flight-speed');
+        if (lbl) lbl.textContent = v.toFixed(1);
+        if (this.game) {
+          this.game.updateSetting('flightSpeed', v);
+          this.syncSettingsUI(this.game.settings);
+        }
+      });
+    }
 
     // Placeholder Multiplayer Server Browser interactions
     const mpList = document.getElementById('mp-server-list');
@@ -435,6 +447,18 @@ export class UIManager {
       const v = parseInt(e.target.value, 10);
       document.getElementById('val-fov').textContent = v;
       if (this.game) this.game.updateSetting('fov', v);
+    });
+    document.getElementById('set-flight-speed')?.addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value);
+      const lbl = document.getElementById('val-flight-speed');
+      if (lbl) lbl.textContent = v.toFixed(1);
+      if (this.game) {
+        this.game.updateSetting('flightSpeed', v);
+        const tFS = document.getElementById('title-set-flight-speed');
+        const tFSLbl = document.getElementById('title-val-flight-speed');
+        if (tFS) tFS.value = v;
+        if (tFSLbl) tFSLbl.textContent = v.toFixed(1);
+      }
     });
     document.getElementById('set-shaders').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('shaders', e.target.value);
@@ -601,6 +625,15 @@ export class UIManager {
     document.getElementById('val-sensitivity').textContent = settings.sensitivity.toFixed(1);
     document.getElementById('set-fov').value = settings.fov;
     document.getElementById('val-fov').textContent = settings.fov;
+    const fsVal = typeof settings.flightSpeed === 'number' ? settings.flightSpeed : 1.0;
+    const fsEl = document.getElementById('set-flight-speed');
+    const fsLbl = document.getElementById('val-flight-speed');
+    if (fsEl) fsEl.value = fsVal;
+    if (fsLbl) fsLbl.textContent = fsVal.toFixed(1);
+    const tFS = document.getElementById('title-set-flight-speed');
+    const tFSLbl = document.getElementById('title-val-flight-speed');
+    if (tFS) tFS.value = fsVal;
+    if (tFSLbl) tFSLbl.textContent = fsVal.toFixed(1);
     document.getElementById('set-shaders').value = settings.shaders || 'ultra';
     document.getElementById('set-mc-ui').checked = settings.minecraftUI !== false;
     document.getElementById('set-large-ui').checked = settings.largeUI !== false;
@@ -610,6 +643,16 @@ export class UIManager {
     document.getElementById('set-sound').checked = settings.sound;
     const cheatCb = document.getElementById('set-allow-cheats');
     if (cheatCb) cheatCb.checked = Boolean(settings.allowCheats);
+    const tCheatCb = document.getElementById('title-set-allow-cheats');
+    if (tCheatCb) tCheatCb.checked = Boolean(settings.allowCheats);
+    const nwCheatCb = document.getElementById('new-world-cheats');
+    if (nwCheatCb) nwCheatCb.checked = Boolean(settings.allowCheats);
+    const nwDiff = document.getElementById('new-world-difficulty');
+    if (nwDiff && settings.difficulty) nwDiff.value = settings.difficulty;
+    const nwMob = document.getElementById('new-world-mob-rate');
+    if (nwMob && typeof settings.mobSpawnRate === 'number') nwMob.value = String(settings.mobSpawnRate);
+    const nwHun = document.getElementById('new-world-hunger-rate');
+    if (nwHun && typeof settings.hungerRate === 'number') nwHun.value = String(settings.hungerRate);
     const tShaders = document.getElementById('title-set-shaders');
     if (tShaders) tShaders.value = settings.shaders || 'ultra';
     const tRD = document.getElementById('title-set-render-dist');
@@ -2269,9 +2312,43 @@ export class UIManager {
       }
     }
 
+    // Draw nearby Mega-Structures (Great Pyramid & Grand Citadel!) as bright gold/orange pyramid triangles!
+    let nearestMegaDist = Infinity;
+    let nearestMegaName = '';
+    if (world.megaStructures) {
+      for (const ms of world.megaStructures.values()) {
+        const dx = (ms.x - px) / scale;
+        const dz = (ms.z - pz) / scale;
+        const dist = Math.hypot(ms.x - px, ms.z - pz);
+        if (dist < nearestMegaDist) {
+          nearestMegaDist = dist;
+          nearestMegaName = ms.name || 'Mega Structure';
+        }
+        const mx = half + dx;
+        const my = half + dz;
+        if (mx >= 6 && mx <= w - 6 && my >= 6 && my <= h - 6) {
+          ctx.fillStyle = ms.type === 'great_pyramid' ? '#ff9800' : '#a855f7';
+          ctx.strokeStyle = '#000';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(mx, my - 5.5);
+          ctx.lineTo(mx + 5.5, my + 4.5);
+          ctx.lineTo(mx - 5.5, my + 4.5);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+    }
+
     const hintEl = this.dom.mmHint;
     if (hintEl) {
-      const hintTxt = nearestVDist < 200 ? `Village ${Math.round(nearestVDist)}m` : biomeName;
+      let hintTxt = biomeName;
+      if (nearestMegaDist < 260 && nearestMegaDist <= nearestVDist + 40) {
+        hintTxt = `${nearestMegaName} ${Math.round(nearestMegaDist)}m`;
+      } else if (nearestVDist < 200) {
+        hintTxt = `Village ${Math.round(nearestVDist)}m`;
+      }
       if (hintEl.textContent !== hintTxt) hintEl.textContent = hintTxt;
     }
 

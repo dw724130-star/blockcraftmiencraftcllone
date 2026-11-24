@@ -13,28 +13,28 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="css/style.css?v=26" />
+  <link rel="stylesheet" href="css/style.css?v=27" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=26",
-        "./js/textures.js": "./js/textures.js?v=26",
-        "./js/mods.js": "./js/mods.js?v=26",
-        "./js/inventory.js": "./js/inventory.js?v=26",
-        "./js/recipes.js": "./js/recipes.js?v=26",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=26",
-        "./js/noise.js": "./js/noise.js?v=26",
-        "./js/world.js": "./js/world.js?v=26",
-        "./js/mobs.js": "./js/mobs.js?v=26",
-        "./js/player.js": "./js/player.js?v=26",
-        "./js/effects.js": "./js/effects.js?v=26",
-        "./js/audio.js": "./js/audio.js?v=26",
-        "./js/ui.js": "./js/ui.js?v=26",
-        "./js/controls.js": "./js/controls.js?v=26",
-        "./js/sky.js": "./js/sky.js?v=26",
-        "./js/panorama.js": "./js/panorama.js?v=26",
-        "./js/storage.js": "./js/storage.js?v=26"
+        "./js/blocks.js": "./js/blocks.js?v=27",
+        "./js/textures.js": "./js/textures.js?v=27",
+        "./js/mods.js": "./js/mods.js?v=27",
+        "./js/inventory.js": "./js/inventory.js?v=27",
+        "./js/recipes.js": "./js/recipes.js?v=27",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=27",
+        "./js/noise.js": "./js/noise.js?v=27",
+        "./js/world.js": "./js/world.js?v=27",
+        "./js/mobs.js": "./js/mobs.js?v=27",
+        "./js/player.js": "./js/player.js?v=27",
+        "./js/effects.js": "./js/effects.js?v=27",
+        "./js/audio.js": "./js/audio.js?v=27",
+        "./js/ui.js": "./js/ui.js?v=27",
+        "./js/controls.js": "./js/controls.js?v=27",
+        "./js/sky.js": "./js/sky.js?v=27",
+        "./js/panorama.js": "./js/panorama.js?v=27",
+        "./js/storage.js": "./js/storage.js?v=27"
       }
     }
   </script>
@@ -314,6 +314,10 @@
             <label>Render Distance: <strong id="title-val-render-dist">6</strong> chunks</label>
             <input type="range" id="title-set-render-dist" min="0" max="21" step="1" value="4" />
           </div>
+          <div class="setting-row">
+            <label>Creative Flight Speed: <strong id="title-val-flight-speed">1.0</strong>×</label>
+            <input type="range" id="title-set-flight-speed" min="1" max="10" step="0.5" value="1" />
+          </div>
           <div class="setting-row keybinds-section">
             <div class="keybinds-header">
               <label class="check-label-icon">
@@ -522,6 +526,7 @@
             <button type="button" class="cat-chip" data-cat="tools">Tools</button>
             <button type="button" class="cat-chip" data-cat="armor">Armor</button>
             <button type="button" class="cat-chip" data-cat="food">Food</button>
+            <button type="button" class="cat-chip" data-cat="eggs">Eggs</button>
             <button type="button" class="cat-chip" data-cat="materials">Items</button>
           </div>
           <div id="creative-count-label" class="mc-classic-subnote">Tap any item to add</div>
@@ -794,6 +799,10 @@
             <label>FOV: <strong id="val-fov">72</strong>°</label>
             <input type="range" id="set-fov" min="55" max="100" step="1" value="72" />
           </div>
+          <div class="setting-row">
+            <label>Creative Flight Speed: <strong id="val-flight-speed">1.0</strong>×</label>
+            <input type="range" id="set-flight-speed" min="1" max="10" step="0.5" value="1" />
+          </div>
           <div class="setting-row inline">
             <label>Difficulty</label>
             <select id="set-difficulty">
@@ -979,6 +988,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=26"></script>
+  <script type="module" src="js/main.js?v=27"></script>
 </body>
 </html>

@@ -23,6 +23,10 @@ export class Player {
     this.onGround = false;
     this.inWater = false;
     this.headInWater = false;
+    this.inLava = false;
+    this.inFire = false;
+    this.burnTimer = 0;
+    this._burnTick = 0;
     this.flying = false;
     this.sneaking = false;
     this.sprinting = false;
@@ -33,6 +37,7 @@ export class Player {
     this.eatProgress = 0;
     this.eatTime = 0;
     this._eatBlend = 0;
+    this.flightSpeed = 1.0;
     this.baseFov = camera.fov || 72;
 
     // Survival stats
@@ -396,16 +401,22 @@ export class Player {
     input.lookDeltaX = 0;
     input.lookDeltaY = 0;
 
-    // Environment checks
+    // Environment checks (strictly distinguish Water vs Lava vs Fire!)
     const feetBlock = this.world.getBlock(this.pos.x, this.pos.y + 0.2, this.pos.z);
+    const waistBlock = this.world.getBlock(this.pos.x, this.pos.y + 0.85, this.pos.z);
     const headBlock = this.world.getBlock(this.pos.x, this.pos.y + EYE_HEIGHT, this.pos.z);
-    const nowInWater = isBlockLiquid(feetBlock);
+    const nowInWater = feetBlock === BLOCK.WATER;
+    const nowInLava = feetBlock === BLOCK.LAVA || waistBlock === BLOCK.LAVA || headBlock === BLOCK.LAVA;
+    const nowInFire = feetBlock === BLOCK.FIRE || waistBlock === BLOCK.FIRE;
     if (nowInWater && !this.wasInWater && this.sound.playSplash) {
       this.sound.playSplash();
     }
     this.wasInWater = nowInWater;
     this.inWater = nowInWater;
-    this.headInWater = isBlockLiquid(headBlock);
+    this.headInWater = headBlock === BLOCK.WATER;
+    this.inLava = nowInLava;
+    this.inFire = nowInFire;
+    if (nowInWater) this.burnTimer = 0;
     const onLadder = feetBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
 
     this.sneaking = input.sneak && !this.flying;
@@ -419,8 +430,10 @@ export class Player {
     const len = Math.hypot(moveX, moveZ);
     if (len > 1) { moveX /= len; moveZ /= len; }
 
+    const fMul = Math.max(0.5, Math.min(12, this.flightSpeed || 1.0));
     let speed = superMob ? 5.6 : 4.6;
-    if (this.flying) speed = this.sprinting ? 14.5 : 9.5;
+    if (this.flying) speed = (this.sprinting ? 14.5 : 9.5) * fMul;
+    else if (this.inLava) speed = 1.7;
     else if (this.sneaking) speed = 2.1;
     else if (this.sprinting) speed = superMob ? 8.6 : 6.5;
     else if (this.inWater) speed = 3.2;
@@ -436,16 +449,17 @@ export class Player {
     // Vertical physics
     if (this.flying) {
       let vy = 0;
-      if (input.jump) vy += 7.5;
-      if (input.sneak) vy -= 7.5;
+      const vFlySpd = 7.5 * Math.max(1.0, 0.55 + fMul * 0.45);
+      if (input.jump) vy += vFlySpd;
+      if (input.sneak) vy -= vFlySpd;
       this.vel.y = THREE.MathUtils.lerp(this.vel.y, vy, Math.min(1, dt * 10));
       this.fallStartY = null;
     } else if (onLadder) {
       this.vel.y = input.jump || input.moveForward > 0.2 ? 3.8 : (input.sneak ? 0 : -2.5);
       this.fallStartY = null;
-    } else if (this.inWater) {
-      this.vel.y -= 9.5 * dt;
-      if (input.jump) this.vel.y = 4.2;
+    } else if (this.inWater || this.inLava) {
+      this.vel.y -= (this.inLava ? 6.5 : 9.5) * dt;
+      if (input.jump) this.vel.y = this.inLava ? 2.6 : 4.2;
       this.vel.y = Math.max(-4.5, Math.min(4.5, this.vel.y));
       this.fallStartY = null;
     } else {
@@ -527,8 +541,34 @@ export class Player {
       }
     }
 
-    // Survival Hunger, Air, Regen
+    // Survival Hunger, Air, Lava/Fire Burn, Regen
     if (this.mode === 'survival') {
+      // Lava & Fire Damage (authentic Minecraft burning!)
+      if (this.inLava) {
+        this.burnTimer = Math.max(this.burnTimer, 3.2);
+        this._burnTick += dt;
+        if (this._burnTick >= 0.5) {
+          this._burnTick = 0;
+          this.takeDamage(4, 'Tried to swim in lava');
+        }
+      } else if (this.inFire) {
+        this.burnTimer = Math.max(this.burnTimer, 2.2);
+        this._burnTick += dt;
+        if (this._burnTick >= 0.6) {
+          this._burnTick = 0;
+          this.takeDamage(2, 'Went up in flames');
+        }
+      } else if (this.burnTimer > 0) {
+        this.burnTimer = Math.max(0, this.burnTimer - dt);
+        this._burnTick += dt;
+        if (this._burnTick >= 0.9) {
+          this._burnTick = 0;
+          this.takeDamage(1, 'Burned to a crisp');
+        }
+      } else {
+        this._burnTick = 0;
+      }
+
       // Drowning
       if (this.headInWater) {
         this.air = Math.max(0, this.air - dt * 1.1);

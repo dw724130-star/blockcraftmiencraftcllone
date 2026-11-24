@@ -186,6 +186,27 @@ export class SoundManager {
     osc.stop(now + 0.08);
   }
 
+  playFizz() {
+    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.loop = true;
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.setValueAtTime(2800, now);
+    filt.frequency.exponentialRampToValueAtTime(1100, now + 0.32);
+    filt.Q.value = 1.2;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.16, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(this.ctx.destination);
+    src.start(now);
+    src.stop(now + 0.36);
+  }
+
   playExplosion() {
     if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;

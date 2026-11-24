@@ -78,7 +78,9 @@ export const BLOCK = {
   PACKED_ICE: 74,
   SAVANNA_GRASS: 75,
   JUNGLE_GRASS: 76,
-  SWAMP_GRASS: 77
+  SWAMP_GRASS: 77,
+  LAVA: 78,
+  FIRE: 79
 };
 
 // Block numeric ID -> string item key
@@ -218,11 +220,18 @@ regBlock(BLOCK.SAVANNA_GRASS, 'savanna_grass', { name: 'Savanna Grass', hardness
 regBlock(BLOCK.JUNGLE_GRASS, 'jungle_grass', { name: 'Jungle Grass', hardness: 0.7, tool: 'shovel', sound: 'grass', drop: 'dirt', faces: { top: 'jungle_grass_top', side: 'jungle_grass_side', bottom: 'dirt' } });
 regBlock(BLOCK.SWAMP_GRASS, 'swamp_grass', { name: 'Swamp Grass', hardness: 0.7, tool: 'shovel', sound: 'grass', drop: 'dirt', faces: { top: 'swamp_grass_top', side: 'swamp_grass_side', bottom: 'dirt' } });
 
+// --- LAVA & FIRE ---
+regBlock(BLOCK.LAVA, 'lava', { name: 'Lava', solid: false, transparent: true, liquid: true, light: 15, hardness: -1, sound: 'water', drop: null, hiddenFromCreative: true, faces: { all: 'lava' } });
+regBlock(BLOCK.FIRE, 'fire', { name: 'Fire', solid: false, transparent: true, cross: true, light: 15, hardness: 0.05, sound: 'grass', drop: null, hiddenFromCreative: true, faces: { all: 'fire' } });
+
 // --- MATERIALS & FOOD ---
 regItem('stick', { name: 'Stick', icon: 'stick' });
 regItem('coal', { name: 'Coal', icon: 'coal', fuel: 80 });
 regItem('flint', { name: 'Flint', icon: 'flint' });
 regItem('flint_and_steel', { name: 'Flint and Steel', stackSize: 1, toolType: 'flint_and_steel', durability: 64, icon: 'flint_and_steel' });
+regItem('bucket', { name: 'Bucket', stackSize: 16, bucketType: 'empty', icon: 'bucket' });
+regItem('water_bucket', { name: 'Water Bucket', stackSize: 1, bucketType: 'water', icon: 'water_bucket' });
+regItem('lava_bucket', { name: 'Lava Bucket', stackSize: 1, bucketType: 'lava', fuel: 200, icon: 'lava_bucket' });
 regItem('raw_iron', { name: 'Raw Iron', icon: 'raw_iron' });
 regItem('iron_ingot', { name: 'Iron Ingot', icon: 'iron_ingot' });
 regItem('raw_gold', { name: 'Raw Gold', icon: 'raw_gold' });
@@ -304,6 +313,46 @@ for (const m of ARMOR_MATS) {
   }
 }
 
+// --- MOB SPAWN EGGS (Every single mob & animal in the game!) ---
+export const SPAWN_EGG_DEFS = [
+  { mob: 'pig',        name: 'Pig',          base: '#f0a5a2', spot: '#db635f' },
+  { mob: 'cow',        name: 'Cow',          base: '#443626', spot: '#a1a1a1' },
+  { mob: 'sheep',      name: 'Sheep',        base: '#e7e7e7', spot: '#ffb5b5' },
+  { mob: 'chicken',    name: 'Chicken',      base: '#a1a1a1', spot: '#ff0000' },
+  { mob: 'deer',       name: 'Deer',         base: '#9c663b', spot: '#f0dfc8' },
+  { mob: 'fox',        name: 'Fox',          base: '#d96b27', spot: '#f5f5f5' },
+  { mob: 'rabbit',     name: 'Rabbit',       base: '#995f40', spot: '#734831' },
+  { mob: 'wolf',       name: 'Wolf',         base: '#d7d3d3', spot: '#ceaf96' },
+  { mob: 'duck',       name: 'Duck',         base: '#8c6d52', spot: '#1e7a48' },
+  { mob: 'turtle',     name: 'Turtle',       base: '#e7e7e7', spot: '#00afaf' },
+  { mob: 'bird',       name: 'Songbird',     base: '#2b7de9', spot: '#ffd54f' },
+  { mob: 'fish',       name: 'River Fish',   base: '#a00f10', spot: '#0e8474' },
+  { mob: 'butterfly',  name: 'Butterfly',    base: '#ff8c1a', spot: '#241914' },
+  { mob: 'camel',      name: 'Camel',        base: '#fcc369', spot: '#cb9337' },
+  { mob: 'zebra',      name: 'Zebra',        base: '#f2f4f7', spot: '#1b1d22' },
+  { mob: 'panda',      name: 'Panda',        base: '#e7e7e7', spot: '#1b1b22' },
+  { mob: 'frog',       name: 'Frog',         base: '#529c38', spot: '#d9e89b' },
+  { mob: 'polar_bear', name: 'Polar Bear',   base: '#f2f2f2', spot: '#959590' },
+  { mob: 'goat',       name: 'Mountain Goat',base: '#a5947c', spot: '#55493e' },
+  { mob: 'villager',   name: 'Villager',     base: '#563c33', spot: '#bd8b72' },
+  { mob: 'iron_golem', name: 'Iron Golem',   base: '#dbdbdb', spot: '#74a332' },
+  { mob: 'zombie',     name: 'Zombie',       base: '#00afaf', spot: '#799c65' },
+  { mob: 'skeleton',   name: 'Skeleton',     base: '#c1c1c1', spot: '#494949' },
+  { mob: 'creeper',    name: 'Creeper',      base: '#0da70b', spot: '#000000' },
+  { mob: 'spider',     name: 'Night Spider', base: '#342d27', spot: '#a80e0e' }
+];
+
+for (const eg of SPAWN_EGG_DEFS) {
+  regItem(`spawn_${eg.mob}`, {
+    name: `${eg.name} Spawn Egg`,
+    stackSize: 64,
+    spawnMob: eg.mob,
+    eggBase: eg.base,
+    eggSpot: eg.spot,
+    icon: `spawn_${eg.mob}`
+  });
+}
+
 export function getBlockDef(blockId) {
   const key = BLOCK_TO_KEY[blockId];
   return key ? ITEMS[key] : null;
@@ -322,7 +371,15 @@ export function isBlockTransparent(blockId) {
 }
 
 export function isBlockLiquid(blockId) {
+  return blockId === BLOCK.WATER || blockId === BLOCK.LAVA;
+}
+
+export function isBlockWater(blockId) {
   return blockId === BLOCK.WATER;
+}
+
+export function isBlockLava(blockId) {
+  return blockId === BLOCK.LAVA;
 }
 
 export function isBlockCross(blockId) {
@@ -367,8 +424,9 @@ export function getBedPairForYaw(yaw) {
 
 export function getItemCategory(def) {
   if (!def) return 'materials';
+  if (def.spawnMob) return 'eggs';
   if (def.armorSlot !== undefined) return 'armor';
-  if (def.toolType) return 'tools';
+  if (def.toolType || def.bucketType) return 'tools';
   if (def.food) return 'food';
   if (!def.isBlock) return 'materials';
   const id = def.id;
