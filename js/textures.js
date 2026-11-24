@@ -70,10 +70,16 @@ export class TextureManager {
     this.atlasTexture.colorSpace = THREE.SRGBColorSpace;
     this.atlasTexture.generateMipmaps = false;
 
-    // Item icons are lazily generated & cached on demand for blazing-fast startup!
+    // Instant Main Menu startup: UI icons build immediately; gameplay crack & HUD textures warm lazily!
+    this._gameplayTexReady = false;
+    this.buildUiIcons();
+  }
+
+  ensureGameplayTextures() {
+    if (this._gameplayTexReady) return;
+    this._gameplayTexReady = true;
     this.buildCrackTextures();
     this.buildHudIcons();
-    this.buildUiIcons();
   }
 
   addTile(name, drawFn) {
@@ -572,9 +578,53 @@ export class TextureManager {
       for (let iy of [2, 6, 10, 14]) px(c, x, y, 2, iy, '#b58852', 12, 2);
     });
     this.addTile('farmland_top', (c, x, y) => {
-      fillNoise(c, x, y, '#5e3e22', 12, 75);
-      for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#402914', 16, 1);
+      fillNoise(c, x, y, '#734e2e', 12, 75);
+      for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#52341b', 16, 1);
     });
+    // Rich dark moist Hydrated Farmland (water within 4 blocks — matches Screenshot 2!)
+    this.addTile('farmland_wet_top', (c, x, y) => {
+      fillNoise(c, x, y, '#382110', 8, 76);
+      for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#211208', 16, 1);
+      for (let iy = 2; iy < 16; iy += 3) px(c, x, y, 0, iy, '#472c16', 16, 1);
+    });
+    // 8 Authentic Progressive Minecraft Wheat Growth Stages (0=tiny sprout .. 7=lush golden ripe wheat!)
+    for (let st = 0; st <= 7; st++) {
+      this.addTile(`wheat_stage_${st}`, (c, x, y) => {
+        const stemCols = [2, 5, 8, 11, 13];
+        const maxH = [3, 5, 7, 9, 11, 13, 14, 15][st];
+        const ripe = st >= 5;
+        const fullGold = st === 7;
+        for (let si = 0; si < stemCols.length; si++) {
+          const sx = stemCols[si];
+          const jitter = ((si * 3 + st) % 3) - 1;
+          const h = Math.max(2, Math.min(15, maxH + (st >= 2 ? jitter : 0)));
+          const topY = 16 - h;
+          for (let py = topY; py < 16; py++) {
+            const frac = (py - topY) / Math.max(1, h);
+            let col;
+            if (fullGold) {
+              col = frac < 0.42 ? ((py & 1) ? '#f0cf52' : '#d6a82d') : (frac < 0.72 ? '#b88c24' : '#7a6820');
+            } else if (ripe) {
+              col = frac < (st === 6 ? 0.55 : 0.30) ? '#e3bd42' : (frac < 0.7 ? '#729e2e' : '#4a7a1d');
+            } else {
+              col = frac < 0.35 ? '#72c938' : (frac < 0.7 ? '#4ea324' : '#357a16');
+            }
+            px(c, x, y, sx, py, col);
+            // Fuller golden wheat heads & side blades on higher stages!
+            if (st >= 3 && py > topY + 1 && py < 15 && ((py + si) & 1) === 0) {
+              const sideX = sx + ((si & 1) ? 1 : -1);
+              if (sideX >= 0 && sideX < 16) {
+                px(c, x, y, sideX, py, fullGold ? (frac < 0.48 ? '#e3b739' : '#9c781d') : (ripe && frac < 0.35 ? '#d4ac35' : '#57a828'));
+              }
+            }
+          }
+          // Bright sunlit tip pixel on ripe wheat ears
+          if (st >= 6 && topY >= 0 && topY < 16) {
+            px(c, x, y, sx, topY, '#fff099');
+          }
+        }
+      });
+    }
 
     // --- NEW BIOME BLOCK TEXTURES ---
     // Acacia (warm grey bark + vibrant orange heartwood & dry savanna canopy)
@@ -996,6 +1046,25 @@ export class TextureManager {
             '..O.............',
             '................'
           ], pal);
+        } else if (def.toolType === 'hoe') {
+          drawGrid([
+            '................',
+            '.....OOOOOOO....',
+            '....OWWHLLLMO...',
+            '....OHHLLMLMO...',
+            '.....OO..OsO....',
+            '........OsO.....',
+            '.......OsO......',
+            '......OsO.......',
+            '.....OsO........',
+            '....OsO.........',
+            '...OsO..........',
+            '..OsO...........',
+            '.OsO............',
+            '.ORO............',
+            '..O.............',
+            '................'
+          ], pal);
         } else { // golden shovel
           drawGrid([
             '................',
@@ -1066,6 +1135,25 @@ export class TextureManager {
           '......OODsMMO...',
           '.......OsODMO...',
           '......OsO.OO....',
+          '.....OsO........',
+          '....OsO.........',
+          '...OsO..........',
+          '..OsO...........',
+          '.OsO............',
+          '.dO.............',
+          '................',
+          '................'
+        ], pal);
+      } else if (def.toolType === 'hoe') {
+        drawGrid([
+          '................',
+          '.....OOOOOOO....',
+          '....OHHLLLMO....',
+          '....OMMLLMMO....',
+          '.....OO..OsO....',
+          '........OsO.....',
+          '.......OsO......',
+          '......OsO.......',
           '.....OsO........',
           '....OsO.........',
           '...OsO..........',
@@ -1787,6 +1875,27 @@ export class TextureManager {
           '................',
           '................'
         ], { O: '#29180a', L: '#c28e53', M: '#966532', D: '#6b441d' });
+        break;
+
+      case 'wheat_seeds':
+        drawGrid([
+          '................',
+          '................',
+          '................',
+          '......OOO.......',
+          '.....OGgGO......',
+          '.....OGDGO..OO..',
+          '......OOO..OGgO.',
+          '..OO......OGDGO.',
+          '.OGgO......OOO..',
+          '.OGDGO..OOO.....',
+          '..OOO..OGgGO....',
+          '......OGDDGO....',
+          '.......OOOO.....',
+          '................',
+          '................',
+          '................'
+        ], { O: '#1f3b0c', g: '#9de052', G: '#5da828', D: '#396e14' });
         break;
 
       case 'wheat':

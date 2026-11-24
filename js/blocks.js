@@ -92,7 +92,16 @@ export const BLOCK = {
   JUNGLE_DOOR_B: 88,
   JUNGLE_DOOR_T: 89,
   CHERRY_DOOR_B: 90,
-  CHERRY_DOOR_T: 91
+  CHERRY_DOOR_T: 91,
+  FARMLAND_WET: 92,
+  WHEAT_0: 93,
+  WHEAT_1: 94,
+  WHEAT_2: 95,
+  WHEAT_3: 96,
+  WHEAT_4: 97,
+  WHEAT_5: 98,
+  WHEAT_6: 99,
+  WHEAT_7: 100
 };
 
 // Block numeric ID -> string item key
@@ -186,7 +195,7 @@ regBlock(BLOCK.WOOL_YELLOW, 'wool_yellow', { name: 'Yellow Wool', hardness: 0.7,
 regBlock(BLOCK.OBSIDIAN, 'obsidian', { name: 'Obsidian', hardness: 8.0, tool: 'pickaxe', minTier: 4, sound: 'stone', faces: { all: 'obsidian' } });
 regBlock(BLOCK.GLOWSTONE, 'glowstone', { name: 'Glowstone', hardness: 0.6, light: 15, sound: 'glass', faces: { all: 'glowstone' } });
 
-regBlock(BLOCK.TALL_GRASS, 'tall_grass', { name: 'Tall Grass', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', drop: 'wheat', dropChance: 0.35, faces: { all: 'tall_grass' } });
+regBlock(BLOCK.TALL_GRASS, 'tall_grass', { name: 'Tall Grass', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', drop: 'wheat_seeds', dropChance: 0.48, faces: { all: 'tall_grass' } });
 regBlock(BLOCK.FLOWER_RED, 'flower_red', { name: 'Poppy', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', faces: { all: 'flower_red' } });
 regBlock(BLOCK.FLOWER_YELLOW, 'flower_yellow', { name: 'Dandelion', solid: false, transparent: true, cross: true, hardness: 0.05, sound: 'grass', faces: { all: 'flower_yellow' } });
 
@@ -204,6 +213,17 @@ regBlock(BLOCK.GOLD_BLOCK, 'gold_block', { name: 'Block of Gold', hardness: 3.4,
 regBlock(BLOCK.DIAMOND_BLOCK, 'diamond_block', { name: 'Block of Diamond', hardness: 4.8, tool: 'pickaxe', minTier: 3, sound: 'stone', faces: { all: 'diamond_block' } });
 regBlock(BLOCK.LADDER, 'ladder', { name: 'Ladder', solid: false, transparent: true, cross: true, climbable: true, hardness: 0.5, tool: 'axe', sound: 'wood', faces: { all: 'ladder' } });
 regBlock(BLOCK.FARMLAND, 'farmland', { name: 'Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'farmland_top', side: 'dirt', bottom: 'dirt' } });
+regBlock(BLOCK.FARMLAND_WET, 'farmland_wet', { name: 'Hydrated Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', hiddenFromCreative: true, faces: { top: 'farmland_wet_top', side: 'dirt', bottom: 'dirt' } });
+for (let st = 0; st <= 7; st++) {
+  regBlock(BLOCK.WHEAT_0 + st, `wheat_stage_${st}`, {
+    name: st === 7 ? 'Ripe Wheat' : 'Wheat Crop',
+    solid: false, transparent: true, isCrop: true, wheatStage: st,
+    hardness: 0.05, sound: 'grass',
+    drop: st === 7 ? 'wheat' : 'wheat_seeds',
+    hiddenFromCreative: true,
+    faces: { all: `wheat_stage_${st}` }
+  });
+}
 
 // --- NEW BIOME BLOCKS (Savanna, Jungle, Cherry Grove, Badlands, Swamp, Frozen) ---
 regBlock(BLOCK.ACACIA_LOG, 'acacia_log', { name: 'Acacia Log', hardness: 1.8, tool: 'axe', sound: 'wood', faces: { top: 'acacia_log_top', side: 'acacia_log_side', bottom: 'acacia_log_top' } });
@@ -279,6 +299,7 @@ regItem('gunpowder', { name: 'Gunpowder', icon: 'gunpowder' });
 regItem('bone', { name: 'Bone', icon: 'bone' });
 regItem('leather', { name: 'Leather', icon: 'leather' });
 regItem('feather', { name: 'Feather', icon: 'feather' });
+regItem('wheat_seeds', { name: 'Wheat Seeds', icon: 'wheat_seeds' });
 regItem('wheat', { name: 'Wheat', icon: 'wheat' });
 
 regItem('apple', { name: 'Apple', icon: 'apple', food: 4 });
@@ -323,6 +344,10 @@ for (const t of TIERS) {
   regItem(`${t.key}_sword`, {
     name: `${t.name} Sword`, stackSize: 1, toolType: 'sword', tier: t.tier,
     speed: 1.5, durability: t.dur, damage: 4 + t.dmg * 1.5, icon: `${t.key}_sword`
+  });
+  regItem(`${t.key}_hoe`, {
+    name: `${t.name} Hoe`, stackSize: 1, toolType: 'hoe', tier: t.tier,
+    speed: t.speed, durability: t.dur, damage: 1 + Math.max(0, t.dmg - 1), icon: `${t.key}_hoe`
   });
 }
 
@@ -469,6 +494,14 @@ export function isDoorTop(id) {
 
 export function isDoorBottom(id) {
   return isDoorBlock(id) && ((id - BLOCK.OAK_DOOR_B) & 1) === 0;
+}
+
+export function isWheatBlock(id) {
+  return id >= BLOCK.WHEAT_0 && id <= BLOCK.WHEAT_7;
+}
+
+export function isFarmlandBlock(id) {
+  return id === BLOCK.FARMLAND || id === BLOCK.FARMLAND_WET;
 }
 
 export function getItemCategory(def) {

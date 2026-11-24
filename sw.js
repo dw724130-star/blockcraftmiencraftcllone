@@ -1,4 +1,4 @@
-const CACHE_NAME = 'blockcraft-v29';
+const CACHE_NAME = 'blockcraft-v30';
 const ASSETS = [
   './',
   './index.html',
@@ -21,6 +21,7 @@ const ASSETS = [
   './js/player.js',
   './js/controls.js',
   './js/sky.js',
+  './js/postfx.js',
   './js/effects.js',
   './js/mods.js',
   './js/storage.js',

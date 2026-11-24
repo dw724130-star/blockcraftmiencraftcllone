@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, KEY_TO_BLOCK, getBlockDef, isBlockSolid, isBedBlock, getBedInfo, getBedPairForYaw } from './blocks.js';
+import { BLOCK, ITEMS, KEY_TO_BLOCK, getBlockDef, isBlockSolid, isBedBlock, getBedInfo, getBedPairForYaw, isWheatBlock, isFarmlandBlock } from './blocks.js';
 import { TextureManager } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
@@ -44,20 +44,30 @@ class BlockCraftGame {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
-    // Real-time Volumetric Crepuscular God-Rays, HDR Bloom & ACES Filmic Post-FX Pipeline!
-    this.postfx = new PostFXPipeline(this.renderer, this.isTouch);
-
-    // Live 3D Voxel Panorama for the Main Menu!
-    this.titlePanorama = new TitlePanorama(this.textures);
-    this._loadingWorld = false;
-
+    // Bind Main Menu UI & saved settings IMMEDIATELY so the title screen is 100% interactive on Frame 0!
+    this.controls = new ControlManager(this.renderer.domElement, this.sound);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, window.innerWidth / window.innerHeight, 0.1, 700);
+    this.postfx = null;
+    this.titlePanorama = null;
+    this._loadingWorld = false;
 
-    this.controls = new ControlManager(this.renderer.domElement, this.sound);
     this.applySettings();
     this.ui.syncSettingsUI(this.settings);
     this.ui.bind(this);
+
+    // Defer 3D Title Panorama, PostFX targets & gameplay crack/HUD texture warmup to the very next frame
+    // so the main menu paints instantly with zero blocking stall on desktop & iPad!
+    requestAnimationFrame(() => {
+      if (!this.running && !this._loadingWorld && !this.titlePanorama) {
+        this.titlePanorama = new TitlePanorama(this.textures);
+      }
+      if (!this.postfx) {
+        this.postfx = new PostFXPipeline(this.renderer, this.isTouch);
+        this.postfx.setQuality(this.settings.shaders || 'ultra');
+      }
+      this.textures.ensureGameplayTextures();
+    });
 
     this.world = null;
     this.sky = null;
@@ -387,6 +397,11 @@ class BlockCraftGame {
 
   async initGameSession(meta, saved) {
     this._loadingWorld = true;
+    this.textures.ensureGameplayTextures();
+    if (!this.postfx) {
+      this.postfx = new PostFXPipeline(this.renderer, this.isTouch);
+      this.postfx.setQuality(this.settings.shaders || 'ultra');
+    }
     const yieldFrame = () => new Promise((r) => requestAnimationFrame(r));
 
     try {
@@ -834,9 +849,10 @@ class BlockCraftGame {
         } else if (heldDef.bucketType === 'empty') {
           const { x, y, z, blockId } = this.currentTarget;
           if ((blockId === BLOCK.WATER || blockId === BLOCK.LAVA) && this.world.getFluidLevel(x, y, z) === 0) {
-            this.world.setBlock(x, y, z, BLOCK.AIR, true);
+            const scooped = this.world.pickupFluidSource(x, y, z);
+            if (!scooped) return;
             if (this.sound.playSplash) this.sound.playSplash();
-            const filledId = blockId === BLOCK.LAVA ? 'lava_bucket' : 'water_bucket';
+            const filledId = scooped === BLOCK.LAVA ? 'lava_bucket' : 'water_bucket';
             const selSlot = this.inventory.slots[this.inventory.selected];
             if (this.player.mode === 'survival') {
               if (selSlot && selSlot.count > 1) {
@@ -847,7 +863,7 @@ class BlockCraftGame {
               }
               this.ui.updateHotbar();
             } else {
-              this.inventory.addItem(filledId, 1);
+              this.inventory.slots[this.inventory.selected] = this.inventory.makeStack(filledId, 1);
               this.ui.updateHotbar();
             }
             return;
@@ -855,7 +871,38 @@ class BlockCraftGame {
         }
       }
 
-      // 2d. Mob Spawn Eggs (spawn ANY mob in the game right where you aim!)
+      // 2d. Hoe Tilling (Grass/Dirt -> Farmland / Hydrated Farmland!) & Wheat Seed Planting!
+      if (!isRepeat && heldDef && heldDef.toolType === 'hoe' && this.currentTarget) {
+        const { x, y, z } = this.currentTarget;
+        if (this.world.tillBlock(x, y, z)) {
+          this.player.swingAnim = 1.0;
+          this.sound.playBlock('dirt', true);
+          if (this.player.mode === 'survival') {
+            this.inventory.damageSelectedTool(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+      }
+      if (!isRepeat && heldDef && heldDef.id === 'wheat_seeds' && this.currentTarget) {
+        const { x, y, z, blockId } = this.currentTarget;
+        if (isFarmlandBlock(blockId) && this.world.getBlock(x, y + 1, z) === BLOCK.AIR) {
+          this.player.swingAnim = 1.0;
+          this.world.setBlock(x, y + 1, z, BLOCK.WHEAT_0, true);
+          this.sound.playBlock('grass', true);
+          if (blockId !== BLOCK.FARMLAND_WET && !this.world.isFarmlandHydrated(x, y, z) && !this._shownWaterFarmTip) {
+            this._shownWaterFarmTip = true;
+            this.ui.toast('Tip: Place water within 4 blocks so your wheat grows!');
+          }
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+      }
+
+      // 2e. Mob Spawn Eggs (spawn ANY mob in the game right where you aim!)
       if (!isRepeat && heldDef && heldDef.spawnMob && this.currentTarget && this.entities) {
         const px = this.currentTarget.x + this.currentTarget.nx + 0.5;
         const py = this.currentTarget.y + this.currentTarget.ny;
@@ -1251,16 +1298,23 @@ class BlockCraftGame {
         this.effects.spawnBlockBreak(bx, by, bz, def);
       }
       if (this.player.mode === 'survival' && this.player.canHarvest(def) && def.drop) {
-        const chance = def.dropChance !== undefined ? def.dropChance : 1.0;
-        if (Math.random() <= chance) {
-          let dropId = def.drop;
-          if (blockId === BLOCK.GRAVEL && Math.random() < 0.35) dropId = 'flint';
-          if (autoSmelt && AUTO_SMELT_ORES[dropId]) dropId = AUTO_SMELT_ORES[dropId];
-          const cnt = def.dropCount || 1;
-          if (autoSmelt) {
-            this.inventory.addItem(dropId, cnt);
-          } else {
-            this.entities.spawnDrop(dropId, cnt, bx + 0.5, by + 0.4, bz + 0.5);
+        if (blockId === BLOCK.WHEAT_7) {
+          // Authentic Minecraft fully-grown Wheat harvest: 1 Wheat + 2 to 4 Wheat Seeds!
+          const seedCnt = 2 + Math.floor(Math.random() * 3);
+          this.entities.spawnDrop('wheat', 1, bx + 0.5, by + 0.4, bz + 0.5);
+          this.entities.spawnDrop('wheat_seeds', seedCnt, bx + 0.5, by + 0.4, bz + 0.5);
+        } else {
+          const chance = def.dropChance !== undefined ? def.dropChance : 1.0;
+          if (Math.random() <= chance) {
+            let dropId = def.drop;
+            if (blockId === BLOCK.GRAVEL && Math.random() < 0.35) dropId = 'flint';
+            if (autoSmelt && AUTO_SMELT_ORES[dropId]) dropId = AUTO_SMELT_ORES[dropId];
+            const cnt = def.dropCount || 1;
+            if (autoSmelt) {
+              this.inventory.addItem(dropId, cnt);
+            } else {
+              this.entities.spawnDrop(dropId, cnt, bx + 0.5, by + 0.4, bz + 0.5);
+            }
           }
         }
         if (def.xp) this.player.addXP(def.xp);
@@ -1438,18 +1492,38 @@ class BlockCraftGame {
       const targetDef = this.currentTarget ? getBlockDef(this.currentTarget.blockId) : null;
 
       // Dynamic context-aware buttons:
-      // - PLACE -> USE when hovering Villager or interactive block (Crafting Table, Furnace, Chest, Bed, TNT)
+      // - PICK UP when holding Empty Bucket over a Water or Lava source!
+      // - TILL when holding a Hoe over Grass/Dirt!
+      // - PLANT when holding Wheat Seeds over Farmland!
+      // - PLACE -> USE when hovering Villager or interactive block (Crafting Table, Furnace, Chest, Door, Bed, TNT)
       // - PLACE -> EAT when holding food (and not hovering an interactive block/villager)
       // - MINE -> DAMAGE when hovering over any animal/mob!
       const heldDef = this.inventory.getHeldDef();
       const isVillagerHover = !!(mobHit && lookMob.type === 'villager');
+      const isPickupFluid = !!(
+        !mobHit && this.currentTarget && heldDef && heldDef.bucketType === 'empty' &&
+        (this.currentTarget.blockId === BLOCK.WATER || this.currentTarget.blockId === BLOCK.LAVA) &&
+        this.world.getFluidLevel(this.currentTarget.x, this.currentTarget.y, this.currentTarget.z) === 0
+      );
+      const isTillHover = !!(
+        !mobHit && this.currentTarget && heldDef && heldDef.toolType === 'hoe' &&
+        (this.currentTarget.blockId === BLOCK.GRASS || this.currentTarget.blockId === BLOCK.DIRT ||
+         this.currentTarget.blockId === BLOCK.SAVANNA_GRASS || this.currentTarget.blockId === BLOCK.JUNGLE_GRASS ||
+         this.currentTarget.blockId === BLOCK.SWAMP_GRASS) &&
+        this.world.getBlock(this.currentTarget.x, this.currentTarget.y + 1, this.currentTarget.z) === BLOCK.AIR
+      );
+      const isPlantHover = !!(
+        !mobHit && this.currentTarget && heldDef && heldDef.id === 'wheat_seeds' &&
+        (this.currentTarget.blockId === BLOCK.FARMLAND || this.currentTarget.blockId === BLOCK.FARMLAND_WET) &&
+        this.world.getBlock(this.currentTarget.x, this.currentTarget.y + 1, this.currentTarget.z) === BLOCK.AIR
+      );
       const isInteractiveBlock = !!(
         targetDef && targetDef.interactive && !this.player.sneaking &&
         (targetDef.interactive !== 'tnt' || (heldDef && heldDef.id === 'flint_and_steel'))
       );
       const useMode = isVillagerHover || (!mobHit && isInteractiveBlock);
-      const eatMode = !useMode && !!(heldDef && heldDef.food);
-      const placeActionMode = useMode ? 'use' : (eatMode ? 'eat' : 'place');
+      const eatMode = !useMode && !isPickupFluid && !!(heldDef && heldDef.food);
+      const placeActionMode = isPickupFluid ? 'pickup' : (isTillHover ? 'till' : (isPlantHover ? 'plant' : (useMode ? 'use' : (eatMode ? 'eat' : 'place'))));
       const damageMode = mobHit;
       this.ui.updateActionButtons(placeActionMode, damageMode);
 
@@ -1466,7 +1540,10 @@ class BlockCraftGame {
           this.currentTarget.y + 0.5,
           this.currentTarget.z + 0.5
         );
-        this.ui.updateTargetTooltip(targetDef ? targetDef.name : '');
+        const ttName = isPickupFluid
+          ? `${this.currentTarget.blockId === BLOCK.LAVA ? 'Lava' : 'Water'} — Tap PICK UP`
+          : (targetDef ? targetDef.name : '');
+        this.ui.updateTargetTooltip(ttName);
       } else {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip('');
@@ -1501,6 +1578,7 @@ class BlockCraftGame {
       this.world.updateFurnaces(dt);
       this.world.updateLeafDecay(dt, this.player.pos);
       this.world.updateFluids(dt);
+      this.world.updateCrops(dt, !this.sky.isNight());
       this.world.updateFire(dt, this.sky.weather === 'rain');
 
       // Spawn rising hot orange embers & soft smoke wisps from nearby active fires!

@@ -13,29 +13,37 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="css/style.css?v=29" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" href="css/style.css?v=30" />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" crossorigin />
+  <link rel="modulepreload" href="./js/main.js?v=30" />
+  <link rel="modulepreload" href="./js/blocks.js?v=30" />
+  <link rel="modulepreload" href="./js/textures.js?v=30" />
+  <link rel="modulepreload" href="./js/ui.js?v=30" />
+  <link rel="modulepreload" href="./js/world.js?v=30" />
+  <link rel="modulepreload" href="./js/panorama.js?v=30" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=29",
-        "./js/textures.js": "./js/textures.js?v=29",
-        "./js/mods.js": "./js/mods.js?v=29",
-        "./js/inventory.js": "./js/inventory.js?v=29",
-        "./js/recipes.js": "./js/recipes.js?v=29",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=29",
-        "./js/noise.js": "./js/noise.js?v=29",
-        "./js/world.js": "./js/world.js?v=29",
-        "./js/mobs.js": "./js/mobs.js?v=29",
-        "./js/player.js": "./js/player.js?v=29",
-        "./js/effects.js": "./js/effects.js?v=29",
-        "./js/audio.js": "./js/audio.js?v=29",
-        "./js/ui.js": "./js/ui.js?v=29",
-        "./js/controls.js": "./js/controls.js?v=29",
-        "./js/sky.js": "./js/sky.js?v=29",
-        "./js/postfx.js": "./js/postfx.js?v=29",
-        "./js/panorama.js": "./js/panorama.js?v=29",
-        "./js/storage.js": "./js/storage.js?v=29"
+        "./js/blocks.js": "./js/blocks.js?v=30",
+        "./js/textures.js": "./js/textures.js?v=30",
+        "./js/mods.js": "./js/mods.js?v=30",
+        "./js/inventory.js": "./js/inventory.js?v=30",
+        "./js/recipes.js": "./js/recipes.js?v=30",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=30",
+        "./js/noise.js": "./js/noise.js?v=30",
+        "./js/world.js": "./js/world.js?v=30",
+        "./js/mobs.js": "./js/mobs.js?v=30",
+        "./js/player.js": "./js/player.js?v=30",
+        "./js/effects.js": "./js/effects.js?v=30",
+        "./js/audio.js": "./js/audio.js?v=30",
+        "./js/ui.js": "./js/ui.js?v=30",
+        "./js/controls.js": "./js/controls.js?v=30",
+        "./js/sky.js": "./js/sky.js?v=30",
+        "./js/postfx.js": "./js/postfx.js?v=30",
+        "./js/panorama.js": "./js/panorama.js?v=30",
+        "./js/storage.js": "./js/storage.js?v=30"
       }
     }
   </script>
@@ -989,6 +997,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=29"></script>
+  <script type="module" src="js/main.js?v=30"></script>
 </body>
 </html>

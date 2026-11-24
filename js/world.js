@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom } from './blocks.js';
+import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom, isWheatBlock, isFarmlandBlock } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { LodWorkerPool } from './lod-mesher.js';
@@ -331,6 +331,8 @@ export class World {
     this.activeFires = new Map(); // "x,y,z" -> { x, y, z, age, timer }
     this.fluidLevels = new Map(); // "x,y,z" -> level (0=source, 1..7 water, 1..3 lava)
     this.fluidQueue = new Map();  // "x,y,z" -> { x, y, z, type, timer }
+    this.activeCrops = new Map(); // "x,y,z" -> { x, y, z, timer }
+    this.activeFarmlands = new Map(); // "x,y,z" -> { x, y, z, timer, dryAge }
     this.onFluidMix = null;       // optional callback (x, y, z, newBlockId)
     this.onFireIgniteTnt = null;  // optional callback (x, y, z)
     this.megaStructures = new Map(); // numeric key -> { type, x, y, z, radius, villagersSpawned }
@@ -1153,7 +1155,7 @@ export class World {
       this._transTable[id] = isTr ? 1 : 0;
       this._litTable[id] = def.light > 0 ? 1 : 0;
       this._specialTable[id] = (
-        isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) ||
+        isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) || isWheatBlock(id) ||
         id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE
       ) ? 1 : 0;
       const faceUVs = new Array(6);
@@ -3440,11 +3442,41 @@ export class World {
         data[idx] = blockId;
         const my = idx >> 8;
         if (blockId !== 0 && my > maxY) maxY = my;
+        if (blockId >= BLOCK.WHEAT_0 && blockId < BLOCK.WHEAT_7) {
+          const lxM = idx & 15, lzM = (idx >> 4) & 15;
+          const wxM = ox + lxM, wzM = oz + lzM;
+          this.activeCrops.set(`${wxM},${my},${wzM}`, { x: wxM, y: my, z: wzM, timer: 4 + Math.random() * 6 });
+        } else if (isFarmlandBlock(blockId)) {
+          const lxM = idx & 15, lzM = (idx >> 4) & 15;
+          const wxM = ox + lxM, wzM = oz + lzM;
+          this.activeFarmlands.set(`${wxM},${my},${wzM}`, { x: wxM, y: my, z: wzM, timer: 1.5 + Math.random() * 2, dryAge: 0 });
+        }
       }
     }
 
     const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true, queued: false };
     this.chunks.set(key, chunk);
+
+    // Trigger natural flowing physics for any naturally spawned overhanging Water or Lava (e.g. cave waterfalls/lavafalls!)
+    if (!isFlat && this.fluidQueue.size < 220) {
+      let queuedNat = 0;
+      const scanMaxY = Math.min(SEA_LEVEL + 2, maxY);
+      for (let y = 6; y <= scanMaxY && queuedNat < 8; y++) {
+        const yOff = y << 8;
+        const yBelow = (y - 1) << 8;
+        for (let lz = 1; lz < 15 && queuedNat < 8; lz++) {
+          const zOff = lz << 4;
+          for (let lx = 1; lx < 15 && queuedNat < 8; lx++) {
+            const b = data[lx + zOff + yOff];
+            if ((b === BLOCK.WATER || b === BLOCK.LAVA) && data[lx + zOff + yBelow] === BLOCK.AIR) {
+              this.scheduleFluid(ox + lx, y, oz + lz, b);
+              queuedNat++;
+            }
+          }
+        }
+      }
+    }
+
     return chunk;
   }
 
@@ -3503,6 +3535,22 @@ export class World {
       this.activeFires.delete(bKey);
     }
 
+    // Track growing Wheat crops & Hydrated/Dry Farmland!
+    if (blockId >= BLOCK.WHEAT_0 && blockId < BLOCK.WHEAT_7) {
+      if (!this.activeCrops.has(bKey)) {
+        this.activeCrops.set(bKey, { x, y, z, timer: 6 + Math.random() * 7 });
+      }
+    } else {
+      this.activeCrops.delete(bKey);
+    }
+    if (isFarmlandBlock(blockId)) {
+      if (!this.activeFarmlands.has(bKey)) {
+        this.activeFarmlands.set(bKey, { x, y, z, timer: 1.2 + Math.random() * 1.8, dryAge: 0 });
+      }
+    } else {
+      this.activeFarmlands.delete(bKey);
+    }
+
     const cx = x >> 4;
     const cz = z >> 4;
     const chunk = this.chunks.get(this.chunkKey(cx, cz));
@@ -3530,6 +3578,20 @@ export class World {
         this.doorStates.delete(`${x},${Math.min(y, partnerY)},${z}`);
         if (isDoorBlock(this.getBlock(x, partnerY, z))) {
           this.setBlock(x, partnerY, z, BLOCK.AIR, record);
+        }
+      }
+      // Breaking farmland pops any wheat crop growing on top of it!
+      if (!isFarmlandBlock(blockId) && isFarmlandBlock(prevId)) {
+        if (isWheatBlock(this.getBlock(x, y + 1, z))) {
+          this.setBlock(x, y + 1, z, BLOCK.AIR, record);
+        }
+      }
+      // Placing/removing water immediately refreshes nearby farmland hydration within 4 blocks!
+      if (blockId === BLOCK.WATER || prevId === BLOCK.WATER) {
+        for (const f of this.activeFarmlands.values()) {
+          if (Math.abs(f.x - x) <= 4 && Math.abs(f.z - z) <= 4 && Math.abs(f.y - y) <= 1) {
+            f.timer = Math.min(f.timer, 0.25);
+          }
         }
       }
       if (LOG_BLOCK_SET.has(prevId)) {
@@ -3598,11 +3660,80 @@ export class World {
     this.scheduleFluid(x, y, z, fluidBlockId);
   }
 
-  // Authentic Minecraft Fluid Flow & Water+Lava Mixing (Obsidian, Cobblestone, Stone!)
+  // Compute authentic Minecraft visual fluid surface height (0.12 .. 1.0) for sloped multi-level Water & Lava!
+  getFluidSurfaceHeight(x, y, z, fluidId) {
+    if (this.getBlock(x, y + 1, z) === fluidId) return 1.0;
+    const lv = this.getFluidLevel(x, y, z);
+    if (lv <= 0) return 0.875; // Full source block (7/8 height)
+    if (fluidId === BLOCK.LAVA) {
+      // Lava spreads 3 blocks: crisp sloped steps 7/8 -> 0.66 -> 0.42 -> 0.19!
+      if (lv === 1) return 0.66;
+      if (lv === 2) return 0.42;
+      return 0.19;
+    }
+    // Water spreads 7 blocks: smooth 8-level slope 7/8 down to 0.12!
+    return Math.max(0.12, (8 - lv) / 9.0);
+  }
+
+  // Smooth Minecraft 4-neighbor corner height averaging for sloped Lava & Water quads!
+  getFluidCornerHeight(vx, y, vz, fluidId) {
+    let sum = 0;
+    let weight = 0;
+    for (let dz = -1; dz <= 0; dz++) {
+      for (let dx = -1; dx <= 0; dx++) {
+        const cx = vx + dx;
+        const cz = vz + dz;
+        if (this.getBlock(cx, y + 1, cz) === fluidId) return 1.0;
+        const b = this.getBlock(cx, y, cz);
+        if (b === fluidId) {
+          const lv = this.getFluidLevel(cx, y, cz);
+          const h = this.getFluidSurfaceHeight(cx, y, cz, fluidId);
+          // Source blocks carry 10x corner weight (matches real Minecraft flat pool rims + smooth spillways!)
+          const w = lv === 0 ? 10.0 : 1.0;
+          sum += h * w;
+          weight += w;
+        } else if (!isBlockSolid(b)) {
+          // Open air gently tapers outer flowing edge downward!
+          weight += 1.0;
+        }
+      }
+    }
+    return weight > 0 ? Math.max(0.08, sum / weight) : 0.875;
+  }
+
+  _markFluidDirty(x, z) {
+    const cx = x >> 4, cz = z >> 4;
+    this.markDirty(cx, cz);
+    const lx = x & 15, lz = z & 15;
+    if (lx === 0) this.markDirty(cx - 1, cz);
+    if (lx === 15) this.markDirty(cx + 1, cz);
+    if (lz === 0) this.markDirty(cx, cz - 1);
+    if (lz === 15) this.markDirty(cx, cz + 1);
+  }
+
+  // Scoop up a Water or Lava source with an Empty Bucket and immediately cascade smooth drainage!
+  pickupFluidSource(x, y, z) {
+    const cur = this.getBlock(x, y, z);
+    if (cur !== BLOCK.WATER && cur !== BLOCK.LAVA) return null;
+    if (this.getFluidLevel(x, y, z) !== 0) return null;
+    const k = `${x},${y},${z}`;
+    this.fluidLevels.delete(k);
+    this.fluidQueue.delete(k);
+    this.setBlock(x, y, z, BLOCK.AIR, true);
+    // Cascade drain schedule to all 6 neighbors (plus 2-deep horizontal so lava drains cleanly!)
+    this.scheduleNeighborFluids(x, y, z);
+    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const nb = this.getBlock(x + dx, y, z + dz);
+      if (nb === cur) this.scheduleFluid(x + dx, y, z + dz, nb);
+    }
+    return cur;
+  }
+
+  // Authentic Minecraft Fluid Flow, Upgraded Smooth Drainage & Water+Lava Mixing (Obsidian, Cobblestone, Stone!)
   updateFluids(dt) {
     if (this.fluidQueue.size === 0) return;
     let processed = 0;
-    const maxPerFrame = 18;
+    const maxPerFrame = 24;
     const ready = [];
     for (const [k, entry] of this.fluidQueue) {
       entry.timer -= dt;
@@ -3613,7 +3744,8 @@ export class World {
 
     const canFlowInto = (b) => (
       b === BLOCK.AIR || b === BLOCK.FIRE || b === BLOCK.TALL_GRASS ||
-      b === BLOCK.FLOWER_RED || b === BLOCK.FLOWER_YELLOW || b === BLOCK.TORCH
+      b === BLOCK.FLOWER_RED || b === BLOCK.FLOWER_YELLOW || b === BLOCK.TORCH ||
+      (b >= BLOCK.WHEAT_0 && b <= BLOCK.WHEAT_7)
     );
 
     for (const [k, entry] of ready) {
@@ -3629,34 +3761,58 @@ export class World {
       const maxSpread = isLava ? 3 : 7;
       let level = this.getFluidLevel(x, y, z);
 
-      // 1. If flowing (level > 0), verify it is still fed by a lower-level neighbor or fluid directly above!
+      // 1. For flowing fluid (level > 0): check infinite water source (Water only!) & authentic step-by-step drainage!
       if (level > 0) {
         const above = this.getBlock(x, y + 1, z);
-        let fed = above === cur;
         let minNeigh = 99;
-        if (!fed) {
-          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-            if (this.getBlock(x + dx, y, z + dz) === cur) {
-              const nl = this.getFluidLevel(x + dx, y, z + dz);
-              if (nl < minNeigh) minNeigh = nl;
-            }
+        let adjSources = 0;
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          if (this.getBlock(x + dx, y, z + dz) === cur) {
+            const nl = this.getFluidLevel(x + dx, y, z + dz);
+            if (nl < minNeigh) minNeigh = nl;
+            if (nl === 0) adjSources++;
           }
-          if (minNeigh < level) fed = true;
         }
-        if (!fed) {
-          this.fluidLevels.delete(k);
-          this.setBlock(x, y, z, BLOCK.AIR, true);
-          continue;
+
+        // Authentic Minecraft Infinite Water Source (2+ horizontal water sources + solid/water below; NEVER Lava!)
+        if (!isLava && adjSources >= 2) {
+          const bel = this.getBlock(x, y - 1, z);
+          if (isBlockSolid(bel) || (bel === BLOCK.WATER && this.getFluidLevel(x, y - 1, z) === 0)) {
+            this.fluidLevels.set(k, 0);
+            this._markFluidDirty(x, z);
+            this.scheduleNeighborFluids(x, y, z);
+            level = 0;
+          }
         }
-        const newLevel = above === cur ? 1 : (minNeigh + 1);
-        if (newLevel > maxSpread) {
-          this.fluidLevels.delete(k);
-          this.setBlock(x, y, z, BLOCK.AIR, true);
-          continue;
-        }
-        if (newLevel !== level) {
-          level = newLevel;
-          this.fluidLevels.set(k, level);
+
+        if (level > 0) {
+          const targetLevel = (above === cur) ? 1 : (minNeigh + 1);
+          if (targetLevel > level) {
+            // Upstream source was removed or scooped up -> recede smoothly one level per fluid tick!
+            const nextLv = level + 1;
+            if (nextLv > maxSpread) {
+              this.fluidLevels.delete(k);
+              this.setBlock(x, y, z, BLOCK.AIR, true);
+              this.scheduleNeighborFluids(x, y, z);
+            } else {
+              this.fluidLevels.set(k, nextLv);
+              this._markFluidDirty(x, z);
+              this.scheduleFluid(x, y, z, cur);
+              this.scheduleNeighborFluids(x, y, z);
+            }
+            continue; // Do NOT spread outward while draining!
+          }
+          if (targetLevel > maxSpread) {
+            this.fluidLevels.delete(k);
+            this.setBlock(x, y, z, BLOCK.AIR, true);
+            this.scheduleNeighborFluids(x, y, z);
+            continue;
+          }
+          if (targetLevel < level) {
+            level = targetLevel;
+            this.fluidLevels.set(k, level);
+            this._markFluidDirty(x, z);
+          }
         }
       }
 
@@ -3664,14 +3820,12 @@ export class World {
       if (y > 1) {
         const below = this.getBlock(x, y - 1, z);
         if (isLava && below === BLOCK.WATER) {
-          // Minecraft rule: Lava flowing DOWN onto Water -> STONE!
           this.fluidLevels.delete(`${x},${y - 1},${z}`);
           this.setBlock(x, y - 1, z, BLOCK.STONE, true);
           if (this.onFluidMix) this.onFluidMix(x, y - 1, z, BLOCK.STONE);
           continue;
         }
         if (!isLava && below === BLOCK.LAVA) {
-          // Minecraft rule: Water hitting Lava Source -> OBSIDIAN; Flowing Lava -> COBBLESTONE!
           const res = this.getFluidLevel(x, y - 1, z) === 0 ? BLOCK.OBSIDIAN : BLOCK.COBBLESTONE;
           this.fluidLevels.delete(`${x},${y - 1},${z}`);
           this.setBlock(x, y - 1, z, res, true);
@@ -3688,9 +3842,11 @@ export class World {
           const bl = this.getFluidLevel(x, y - 1, z);
           if (bl > 1) {
             this.fluidLevels.set(`${x},${y - 1},${z}`, 1);
+            this._markFluidDirty(x, z);
             this.scheduleFluid(x, y - 1, z, cur);
           }
-          continue;
+          // Falling stream onto another fluid still spreads if source or on top of a pool
+          if (level > 0) continue;
         }
       }
 
@@ -3702,7 +3858,6 @@ export class World {
           const nb = this.getBlock(nx, y, nz);
 
           if (!isLava && nb === BLOCK.LAVA) {
-            // Water hitting Lava horizontally: Source -> OBSIDIAN, Flowing -> COBBLESTONE!
             const res = this.getFluidLevel(nx, y, nz) === 0 ? BLOCK.OBSIDIAN : BLOCK.COBBLESTONE;
             this.fluidLevels.delete(`${nx},${y},${nz}`);
             this.setBlock(nx, y, nz, res, true);
@@ -3710,7 +3865,6 @@ export class World {
             continue;
           }
           if (isLava && nb === BLOCK.WATER) {
-            // Lava flowing horizontally into Water -> COBBLESTONE (at lava's edge or contact point)!
             const res = BLOCK.COBBLESTONE;
             this.fluidLevels.delete(`${nx},${y},${nz}`);
             this.setBlock(nx, y, nz, res, true);
@@ -3723,11 +3877,111 @@ export class World {
             this.scheduleFluid(nx, y, nz, cur);
           } else if (nb === cur && this.getFluidLevel(nx, y, nz) > nextLevel) {
             this.fluidLevels.set(`${nx},${y},${nz}`, nextLevel);
+            this._markFluidDirty(nx, nz);
             this.scheduleFluid(nx, y, nz, cur);
           }
         }
       }
       if (processed >= maxPerFrame) break;
+    }
+  }
+
+  // --- AUTHENTIC MINECRAFT FARMING: HYDRATION, HOE TILLING & WATER-DEPENDENT WHEAT GROWTH ---
+  isFarmlandHydrated(x, y, z) {
+    for (let dy = 0; dy <= 1; dy++) {
+      for (let dz = -4; dz <= 4; dz++) {
+        for (let dx = -4; dx <= 4; dx++) {
+          if (this.getBlock(x + dx, y + dy, z + dz) === BLOCK.WATER) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  tillBlock(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    const tillable = (
+      id === BLOCK.GRASS || id === BLOCK.DIRT ||
+      id === BLOCK.SAVANNA_GRASS || id === BLOCK.JUNGLE_GRASS || id === BLOCK.SWAMP_GRASS
+    );
+    if (!tillable || this.getBlock(x, y + 1, z) !== BLOCK.AIR) return false;
+    const hydrated = this.isFarmlandHydrated(x, y, z);
+    this.setBlock(x, y, z, hydrated ? BLOCK.FARMLAND_WET : BLOCK.FARMLAND, true);
+    return true;
+  }
+
+  updateCrops(dt, isDay = true) {
+    // 1. Update Farmland Hydration (water within 4 blocks -> dark wet farmland; dry bare farmland reverts to dirt)
+    if (this.activeFarmlands.size > 0) {
+      let fTicks = 0;
+      for (const [k, f] of this.activeFarmlands) {
+        f.timer -= dt;
+        if (f.timer > 0) continue;
+        f.timer = 2.0 + Math.random() * 2.5;
+        const cur = this.getBlock(f.x, f.y, f.z);
+        if (!isFarmlandBlock(cur)) {
+          this.activeFarmlands.delete(k);
+          continue;
+        }
+        const hydrated = this.isFarmlandHydrated(f.x, f.y, f.z);
+        if (hydrated) {
+          f.dryAge = 0;
+          if (cur !== BLOCK.FARMLAND_WET) {
+            this.setBlock(f.x, f.y, f.z, BLOCK.FARMLAND_WET, true);
+          }
+        } else {
+          if (cur === BLOCK.FARMLAND_WET) {
+            this.setBlock(f.x, f.y, f.z, BLOCK.FARMLAND, true);
+          }
+          const above = this.getBlock(f.x, f.y + 1, f.z);
+          if (!isWheatBlock(above)) {
+            f.dryAge += 3.0;
+            if (f.dryAge > 42 && Math.random() < 0.35) {
+              this.setBlock(f.x, f.y, f.z, BLOCK.DIRT, true);
+            }
+          }
+        }
+        if (++fTicks >= 12) break;
+      }
+    }
+
+    // 2. Grow Wheat Crops (REQUIRES nearby Water / Hydrated Farmland + daylight or torch/glowstone light!)
+    if (this.activeCrops.size > 0) {
+      let cTicks = 0;
+      for (const [k, c] of this.activeCrops) {
+        c.timer -= dt;
+        if (c.timer > 0) continue;
+        c.timer = 7.0 + Math.random() * 8.0; // Full 0->7 growth in ~60-90 seconds when watered!
+        const cur = this.getBlock(c.x, c.y, c.z);
+        if (!isWheatBlock(cur) || cur >= BLOCK.WHEAT_7) {
+          this.activeCrops.delete(k);
+          continue;
+        }
+        const below = this.getBlock(c.x, c.y - 1, c.z);
+        if (!isFarmlandBlock(below)) {
+          this.setBlock(c.x, c.y, c.z, BLOCK.AIR, true);
+          continue;
+        }
+        // Check water hydration (required for wheat to grow!)
+        const hydrated = below === BLOCK.FARMLAND_WET || this.isFarmlandHydrated(c.x, c.y - 1, c.z);
+        if (!hydrated) continue;
+        if (below !== BLOCK.FARMLAND_WET) {
+          this.setBlock(c.x, c.y - 1, c.z, BLOCK.FARMLAND_WET, true);
+        }
+        // Check light: daytime sky OR nearby torch/glowstone within 6 blocks!
+        let hasLight = isDay;
+        if (!hasLight && this.lightSources.size > 0) {
+          for (const ls of this.lightSources.values()) {
+            const dx = ls.x - c.x, dy = ls.y - c.y, dz = ls.z - c.z;
+            if (dx * dx + dy * dy + dz * dz <= 49) { hasLight = true; break; }
+          }
+        }
+        if (hasLight) {
+          this.setBlock(c.x, c.y, c.z, cur + 1, true);
+        }
+        if (++cTicks >= 10) break;
+      }
     }
   }
 
@@ -4234,6 +4488,21 @@ export class World {
             continue;
           }
 
+          // Authentic Minecraft 4-Plane '#' Hash-Grid 3D Wheat Crop Geometry (lush & dense like Screenshot 2!)
+          if (isWheatBlock(id)) {
+            const uv = uvTable[id][0];
+            const shade = 0.96 * calcSkyLight(lx, y, lz);
+            const y0 = y - 0.05;
+            const y1 = y + 0.94;
+            // 2 parallel North-South planes at x = 0.25 and x = 0.75
+            bCutout.pushQuad(wx + 0.25, y0, wz, uv.u0, uv.v0, shade, wx + 0.25, y0, wz + 1, uv.u1, uv.v0, shade, wx + 0.25, y1, wz + 1, uv.u1, uv.v1, shade, wx + 0.25, y1, wz, uv.u0, uv.v1, shade, 1, 0, 0);
+            bCutout.pushQuad(wx + 0.75, y0, wz + 1, uv.u0, uv.v0, shade, wx + 0.75, y0, wz, uv.u1, uv.v0, shade, wx + 0.75, y1, wz, uv.u1, uv.v1, shade, wx + 0.75, y1, wz + 1, uv.u0, uv.v1, shade, -1, 0, 0);
+            // 2 parallel East-West planes at z = 0.25 and z = 0.75
+            bCutout.pushQuad(wx, y0, wz + 0.25, uv.u0, uv.v0, shade, wx + 1, y0, wz + 0.25, uv.u1, uv.v0, shade, wx + 1, y1, wz + 0.25, uv.u1, uv.v1, shade, wx, y1, wz + 0.25, uv.u0, uv.v1, shade, 0, 0, 1);
+            bCutout.pushQuad(wx + 1, y0, wz + 0.75, uv.u0, uv.v0, shade, wx, y0, wz + 0.75, uv.u1, uv.v0, shade, wx, y1, wz + 0.75, uv.u1, uv.v1, shade, wx + 1, y1, wz + 0.75, uv.u0, uv.v1, shade, 0, 0, -1);
+            continue;
+          }
+
           if (def.cross) {
             const isStaticCross = id === BLOCK.LADDER;
             const isFire = id === BLOCK.FIRE;
@@ -4267,12 +4536,36 @@ export class World {
           if (isWater) hasWater = true;
           const isStaticCutout = id === BLOCK.GLASS || id === BLOCK.ICE || isLava;
           const b = isWater ? bWater : (isStaticCutout ? bStatic : bCutout);
-          const waterTopLower = (isWater || isLava) && fastGet(lx, y + 1, lz) !== id;
           const faceUVs = uvTable[id];
           const lightBoost = isLava ? 1.55 : (def.light > 0 ? 1.18 : 1.0);
 
-          // Water +Y top surface is greedily meshed in PASS 3 (Lava renders all exposed faces including glowing top!)
-          const startFi = isWater ? 1 : 0;
+          // Authentic Minecraft Sloped Multi-Level Lava & Flowing Water Geometry (matches Screenshot 1!)
+          // Calm flat ocean/lake water sources (no flowing water in fluidLevels nearby) stay greedily merged in PASS 3!
+          let fluidSloped = false;
+          let hNW = 0.875, hNE = 0.875, hSE = 0.875, hSW = 0.875;
+          if (isWater || isLava) {
+            const aboveSame = fastGet(lx, y + 1, lz) === id;
+            const myLv = this.fluidLevels.size > 0 ? this.getFluidLevel(wx, y, wz) : 0;
+            const checkSlope = isLava || myLv > 0 || (this.fluidLevels.size > 0 && (
+              this.fluidLevels.has(`${wx + 1},${y},${wz}`) || this.fluidLevels.has(`${wx - 1},${y},${wz}`) ||
+              this.fluidLevels.has(`${wx},${y},${wz + 1}`) || this.fluidLevels.has(`${wx},${y},${wz - 1}`) ||
+              this.fluidLevels.has(`${wx + 1},${y},${wz + 1}`) || this.fluidLevels.has(`${wx - 1},${y},${wz - 1}`) ||
+              this.fluidLevels.has(`${wx + 1},${y},${wz - 1}`) || this.fluidLevels.has(`${wx - 1},${y},${wz + 1}`)
+            ));
+            if (aboveSame) {
+              hNW = hNE = hSE = hSW = 1.0;
+              fluidSloped = isLava || checkSlope;
+            } else if (checkSlope) {
+              hNW = this.getFluidCornerHeight(wx, y, wz, id);
+              hNE = this.getFluidCornerHeight(wx + 1, y, wz, id);
+              hSE = this.getFluidCornerHeight(wx + 1, y, wz + 1, id);
+              hSW = this.getFluidCornerHeight(wx, y, wz + 1, id);
+              fluidSloped = true;
+            }
+          }
+
+          // Calm flat water +Y surface is greedily meshed in PASS 3; sloped flowing water & ALL lava emit exact sloped quads here!
+          const startFi = (isWater && !fluidSloped) ? 1 : 0;
           for (let fi = startFi; fi < 6; fi++) {
             const face = FACES[fi];
             const dx0 = face.dir[0];
@@ -4284,7 +4577,11 @@ export class World {
             const neighbor = fastGet(nlx, ny, nlz);
 
             if (isWater || isLava) {
-              if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
+              if (fi === 0) {
+                if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
+              } else {
+                if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
+              }
             } else {
               if (neighbor === id && isStaticCutout) continue;
               if (neighbor !== 0 && transTable[neighbor] === 0) continue;
@@ -4293,11 +4590,18 @@ export class World {
             const uv = faceUVs[fi];
             const c0 = face.corners[0], c1 = face.corners[1], c2 = face.corners[2], c3 = face.corners[3];
             const skyF = def.light > 0 ? 1.0 : calcSkyLight(nlx, ny, nlz);
-            const s = isLava ? 1.55 : Math.min(1.2, face.shade * lightBoost * skyF);
-            const py0 = (waterTopLower && c0[1] === 1) ? y + 0.88 : y + c0[1];
-            const py1 = (waterTopLower && c1[1] === 1) ? y + 0.88 : y + c1[1];
-            const py2 = (waterTopLower && c2[1] === 1) ? y + 0.88 : y + c2[1];
-            const py3 = (waterTopLower && c3[1] === 1) ? y + 0.88 : y + c3[1];
+            const s = isLava ? (fi === 0 ? 1.62 : 1.44) : Math.min(1.2, face.shade * lightBoost * skyF);
+            const cornerY = (c) => {
+              if (!(isWater || isLava) || c[1] !== 1) return y + c[1];
+              if (c[0] === 0 && c[2] === 0) return y + hNW;
+              if (c[0] === 1 && c[2] === 0) return y + hNE;
+              if (c[0] === 1 && c[2] === 1) return y + hSE;
+              return y + hSW;
+            };
+            const py0 = cornerY(c0);
+            const py1 = cornerY(c1);
+            const py2 = cornerY(c2);
+            const py3 = cornerY(c3);
 
             b.pushQuad(
               wx + c0[0], py0, wz + c0[2], c0[3] ? uv.u1 : uv.u0, c0[4] ? uv.v1 : uv.v0, s,
@@ -4651,6 +4955,17 @@ export class World {
             if (data[lx + zOff + yOff] !== BLOCK.WATER) continue;
             const above = fastGet(lx, y + 1, lz);
             if (above === BLOCK.WATER || (above !== 0 && transTable[above] === 0)) continue;
+            // Skip sloped flowing water (already rendered with exact 4-corner slopes in PASS 1!)
+            if (this.fluidLevels.size > 0) {
+              const wxW = ox + lx, wzW = oz + lz;
+              if (
+                this.getFluidLevel(wxW, y, wzW) > 0 ||
+                this.fluidLevels.has(`${wxW + 1},${y},${wzW}`) || this.fluidLevels.has(`${wxW - 1},${y},${wzW}`) ||
+                this.fluidLevels.has(`${wxW},${y},${wzW + 1}`) || this.fluidLevels.has(`${wxW},${y},${wzW - 1}`) ||
+                this.fluidLevels.has(`${wxW + 1},${y},${wzW + 1}`) || this.fluidLevels.has(`${wxW - 1},${y},${wzW - 1}`) ||
+                this.fluidLevels.has(`${wxW + 1},${y},${wzW - 1}`) || this.fluidLevels.has(`${wxW - 1},${y},${wzW + 1}`)
+              ) continue;
+            }
             wMask[lx + zOff] = 1;
             anyW = true;
           }
@@ -5561,6 +5876,8 @@ export class World {
     this.activeFires.clear();
     this.fluidLevels.clear();
     this.fluidQueue.clear();
+    this.activeCrops.clear();
+    this.activeFarmlands.clear();
     this.doorStates.clear();
     this.megaStructures.clear();
     this.scene.remove(this.group);

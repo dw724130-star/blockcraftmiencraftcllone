@@ -115,7 +115,8 @@ for (const tm of TOOL_MATS) {
     { out: `${tm.prefix}_pickaxe`, count: 1, table: true, pattern: ['MMM', ' S ', ' S '], map: { M: tm.mat, S: 'stick' } },
     { out: `${tm.prefix}_axe`, count: 1, table: true, pattern: ['MM', 'MS', ' S'], map: { M: tm.mat, S: 'stick' } },
     { out: `${tm.prefix}_shovel`, count: 1, table: true, pattern: ['M', 'S', 'S'], map: { M: tm.mat, S: 'stick' } },
-    { out: `${tm.prefix}_sword`, count: 1, table: true, pattern: ['M', 'M', 'S'], map: { M: tm.mat, S: 'stick' } }
+    { out: `${tm.prefix}_sword`, count: 1, table: true, pattern: ['M', 'M', 'S'], map: { M: tm.mat, S: 'stick' } },
+    { out: `${tm.prefix}_hoe`, count: 1, table: true, pattern: ['MM', ' S', ' S'], map: { M: tm.mat, S: 'stick' } }
   );
 }
 

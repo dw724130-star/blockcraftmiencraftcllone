@@ -2117,6 +2117,28 @@ body.mc-theme .touch-action-btn.place-btn.mode-eat {
     0 0 16px rgba(255, 179, 71, 0.6);
 }
 
+/* Dynamic USE/PLACE -> PICK UP highlight when holding Empty Bucket over Water or Lava! */
+.touch-action-btn.place-btn.mode-pickup,
+body.mc-theme .touch-action-btn.place-btn.mode-pickup {
+  background: rgba(28, 132, 194, 0.92);
+  border-color: #8ee8ff;
+  box-shadow:
+    inset 3px 3px 0 rgba(200, 246, 255, 0.42),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.45),
+    0 0 16px rgba(84, 214, 255, 0.6);
+}
+
+/* Dynamic PLACE -> TILL / PLANT highlight for Hoe & Seeds! */
+.touch-action-btn.place-btn.mode-till,
+body.mc-theme .touch-action-btn.place-btn.mode-till {
+  background: rgba(82, 148, 42, 0.92);
+  border-color: #c9ff8a;
+  box-shadow:
+    inset 3px 3px 0 rgba(220, 255, 178, 0.38),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.45),
+    0 0 14px rgba(132, 230, 82, 0.5);
+}
+
 /* Dynamic MINE -> DAMAGE highlight when hovering over any animal or mob! */
 .touch-action-btn.break-btn.mode-damage,
 body.mc-theme .touch-action-btn.break-btn.mode-damage {

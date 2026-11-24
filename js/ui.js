@@ -958,8 +958,12 @@ export class UIManager {
       if (this.dom.btnPlace) {
         this.dom.btnPlace.classList.toggle('mode-use', mode === 'use');
         this.dom.btnPlace.classList.toggle('mode-eat', mode === 'eat');
-        this.dom.btnPlaceLbl.textContent = mode === 'use' ? 'USE' : (mode === 'eat' ? 'EAT' : 'PLACE');
-        this.dom.btnPlaceIcon.src = this.textures.getUiIcon(mode === 'use' ? 'use' : (mode === 'eat' ? 'eat' : 'place'));
+        this.dom.btnPlace.classList.toggle('mode-pickup', mode === 'pickup');
+        this.dom.btnPlace.classList.toggle('mode-till', mode === 'till' || mode === 'plant');
+        const lblMap = { use: 'USE', eat: 'EAT', pickup: 'PICK UP', till: 'TILL', plant: 'PLANT', place: 'PLACE' };
+        this.dom.btnPlaceLbl.textContent = lblMap[mode] || 'PLACE';
+        const iconKey = mode === 'use' || mode === 'pickup' || mode === 'till' ? 'use' : (mode === 'eat' ? 'eat' : 'place');
+        this.dom.btnPlaceIcon.src = this.textures.getUiIcon(iconKey);
       }
     }
     if (damageMode !== this._lastBreakMode) {
