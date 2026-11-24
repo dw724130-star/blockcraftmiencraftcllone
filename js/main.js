@@ -44,24 +44,21 @@ class BlockCraftGame {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
 
-    // Bind Main Menu UI & saved settings IMMEDIATELY so the title screen is 100% interactive on Frame 0!
+    // Bind Main Menu UI, live 3D panorama & saved settings IMMEDIATELY so the title screen paints fully on Frame 0!
     this.controls = new ControlManager(this.renderer.domElement, this.sound);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(this.settings.fov, window.innerWidth / window.innerHeight, 0.1, 700);
     this.postfx = null;
-    this.titlePanorama = null;
     this._loadingWorld = false;
 
     this.applySettings();
     this.ui.syncSettingsUI(this.settings);
     this.ui.bind(this);
+    this.titlePanorama = new TitlePanorama(this.textures);
+    this.titlePanorama.render(this.renderer);
 
-    // Defer 3D Title Panorama, PostFX targets & gameplay crack/HUD texture warmup to the very next frame
-    // so the main menu paints instantly with zero blocking stall on desktop & iPad!
+    // Defer PostFX shader targets & gameplay crack textures to the next frame so the menu is instant!
     requestAnimationFrame(() => {
-      if (!this.running && !this._loadingWorld && !this.titlePanorama) {
-        this.titlePanorama = new TitlePanorama(this.textures);
-      }
       if (!this.postfx) {
         this.postfx = new PostFXPipeline(this.renderer, this.isTouch);
         this.postfx.setQuality(this.settings.shaders || 'ultra');

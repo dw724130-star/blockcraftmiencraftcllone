@@ -70,8 +70,9 @@ export class TextureManager {
     this.atlasTexture.colorSpace = THREE.SRGBColorSpace;
     this.atlasTexture.generateMipmaps = false;
 
-    // Instant Main Menu startup: UI icons build immediately; gameplay crack & HUD textures warm lazily!
+    // Instant Main Menu startup: HUD & UI icons build immediately (<1ms); 10 crack WebGL textures warm lazily!
     this._gameplayTexReady = false;
+    this.buildHudIcons();
     this.buildUiIcons();
   }
 
@@ -79,7 +80,6 @@ export class TextureManager {
     if (this._gameplayTexReady) return;
     this._gameplayTexReady = true;
     this.buildCrackTextures();
-    this.buildHudIcons();
   }
 
   addTile(name, drawFn) {
