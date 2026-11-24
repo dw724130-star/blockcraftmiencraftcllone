@@ -29,6 +29,10 @@ export class Player {
     this.cameraMode = 0; // 0 = 1st person, 1 = 3rd person back, 2 = 3rd person front
     this.walkPhase = 0;
     this.eatAnim = 0;
+    this.isEating = false;
+    this.eatProgress = 0;
+    this.eatTime = 0;
+    this._eatBlend = 0;
     this.baseFov = camera.fov || 72;
 
     // Survival stats
@@ -405,7 +409,7 @@ export class Player {
     const onLadder = feetBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
 
     this.sneaking = input.sneak && !this.flying;
-    this.sprinting = input.sprint && input.moveForward > 0.4 && !this.sneaking && (this.mode === 'creative' || this.hunger > 4);
+    this.sprinting = input.sprint && input.moveForward > 0.4 && !this.sneaking && !this.isEating && (this.mode === 'creative' || this.hunger > 4);
 
     // Movement vector relative to yaw
     const sinY = Math.sin(this.yaw);
@@ -420,6 +424,7 @@ export class Player {
     else if (this.sneaking) speed = 2.1;
     else if (this.sprinting) speed = superMob ? 8.6 : 6.5;
     else if (this.inWater) speed = 3.2;
+    if (this.isEating && !this.flying) speed *= 0.48;
     if (hasSpeed && !this.flying) speed *= 1.55;
 
     const targetVx = moveX * speed;
@@ -678,6 +683,8 @@ export class Player {
     // Animate 1st-Person Held Arm/Item
     if (this.swingAnim > 0) this.swingAnim = Math.max(0, this.swingAnim - dt * 5.8);
     if (this.eatAnim > 0) this.eatAnim = Math.max(0, this.eatAnim - dt * 2.5);
+    const eatTarget = this.isEating ? 1 : 0;
+    this._eatBlend = THREE.MathUtils.lerp(this._eatBlend, eatTarget, Math.min(1, dt * (this.isEating ? 14 : 10)));
 
     const speedRatio = Math.min(1.5, horizSpeed / 4.6);
     if (this.onGround && horizSpeed > 0.25) {
@@ -686,18 +693,23 @@ export class Player {
 
     const bobY = this.onGround && horizSpeed > 0.25 ? Math.sin(this.walkPhase * 2) * (this.sprinting ? 0.038 : 0.022) : 0;
     const bobX = this.onGround && horizSpeed > 0.25 ? Math.cos(this.walkPhase) * 0.018 : 0;
-    const eatBounce = this.eatAnim > 0 ? Math.sin(this.eatAnim * Math.PI * 6) * 0.055 : 0;
+    const eb = this._eatBlend;
+    const chewPhase = this.eatTime * 20.0;
+    const eatChompY = eb > 0.01 ? Math.abs(Math.sin(chewPhase)) * 0.068 * eb : 0;
+    const eatChompX = eb > 0.01 ? Math.cos(chewPhase) * 0.024 * eb : 0;
+    const eatChompZ = eb > 0.01 ? Math.sin(chewPhase) * 0.022 * eb : 0;
+    const eatBounce = (this.eatAnim > 0 && !this.isEating) ? Math.sin(this.eatAnim * Math.PI * 6) * 0.04 : 0;
     const swingArc = Math.sin(this.swingAnim * Math.PI);
 
     this.handPivot.position.set(
-      0.52 + bobX - (this.eatAnim > 0 ? 0.16 : 0),
-      -0.46 + bobY + eatBounce + (this.eatAnim > 0 ? 0.12 : 0),
-      -0.62 + swingArc * 0.14
+      0.52 + bobX * (1 - eb * 0.7) - 0.27 * eb + eatChompX,
+      -0.46 + bobY * (1 - eb * 0.7) + 0.19 * eb + eatChompY + eatBounce,
+      -0.62 + swingArc * 0.14 + 0.06 * eb + eatChompZ
     );
     this.handPivot.rotation.set(
-      0.22 - swingArc * 1.05,
-      -0.26 + swingArc * 0.28,
-      0.08 + swingArc * 0.22
+      0.22 - swingArc * 1.05 + 0.32 * eb - eatChompY * 1.4,
+      -0.26 + swingArc * 0.28 + 0.58 * eb,
+      0.08 + swingArc * 0.22 + 0.26 * eb + eatChompX * 2.2
     );
 
     // Animate 3D Player Model (for 3rd-person views)
@@ -722,11 +734,15 @@ export class Player {
     pm.rightLeg.rotation.x = THREE.MathUtils.lerp(pm.rightLeg.rotation.x, -legSwing, Math.min(1, dt * 16));
     pm.leftArm.rotation.x = THREE.MathUtils.lerp(pm.leftArm.rotation.x, -legSwing * 0.85, Math.min(1, dt * 16));
 
-    // Right arm combines walk swing + mining/attack swing
-    const rightArmTarget = this.swingAnim > 0
-      ? (1.45 - swingArc * 1.9)
-      : (legSwing * 0.85 + (held ? 0.25 : 0));
+    // Right arm combines walk swing + eating raise + mining/attack swing
+    const rightArmTarget = this.isEating
+      ? (1.28 + Math.sin(this.eatTime * 19.0) * 0.22)
+      : (this.swingAnim > 0
+          ? (1.45 - swingArc * 1.9)
+          : (legSwing * 0.85 + (held ? 0.25 : 0)));
     pm.rightArm.rotation.x = THREE.MathUtils.lerp(pm.rightArm.rotation.x, rightArmTarget, Math.min(1, dt * 20));
+    const rightArmZTarget = this.isEating ? -0.32 : 0;
+    pm.rightArm.rotation.z = THREE.MathUtils.lerp(pm.rightArm.rotation.z, rightArmZTarget, Math.min(1, dt * 16));
 
     // Held item on 3D player model
     pm.heldItem.visible = !!held;

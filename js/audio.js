@@ -122,6 +122,70 @@ export class SoundManager {
     src.stop(now + 0.44);
   }
 
+  playFlintSteel() {
+    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    // Crisp metallic clink + bright spark crackle
+    const osc = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(2950, now);
+    osc.frequency.exponentialRampToValueAtTime(1450, now + 0.06);
+    og.gain.setValueAtTime(0.14, now);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(og);
+    og.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.08);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.setValueAtTime(4200, now);
+    filt.Q.value = 1.6;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.16, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    src.connect(filt);
+    filt.connect(ng);
+    ng.connect(this.ctx.destination);
+    src.start(now);
+    src.stop(now + 0.15);
+  }
+
+  playBowShoot() {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(360 + Math.random() * 50, now);
+    osc.frequency.exponentialRampToValueAtTime(125, now + 0.13);
+    g.gain.setValueAtTime(0.16, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  }
+
+  playArrowHit() {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(580, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.06);
+    g.gain.setValueAtTime(0.12, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(g);
+    g.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  }
+
   playExplosion() {
     if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
@@ -173,7 +237,45 @@ export class SoundManager {
   }
 
   playEat() {
-    this.playBlock('grass', false);
+    if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 620 + Math.random() * 420;
+    filter.Q.value = 1.8;
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+    src.start(now, Math.random() * 0.2);
+    src.stop(now + 0.11);
+  }
+
+  playEatFinish() {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    // Satisfying swallow/burp finish cue
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(210, now);
+    osc.frequency.exponentialRampToValueAtTime(125, now + 0.09);
+    osc.frequency.exponentialRampToValueAtTime(280, now + 0.17);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.11, now + 0.025);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.2);
   }
 
   playSplash() {

@@ -18,6 +18,7 @@ export class ControlManager {
       sneak: false,
       sprint: false,
       breaking: false,
+      using: false,
       lookDeltaX: 0,
       lookDeltaY: 0
     };
@@ -51,6 +52,7 @@ export class ControlManager {
     this.touchJumpHeld = false;
     this.touchBreakHeld = false;
     this.touchPlaceHeld = false;
+    this.mousePlaceHeld = false;
     this._placeRepeatTimer = null;
     this.isFlying = false;
     this.lastJumpTap = 0;
@@ -93,6 +95,7 @@ export class ControlManager {
     this.touchSneakHeld = false;
     this.touchBreakHeld = false;
     this.touchPlaceHeld = false;
+    this.mousePlaceHeld = false;
     if (this._placeRepeatTimer) {
       clearInterval(this._placeRepeatTimer);
       this._placeRepeatTimer = null;
@@ -101,6 +104,7 @@ export class ControlManager {
     this.input.moveRight = 0;
     this.input.jump = false;
     this.input.breaking = false;
+    this.input.using = false;
     this.input.lookDeltaX = 0;
     this.input.lookDeltaY = 0;
     const knob = document.getElementById('joystick-knob');
@@ -491,12 +495,27 @@ export class ControlManager {
         this.input.breaking = true;
         if (this.onTapAttack) this.onTapAttack();
       } else if (e.button === 2) {
-        if (this.onPlaceOrUse) this.onPlaceOrUse();
+        this.mousePlaceHeld = true;
+        if (this.onPlaceOrUse) this.onPlaceOrUse(false);
       }
     });
 
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.input.breaking = false;
+      else if (e.button === 2) this.mousePlaceHeld = false;
+    });
+
+    window.addEventListener('blur', () => {
+      this.mousePlaceHeld = false;
+      this.input.breaking = false;
+      this.input.using = false;
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement !== this.canvas) {
+        this.mousePlaceHeld = false;
+        if (!this.touchBreakHeld) this.input.breaking = false;
+      }
     });
 
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -536,6 +555,7 @@ export class ControlManager {
     this.input.sprint = this.keys.has(kb.sprint) || this.joySprint || this.dpadSprint || this.touchSprintToggle;
     if (this.touchBreakHeld) this.input.breaking = true;
     else if (!document.pointerLockElement) this.input.breaking = false;
+    this.input.using = this.touchPlaceHeld || (this.mousePlaceHeld && document.pointerLockElement === this.canvas);
 
     return this.input;
   }

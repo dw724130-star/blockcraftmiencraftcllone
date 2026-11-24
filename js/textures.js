@@ -575,6 +575,119 @@ export class TextureManager {
       fillNoise(c, x, y, '#5e3e22', 12, 75);
       for (let iy = 1; iy < 16; iy += 3) px(c, x, y, 0, iy, '#402914', 16, 1);
     });
+
+    // --- NEW BIOME BLOCK TEXTURES ---
+    // Acacia (warm grey bark + vibrant orange heartwood & dry savanna canopy)
+    this.addTile('acacia_log_side', (c, x, y) => drawLogSide(c, x, y, '#6e685f', '#4d4841', '#8a8378', 81));
+    this.addTile('acacia_log_top', (c, x, y) => drawLogTop(c, x, y, '#69625a', '#b86233', '#d47944', 82));
+    this.addTile('acacia_planks', (c, x, y) => drawPlanks(c, x, y, '#bd6435', '#d47a46', '#9e4e24', '#6b3315', 83));
+    this.addTile('acacia_leaves', (c, x, y) => drawLeaves(c, x, y, '#8ba836', '#6d8a25', '#4c6318', 84));
+
+    // Jungle (moss-flecked warm brown bark + dense emerald canopy)
+    this.addTile('jungle_log_side', (c, x, y) => {
+      drawLogSide(c, x, y, '#5c4b2e', '#3d311c', '#735f3c', 85);
+      for (let i = 0; i < 8; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 86) * 14), Math.floor(pxHash(i, 2, 86) * 14), '#4d7a2b', 2, 1);
+      }
+    });
+    this.addTile('jungle_log_top', (c, x, y) => drawLogTop(c, x, y, '#544428', '#9c714e', '#bd8e66', 87));
+    this.addTile('jungle_planks', (c, x, y) => drawPlanks(c, x, y, '#a87852', '#bf8c63', '#8c603e', '#5e3d24', 88));
+    this.addTile('jungle_leaves', (c, x, y) => drawLeaves(c, x, y, '#38a832', '#268522', '#175916', 89));
+
+    // Cherry Blossom (deep plum-brown bark + pale sakura planks + lush pink petals!)
+    this.addTile('cherry_log_side', (c, x, y) => drawLogSide(c, x, y, '#472a36', '#2e1821', '#633c4c', 90));
+    this.addTile('cherry_log_top', (c, x, y) => drawLogTop(c, x, y, '#472a36', '#e3a8b8', '#f5c9d5', 91));
+    this.addTile('cherry_planks', (c, x, y) => drawPlanks(c, x, y, '#ebb6c4', '#f7ccd8', '#d69cac', '#a66d7e', 92));
+    this.addTile('cherry_leaves', (c, x, y) => drawLeaves(c, x, y, '#ffd9e8', '#f59ec0', '#d96c98', 93));
+
+    // Badlands Red Sand & Stratified Terracotta
+    this.addTile('red_sand', (c, x, y) => {
+      const sands = ['#b85828', '#c96532', '#d6733e', '#e0814c', '#a34a1f'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const wave = Math.sin((ix * 0.55 + iy * 0.9)) * 0.5 + 0.5;
+          const h = pxHash(ix, iy, 94);
+          px(c, x, y, ix, iy, sands[Math.min(4, Math.max(0, Math.floor((wave * 0.5 + h * 0.5) * 5)))]);
+        }
+      }
+    });
+    const drawTerracotta = (c, x, y, base, hi, lo, s) => {
+      fillNoise(c, x, y, base, 7, s);
+      for (let iy = 0; iy < 16; iy += 4) {
+        px(c, x, y, 0, iy, iy % 8 === 0 ? hi : lo, 16, 1);
+      }
+    };
+    this.addTile('terracotta', (c, x, y) => drawTerracotta(c, x, y, '#9c6248', '#ad7256', '#855038', 95));
+    this.addTile('terracotta_red', (c, x, y) => drawTerracotta(c, x, y, '#943c2e', '#ab4b3b', '#7a2e22', 96));
+    this.addTile('terracotta_orange', (c, x, y) => drawTerracotta(c, x, y, '#b85c28', '#cf6e36', '#99491c', 97));
+    this.addTile('terracotta_yellow', (c, x, y) => drawTerracotta(c, x, y, '#c48d29', '#d9a138', '#a3721c', 98));
+
+    // Mossy Cobblestone (cobble laced with vivid forest moss!)
+    this.addTile('mossy_cobblestone', (c, x, y) => {
+      c.fillStyle = '#3c5426';
+      c.fillRect(x, y, 16, 16);
+      const stones = [
+        [0, 0, 7, 4], [8, 0, 8, 5],
+        [0, 5, 4, 4], [5, 5, 6, 5], [12, 6, 4, 4],
+        [0, 10, 6, 5], [7, 11, 5, 4], [13, 11, 3, 4]
+      ];
+      stones.forEach(([sx, sy, sw, sh], i) => {
+        const base = i % 3 === 0 ? '#787b75' : (i % 3 === 1 ? '#868a82' : '#6c706a');
+        px(c, x, y, sx, sy, base, sw, sh);
+        px(c, x, y, sx, sy, '#9ca198', Math.max(1, sw - 1), 1);
+        px(c, x, y, sx, sy + sh - 1, '#4c6e2c', sw, 1);
+      });
+      for (let i = 0; i < 18; i++) {
+        const mx = Math.floor(pxHash(i, 1, 99) * 15);
+        const my = Math.floor(pxHash(i, 2, 99) * 15);
+        px(c, x, y, mx, my, i % 2 === 0 ? '#4d822a' : '#66a339', 2, 1);
+      }
+    });
+
+    // Swamp Mud & Packed Ice
+    this.addTile('mud', (c, x, y) => {
+      fillNoise(c, x, y, '#3d383c', 9, 100);
+      for (let i = 0; i < 12; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 101) * 14), Math.floor(pxHash(i, 2, 101) * 14), i % 2 === 0 ? '#2b272b' : '#524b52', 2, 1);
+      }
+    });
+    this.addTile('packed_ice', (c, x, y) => {
+      fillNoise(c, x, y, '#8bbbe8', 8, 102);
+      px(c, x, y, 2, 2, '#c8e6ff', 5, 1);
+      px(c, x, y, 3, 3, '#b0daff', 3, 1);
+      px(c, x, y, 9, 10, '#c8e6ff', 5, 1);
+      px(c, x, y, 1, 12, '#73a6d6', 6, 1);
+    });
+
+    // Biome-Tinted Grass Variants (Savanna dry olive-gold, Jungle lush emerald, Swamp murky moss!)
+    const makeGrassTiles = (prefix, greens, seedBase) => {
+      this.addTile(`${prefix}_top`, (c, x, y) => {
+        for (let iy = 0; iy < 16; iy++) {
+          for (let ix = 0; ix < 16; ix++) {
+            const clump = pxHash(ix >> 1, iy >> 1, seedBase);
+            const fine = pxHash(ix, iy, seedBase + 1);
+            px(c, x, y, ix, iy, greens[Math.min(4, Math.max(0, Math.floor((clump * 0.55 + fine * 0.45) * 5)))]);
+          }
+        }
+      });
+      this.addTile(`${prefix}_side`, (c, x, y) => {
+        drawMinecraftDirt(c, x, y, seedBase + 2);
+        const fringe = [4, 5, 3, 4, 6, 4, 3, 5, 4, 3, 5, 6, 4, 3, 4, 5];
+        for (let ix = 0; ix < 16; ix++) {
+          const drop = fringe[ix];
+          for (let iy = 0; iy < drop; iy++) {
+            const h = pxHash(ix, iy, seedBase + 3);
+            const col = iy === 0 ? (h > 0.5 ? greens[3] : greens[2])
+              : (iy === drop - 1 ? greens[0] : (h > 0.5 ? greens[2] : greens[1]));
+            px(c, x, y, ix, iy, col);
+          }
+          if (drop < 16) px(c, x, y, ix, drop, '#4f3522');
+        }
+      });
+    };
+    makeGrassTiles('savanna_grass', ['#787a2e', '#8c8f38', '#a1a343', '#b3b54e', '#c2c45c'], 110);
+    makeGrassTiles('jungle_grass', ['#247a27', '#2f9132', '#3aa83d', '#48bd4b', '#5ad15d'], 120);
+    makeGrassTiles('swamp_grass', ['#3a4d2b', '#475c34', '#546b3e', '#627a48', '#6f8754'], 130);
   }
 
   // Lazy on-demand 16x16 (32x32) icon caching — cuts initial startup time dramatically!
@@ -618,13 +731,97 @@ export class TextureManager {
     const tierPal = {
       wooden:  { O: '#2b1a0c', D: '#6b4720', M: '#9c6b36', L: '#c99757', H: '#e3b878', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       stone:   { O: '#1c1e22', D: '#575c63', M: '#878d96', L: '#b2b8c2', H: '#d8dee6', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      golden:  { O: '#362004', D: '#a36407', M: '#e8a617', L: '#ffde47', H: '#fff9b8', W: '#ffffff', R: '#e04231', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
+      gold:    { O: '#362004', D: '#a36407', M: '#e8a617', L: '#ffde47', H: '#fff9b8', W: '#ffffff', R: '#e04231', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       iron:    { O: '#1b1f26', D: '#7c8594', M: '#bac4d1', L: '#e3eaf2', H: '#ffffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       diamond: { O: '#092a36', D: '#128996', M: '#2ad1db', L: '#7ef3fa', H: '#e3ffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       leather: { O: '#291509', D: '#693a1a', M: '#9c5a2d', L: '#c47a45', H: '#de9864', S: '#7d5225', s: '#a6743c', d: '#4f3215' }
     };
 
-    if (def.toolType) {
-      const pal = tierPal[key.split('_')[0]] || tierPal.iron;
+    if (def.toolType && def.toolType !== 'flint_and_steel') {
+      const matKey = key.split('_')[0];
+      const pal = tierPal[matKey] || tierPal.iron;
+      // Bespoke royal gilded pixel-art sprites for Golden Tools!
+      if (matKey === 'golden' || matKey === 'gold') {
+        if (def.toolType === 'sword') {
+          drawGrid([
+            '............OOO.',
+            '...........OWHO.',
+            '..........OWHLO.',
+            '.........OWHLMO.',
+            '........OHWLMDO.',
+            '.......OHWLMDO..',
+            '..OO..OHWLMDO...',
+            '.OHLOOHWLMDO....',
+            '..ODHLLMMDO.....',
+            '...ODHLMDO......',
+            '....ODHLO.......',
+            '...OdSOHLO......',
+            '..OdSO.ODO......',
+            '.OdsO...O.......',
+            '.ORO............',
+            '..O.............'
+          ], pal);
+        } else if (def.toolType === 'pickaxe') {
+          drawGrid([
+            '................',
+            '....OOOOOOO.....',
+            '...OWWHLLLMO....',
+            '..OHHLLLLMMLO...',
+            '..OOD..OOHWMO...',
+            '.......OLsLMO...',
+            '......OsOOLMO...',
+            '.....OsO..OMO...',
+            '....OsO...OMO...',
+            '...OsO....ODO...',
+            '..OsO.....ODO...',
+            '.OsO.......O....',
+            '.ORO............',
+            '..O.............',
+            '................',
+            '................'
+          ], pal);
+        } else if (def.toolType === 'axe') {
+          drawGrid([
+            '................',
+            '......OOOOO.....',
+            '.....OWWHLLOO...',
+            '....OWHLLLMMO...',
+            '....OHLLMDsMO...',
+            '....OMMLDsMMO...',
+            '.....OOOsODMO...',
+            '......OsO.ODO...',
+            '.....OsO...O....',
+            '....OsO.........',
+            '...OsO..........',
+            '..OsO...........',
+            '.OsO............',
+            '.ORO............',
+            '..O.............',
+            '................'
+          ], pal);
+        } else { // golden shovel
+          drawGrid([
+            '................',
+            '..........OOOO..',
+            '.........OWHLLO.',
+            '........OWHLLMO.',
+            '........OHLLMDO.',
+            '.......OOHMMDO..',
+            '.......OLsODO...',
+            '......OsO.OO....',
+            '.....OsO........',
+            '....OsO.........',
+            '...OsO..........',
+            '..OsO...........',
+            '.OsO............',
+            '.ORO............',
+            '..O.............',
+            '................'
+          ], pal);
+        }
+        return;
+      }
       if (def.toolType === 'sword') {
         drawGrid([
           '............OOO.',
@@ -706,7 +903,89 @@ export class TextureManager {
     }
 
     if (def.armorSlot !== undefined) {
-      const pal = tierPal[key.split('_')[0]] || tierPal.iron;
+      const matKey = key.split('_')[0];
+      const pal = tierPal[matKey] || tierPal.iron;
+      // Bespoke royal gilded pixel-art sprites for Golden Armor!
+      if (matKey === 'golden' || matKey === 'gold') {
+        if (def.armorSlot === 0) { // Royal Crested Golden Helmet
+          drawGrid([
+            '................',
+            '......OOOO......',
+            '....OOHWWLOO....',
+            '...OHWLLLLMMO...',
+            '..OHHLLRRMMDMO..',
+            '..OHLLMMMMMDMO..',
+            '..OLMOOOOOODMO..',
+            '..OHMO....ODMO..',
+            '..OLMO....ODMO..',
+            '..OMMO....ODMO..',
+            '..ODDO....ODDO..',
+            '...OO......OO...',
+            '................',
+            '................',
+            '................',
+            '................'
+          ], pal);
+        } else if (def.armorSlot === 1) { // Ornate Gilded Chestplate
+          drawGrid([
+            '................',
+            '..OOOO....OOOO..',
+            '.OWHLLO..OMMLDO.',
+            '.OHLLMO..OMMMDO.',
+            '.OLMMMOOOOOMMDO.',
+            '.OMMHHLRRLMMMDO.',
+            '.ODOMHLLLLMODO..',
+            '..O.OLMMMMMO.O..',
+            '....OMHLLMMO....',
+            '....OMMMMDDO....',
+            '....ODHLLDDO....',
+            '....ODDDDDDO....',
+            '....OODDDDOO....',
+            '......OOOO......',
+            '................',
+            '................'
+          ], pal);
+        } else if (def.armorSlot === 2) { // Ornate Golden Leggings
+          drawGrid([
+            '................',
+            '...OOOOOOOOOO...',
+            '..OHWLLRRLLMMO..',
+            '..OLMMMMMMMMDO..',
+            '..OMMMOOOOOMDO..',
+            '..OHMO....OMDO..',
+            '..OLMO....OMDO..',
+            '..OWLO....OLMO..',
+            '..OMMO....OMDO..',
+            '..OMDO....ODDO..',
+            '..OLDO....ODDO..',
+            '..ODDO....ODDO..',
+            '..ODDO....ODDO..',
+            '...OO......OO...',
+            '................',
+            '................'
+          ], pal);
+        } else { // Gilded Golden Boots
+          drawGrid([
+            '................',
+            '................',
+            '................',
+            '................',
+            '..OOOO....OOOO..',
+            '..OWHO....OHWO..',
+            '..OHLO....OLHO..',
+            '..OLMO....OMLO..',
+            '..OMMO....OMMO..',
+            '.OWHLO....OLHWO.',
+            '.OLMMO....OMMLO.',
+            '.ODDDDO..ODDDDO.',
+            '.OOOOOO..OOOOOO.',
+            '................',
+            '................',
+            '................'
+          ], pal);
+        }
+        return;
+      }
       if (def.armorSlot === 0) { // Helmet
         drawGrid([
           '................',
@@ -1194,11 +1473,11 @@ export class TextureManager {
           '................',
           '................',
           '.......OOOOOO...',
-          '.....OOHHLLLLOO.',
-          '....OHHLLLLMMMO.',
-          '...OHHLLLLMMMMO.',
-          '..OHHLLLLMMMMDO.',
-          '.OHLLLLMMMMMDDO.',
+          '.....OOHWWLLLOO.',
+          '....OHWWLLLHMMO.',
+          '...OHHLLLLHHMMO.',
+          '..OHHLLLLHMMMDO.',
+          '.OHLLLLHMMMMDDO.',
           '.OLMMMMMMMDDDDO.',
           '.OMMMMMDDDDDDO..',
           '.ODDDDDDDDDDO...',
@@ -1206,7 +1485,7 @@ export class TextureManager {
           '................',
           '................',
           '................'
-        ], { O: '#3b2406', H: '#fff9b8', L: '#ffe052', M: '#eba91c', D: '#b06d09' });
+        ], { O: '#382104', W: '#ffffff', H: '#fff7a8', L: '#ffdb42', M: '#e39e14', D: '#9e5d06' });
         break;
 
       case 'coal':
@@ -1233,22 +1512,43 @@ export class TextureManager {
       case 'raw_iron':
         drawGrid([
           '................',
-          '................',
-          '.....OOOOOO.....',
-          '...OOHHLLMMO....',
-          '..OHHLLMMSSDO...',
-          '..OLLMMMSSSDDO..',
-          '.OLMHHMMSSMDDO..',
-          '.OMMMSSMMMMDDO..',
-          '.OMMMMSSMMDDDO..',
-          '.ODMMMMDDDDDDO..',
-          '..ODMMDDDDDDO...',
-          '...ODDDDDDDO....',
-          '....OOOOOOO.....',
-          '................',
+          '......OOOOO.....',
+          '....OOHHHLLOO...',
+          '...OHWLLMMSSLO..',
+          '..OHLLMMSSSMMDO.',
+          '..OLMMSSSMMMMDDO',
+          '.OOHMMMSMMHHMMDO',
+          '.OHLLMMMMHLLMMDO',
+          '.OLMMMDDMMSSMDDO',
+          '.OMMMDDMMMSSDDDO',
+          '..OMDDDDMMMMDDO.',
+          '..OODDDDDDDDDO..',
+          '....OODDDDDDO...',
+          '......OOOOOO....',
           '................',
           '................'
-        ], { O: '#2b1d14', H: '#f7dec8', L: '#d9b08c', M: '#b3825f', S: '#cdd6e0', D: '#785138' });
+        ], { O: '#2b1c12', W: '#fff4eb', H: '#f2d3ba', L: '#d9aa84', M: '#b07b58', S: '#cfd8e3', D: '#704930' });
+        break;
+
+      case 'raw_gold':
+        drawGrid([
+          '................',
+          '........OOOO....',
+          '......OOHWLLOO..',
+          '...OOOOOHLLMMO..',
+          '..OHWLLOHLMMMDO.',
+          '.OHLLMMOOMMMMDDO',
+          '.OLMMHHLLMMMMDDO',
+          '.OMMHWWLLMMDDDO.',
+          '.ODMMLLLMMMDDDO.',
+          '..ODMMHHLMDDDDO.',
+          '..OOMMLLMMDDDDO.',
+          '...ODMMMMDDDDO..',
+          '....ODDDDDDDO...',
+          '.....OOOOOOO....',
+          '................',
+          '................'
+        ], { O: '#382004', W: '#ffffff', H: '#fff8a8', L: '#ffda3d', M: '#e39d14', D: '#a66207' });
         break;
 
       case 'bed':
@@ -1396,6 +1696,48 @@ export class TextureManager {
           '................',
           '................'
         ], { O: '#181a1f', H: '#949ba8', M: '#5c616e', D: '#33363f' });
+        break;
+
+      case 'flint':
+        drawGrid([
+          '................',
+          '................',
+          '.......OOOO.....',
+          '......OHLLMO....',
+          '.....OHLMMMDO...',
+          '....OHLMMMMDDO..',
+          '...OHLMMMMMDDDO.',
+          '...OLMMMMMMDDDO.',
+          '..OLMMMMDDDDDDO.',
+          '..OMMMMDDDDDDDO.',
+          '..OMMMDDDDDDDO..',
+          '...ODDDDDDDDO...',
+          '....ODDDDDDO....',
+          '.....OOOOOO.....',
+          '................',
+          '................'
+        ], { O: '#0f1117', H: '#8c95a6', L: '#5c6370', M: '#3a3f4a', D: '#22252e' });
+        break;
+
+      case 'flint_and_steel':
+        drawGrid([
+          '................',
+          '....OOOOOO......',
+          '...OHHLLLLOO....',
+          '..OHLMMMMMMLO...',
+          '..OLMO....OMLO..',
+          '..OLMO..OOOMDO..',
+          '..OMMO.OYY.OO...',
+          '..OMMO..YF..OO..',
+          '...ODMO....OflO.',
+          '...OODMO..OflfO.',
+          '.....OO..OflffO.',
+          '........OflffdO.',
+          '........OffdddO.',
+          '.........OdddO..',
+          '..........OOO...',
+          '................'
+        ], { O: '#16181f', H: '#ffffff', L: '#d6dde6', M: '#9aa4b3', D: '#656e7d', f: '#3d424d', l: '#6e7687', d: '#23262e', Y: '#fff08a', F: '#ff8a24' });
         break;
 
       default:
@@ -1661,6 +2003,13 @@ export class TextureManager {
       for (let y = 0; y < 16; y += 2) {
         for (let x = (y % 4 === 0 ? 0 : 1); x < 16; x += 2) {
           px(ctx, 0, 0, x, y, (x + y) % 3 === 0 ? lightStr : darkStr, 1, 1);
+        }
+      }
+    } else if (pattern === 'stripes') {
+      for (let y = 0; y < 16; y++) {
+        for (let x = 0; x < 16; x++) {
+          const band = (x + ((y >> 2) & 1)) % 4;
+          px(ctx, 0, 0, x, y, band < 2 ? darkStr : (band === 2 ? lightStr : baseStr));
         }
       }
     }
@@ -2151,6 +2500,28 @@ export class TextureManager {
       p(2, 2, '#ffe066', 2, 1);
       p(3, 1, '#fff5b8', 1, 3);
       p(14, 1, '#5cf2f7', 1, 2);
+    });
+
+    // 2b. EAT — Crisp pixel-art juicy drumstick with warm appetite sparkle (when holding food!)
+    this.uiIcons.eat = make((p) => {
+      // Bone handle (bottom-left)
+      p(1, 11, '#29150a', 4, 4);
+      p(2, 12, '#fff8ed', 2, 2);
+      p(4, 9, '#29150a', 3, 3);
+      p(5, 10, '#e8dcc8', 1, 1);
+      // Meaty roasted drumstick body (center to upper-right)
+      p(6, 2, '#291206', 7, 2);
+      p(5, 3, '#291206', 9, 6);
+      p(6, 8, '#291206', 7, 2);
+      p(7, 3, '#f7c873', 5, 2);
+      p(6, 4, '#de9338', 7, 4);
+      p(7, 8, '#a65416', 5, 1);
+      p(8, 3, '#fff0b3', 2, 1);
+      p(11, 5, '#b8621d', 2, 3);
+      // Warm bite/crumb sparkle!
+      p(2, 3, '#ffe066', 2, 1);
+      p(3, 2, '#fff5b8', 1, 3);
+      p(13, 10, '#ffb74d', 1, 1);
     });
 
     // 3. MINE — Crisp pixel iron/diamond pickaxe!

@@ -6,7 +6,7 @@ import { World } from './world.js';
 import { SkySystem } from './sky.js';
 import { EffectsManager } from './effects.js';
 import { ModManager } from './mods.js';
-import { SMELTING_RECIPES } from './recipes.js';
+import { SMELTING_RECIPES, AUTO_SMELT_ORES } from './recipes.js';
 import { Inventory } from './inventory.js';
 import { Player } from './player.js';
 import { EntityManager } from './mobs.js';
@@ -79,6 +79,10 @@ class BlockCraftGame {
     this._shakeIntensity = 0;
     this._attackCooldown = 0;
     this._holdAttackTimer = 0;
+    this._eatChewTimer = 0;
+    this._eatCooldown = 0;
+    this._eatSlot = -1;
+    this._lastFullToast = 0;
     this._eyeVec = new THREE.Vector3();
     this._dirVec = new THREE.Vector3();
     this._cachedBiome = 'Plains';
@@ -86,7 +90,7 @@ class BlockCraftGame {
     this._cachedBiomeBz = 1e9;
     this._emptyInput = {
       moveForward: 0, moveRight: 0, jump: false, sneak: false, sprint: false,
-      breaking: false, lookDeltaX: 0, lookDeltaY: 0
+      breaking: false, using: false, lookDeltaX: 0, lookDeltaY: 0
     };
 
     this.bindControlActions();
@@ -364,6 +368,23 @@ class BlockCraftGame {
         shaders: shaderMode
       });
 
+      // Wire natural leaf decay particles & authentic apple/stick drops!
+      this.world.onLeafDecay = (lx, ly, lz, leafBlockId) => {
+        const def = getBlockDef(leafBlockId);
+        if (this.effects && def && this.player) {
+          const d2 = (lx - this.player.pos.x) ** 2 + (ly - this.player.pos.y) ** 2 + (lz - this.player.pos.z) ** 2;
+          if (d2 < 32 * 32) this.effects.spawnBlockBreak(lx, ly, lz, def);
+        }
+        if (this.entities) {
+          const r = Math.random();
+          if (leafBlockId === BLOCK.OAK_LEAVES && r < 0.06) {
+            this.entities.spawnDrop('apple', 1, lx + 0.5, ly + 0.4, lz + 0.5);
+          } else if (r < 0.13) {
+            this.entities.spawnDrop('stick', 1, lx + 0.5, ly + 0.4, lz + 0.5);
+          }
+        }
+      };
+
       // Restore modified blocks & tile entities before preloading spawn chunks
       if (saved) {
         if (Array.isArray(saved.modifiedBlocks)) {
@@ -631,7 +652,7 @@ class BlockCraftGame {
 
     this.controls.onPlaceOrUse = (isRepeat = false) => {
       if (!this.running || !this.player || !this.world) return;
-      if (!isRepeat) this.player.swingAnim = 1.0;
+      const heldDef = this.inventory.getHeldDef();
 
       // 0. Check if tapping USE on a Villager to trade! (Never repeat-open on hold)
       if (!isRepeat && this.entities) {
@@ -639,6 +660,7 @@ class BlockCraftGame {
         const dir = this.player.getLookDirection();
         const mob = this.entities.raycastMob(eye, dir, 4.5);
         if (mob && mob.type === 'villager') {
+          this.player.swingAnim = 1.0;
           this.ui.openTradeModal(mob);
           return;
         }
@@ -649,6 +671,7 @@ class BlockCraftGame {
         const { x, y, z, blockId } = this.currentTarget;
         const bdef = getBlockDef(blockId);
         if (bdef && bdef.interactive && !this.player.sneaking) {
+          this.player.swingAnim = 1.0;
           if (bdef.interactive === 'crafting_table') {
             this.ui.openInventory(true);
             return;
@@ -670,7 +693,16 @@ class BlockCraftGame {
             return;
           }
           if (bdef.interactive === 'tnt') {
-            this.igniteTnt(x, y, z, 2.6);
+            if (heldDef && heldDef.id === 'flint_and_steel') {
+              if (this.sound.playFlintSteel) this.sound.playFlintSteel();
+              if (this.player.mode === 'survival') {
+                this.inventory.damageSelectedTool(1);
+                this.ui.updateHotbar();
+              }
+              this.igniteTnt(x, y, z, 2.6);
+            } else {
+              this.ui.toast('Use Flint and Steel to ignite TNT!');
+            }
             return;
           }
           if (bdef.interactive === 'bed') {
@@ -691,20 +723,19 @@ class BlockCraftGame {
         }
       }
 
-      // 2. Eat food if holding food
-      const heldDef = this.inventory.getHeldDef();
-      if (!isRepeat && heldDef && heldDef.food) {
-        if (this.player.mode === 'survival' && (this.player.hunger < this.player.maxHunger || this.player.hp < this.player.maxHp)) {
-          this.player.hunger = Math.min(this.player.maxHunger, this.player.hunger + heldDef.food);
-          this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.ceil(heldDef.food * 0.5));
-          this.player.eatAnim = 1.0;
-          this.inventory.consumeSelected(1);
-          this.sound.playEat();
-          this.ui.updateStats();
-          this.ui.updateHotbar();
-          return;
+      // 2. Food items use hold-to-eat animation in updateEating() — never instant-consume!
+      if (heldDef && heldDef.food) {
+        if (!isRepeat && this.player.mode === 'survival' && this.player.hunger >= this.player.maxHunger && this.player.hp >= this.player.maxHp) {
+          const now = performance.now();
+          if (now - this._lastFullToast > 1800) {
+            this._lastFullToast = now;
+            this.ui.toast('Hunger & health are already full!');
+          }
         }
+        return;
       }
+
+      if (!isRepeat) this.player.swingAnim = 1.0;
 
       // 3. Place block (with true 2-block-long × 1-block-wide Bed placement!)
       if (this.currentTarget && heldDef && heldDef.isBlock) {
@@ -927,7 +958,11 @@ class BlockCraftGame {
       this.ui.addChatMessage('Healed to full health & hunger');
       return true;
     } else if (cmd === 'give' && parts[1]) {
-      const item = parts[1].toLowerCase();
+      let item = parts[1].toLowerCase();
+      if (!ITEMS[item] && item.startsWith('gold_')) {
+        const alt = 'golden_' + item.slice(5);
+        if (ITEMS[alt]) item = alt;
+      }
       const count = Math.max(1, Math.min(64, parseInt(parts[2] || '1', 10) || 1));
       if (ITEMS[item]) {
         this.inventory.addItem(item, count);
@@ -995,7 +1030,10 @@ class BlockCraftGame {
       }
     }
 
-    const LOG_IDS = [BLOCK.OAK_LOG, BLOCK.BIRCH_LOG, BLOCK.SPRUCE_LOG];
+    const LOG_IDS = [
+      BLOCK.OAK_LOG, BLOCK.BIRCH_LOG, BLOCK.SPRUCE_LOG,
+      BLOCK.ACACIA_LOG, BLOCK.JUNGLE_LOG, BLOCK.CHERRY_LOG
+    ];
     const ORE_IDS = [BLOCK.COAL_ORE, BLOCK.IRON_ORE, BLOCK.GOLD_ORE, BLOCK.DIAMOND_ORE];
 
     const toBreak = [[x, y, z]];
@@ -1053,7 +1091,8 @@ class BlockCraftGame {
         const chance = def.dropChance !== undefined ? def.dropChance : 1.0;
         if (Math.random() <= chance) {
           let dropId = def.drop;
-          if (autoSmelt && SMELTING_RECIPES[dropId]) dropId = SMELTING_RECIPES[dropId];
+          if (blockId === BLOCK.GRAVEL && Math.random() < 0.35) dropId = 'flint';
+          if (autoSmelt && AUTO_SMELT_ORES[dropId]) dropId = AUTO_SMELT_ORES[dropId];
           const cnt = def.dropCount || 1;
           if (autoSmelt) {
             this.inventory.addItem(dropId, cnt);
@@ -1071,12 +1110,90 @@ class BlockCraftGame {
     }
   }
 
+  resetEating() {
+    if (!this.player) return;
+    if (this.player.isEating || this.player.eatProgress > 0) {
+      this.player.isEating = false;
+      this.player.eatProgress = 0;
+      this.player.eatTime = 0;
+      this._eatChewTimer = 0;
+      this._eatSlot = -1;
+      if (!this.player.miningTarget) this.ui.updateMiningRing(0, false);
+    }
+  }
+
+  updateEating(dt, using, useMode, eye, dir) {
+    if (this._eatCooldown > 0) this._eatCooldown = Math.max(0, this._eatCooldown - dt);
+
+    const heldDef = this.inventory.getHeldDef();
+    const canEatFood = !!(
+      using &&
+      !useMode &&
+      this.controls.enabled &&
+      !this.player.dead &&
+      heldDef &&
+      heldDef.food &&
+      (this.player.mode === 'creative' || this.player.hunger < this.player.maxHunger || this.player.hp < this.player.maxHp)
+    );
+
+    if (!canEatFood || this._eatCooldown > 0) {
+      this.resetEating();
+      return;
+    }
+
+    // Cancel & restart cleanly if the player switched hotbar slots mid-bite
+    if (this._eatSlot !== this.inventory.selected) {
+      this.player.eatTime = 0;
+      this.player.eatProgress = 0;
+      this._eatChewTimer = 0.22; // Trigger an immediate crunch as soon as eating starts
+      this._eatSlot = this.inventory.selected;
+    }
+
+    const EAT_DURATION = 1.5;
+    this.player.isEating = true;
+    this.player.eatTime += dt;
+    this.player.eatProgress = Math.min(1, this.player.eatTime / EAT_DURATION);
+
+    // Periodic chewing crunch & food crumb particles
+    this._eatChewTimer += dt;
+    if (this._eatChewTimer >= 0.26) {
+      this._eatChewTimer = 0;
+      this.sound.playEat();
+      if (this.effects && this.effects.spawnEatCrumbs) {
+        this.effects.spawnEatCrumbs(eye, dir, heldDef);
+      }
+    }
+
+    if (!this.player.miningTarget) {
+      this.ui.updateMiningRing(this.player.eatProgress, true);
+    }
+
+    if (this.player.eatTime >= EAT_DURATION) {
+      if (this.player.mode === 'survival') {
+        this.player.hunger = Math.min(this.player.maxHunger, this.player.hunger + heldDef.food);
+        this.player.hp = Math.min(this.player.maxHp, this.player.hp + Math.ceil(heldDef.food * 0.5));
+        this.inventory.consumeSelected(1);
+      }
+      if (this.sound.playEatFinish) this.sound.playEatFinish();
+      else this.sound.playEat();
+      this.player.isEating = false;
+      this.player.eatTime = 0;
+      this.player.eatProgress = 0;
+      this._eatChewTimer = 0;
+      this._eatSlot = -1;
+      this._eatCooldown = 0.24;
+      this.ui.updateMiningRing(0, false);
+      this.ui.updateStats();
+      this.ui.updateHotbar();
+    }
+  }
+
   updateMining(dt, breaking) {
     if (!breaking || !this.currentTarget || !this.controls.enabled) {
       this.player.miningTarget = null;
       this.player.miningProgress = 0;
       this.player.updateCrackOverlay(null, 0);
-      this.ui.updateMiningRing(0);
+      if (!this.player.isEating) this.ui.updateMiningRing(0, false);
       return;
     }
 
@@ -1157,12 +1274,19 @@ class BlockCraftGame {
 
       // Dynamic context-aware buttons:
       // - PLACE -> USE when hovering Villager or interactive block (Crafting Table, Furnace, Chest, Bed, TNT)
+      // - PLACE -> EAT when holding food (and not hovering an interactive block/villager)
       // - MINE -> DAMAGE when hovering over any animal/mob!
+      const heldDef = this.inventory.getHeldDef();
       const isVillagerHover = !!(mobHit && lookMob.type === 'villager');
-      const isInteractiveBlock = !!(targetDef && targetDef.interactive && !this.player.sneaking);
+      const isInteractiveBlock = !!(
+        targetDef && targetDef.interactive && !this.player.sneaking &&
+        (targetDef.interactive !== 'tnt' || (heldDef && heldDef.id === 'flint_and_steel'))
+      );
       const useMode = isVillagerHover || (!mobHit && isInteractiveBlock);
+      const eatMode = !useMode && !!(heldDef && heldDef.food);
+      const placeActionMode = useMode ? 'use' : (eatMode ? 'eat' : 'place');
       const damageMode = mobHit;
-      this.ui.updateActionButtons(useMode, damageMode);
+      this.ui.updateActionButtons(placeActionMode, damageMode);
 
       if (isVillagerHover) {
         this.player.highlightMesh.visible = false;
@@ -1205,10 +1329,12 @@ class BlockCraftGame {
       } else {
         this.updateMining(dt, input.breaking && this._attackCooldown <= 0);
       }
+      this.updateEating(dt, input.using && !input.breaking, useMode, eye, dir);
       const maxBuilds = this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2);
       const chunkBudgetMs = this.isTouch ? 3.5 : 4.2;
       this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
       this.world.updateFurnaces(dt);
+      this.world.updateLeafDecay(dt, this.player.pos);
 
       // Cache biome lookup per 4x4 block cell (eliminates 120x/sec Simplex noise!)
       const bx4 = Math.floor(this.player.pos.x) >> 2;
@@ -1234,7 +1360,7 @@ class BlockCraftGame {
         this.effects.updatePrimedTnts(dt, this.world, (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5));
         this.effects.update(dt, this.player.pos, curBiome, this.sky.isNight());
       }
-      this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods, gameRules);
+      this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods, gameRules, this.effects);
 
       // Brief tactile camera shake during nearby TNT / Creeper blasts!
       if (this._shakeTimer > 0) {

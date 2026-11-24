@@ -417,6 +417,10 @@ input, select, textarea {
   height: 44px;
 }
 
+#break-ring.eating #break-ring-fill {
+  stroke: #ff9f2e;
+}
+
 #target-tooltip {
   position: absolute;
   top: max(60px, calc(var(--safe-top) + 52px));
@@ -2100,6 +2104,17 @@ body.mc-theme .touch-action-btn.place-btn.mode-use {
     inset 3px 3px 0 rgba(190, 255, 255, 0.35),
     inset -3px -3px 0 rgba(0, 0, 0, 0.45),
     0 0 16px rgba(92, 242, 247, 0.55);
+}
+
+/* Dynamic PLACE -> EAT highlight when holding food! */
+.touch-action-btn.place-btn.mode-eat,
+body.mc-theme .touch-action-btn.place-btn.mode-eat {
+  background: rgba(196, 108, 24, 0.9);
+  border-color: #ffd57a;
+  box-shadow:
+    inset 3px 3px 0 rgba(255, 232, 170, 0.38),
+    inset -3px -3px 0 rgba(0, 0, 0, 0.45),
+    0 0 16px rgba(255, 179, 71, 0.6);
 }
 
 /* Dynamic MINE -> DAMAGE highlight when hovering over any animal or mob! */

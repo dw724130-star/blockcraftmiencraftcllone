@@ -3,6 +3,7 @@
 export const SMELTING_RECIPES = {
   raw_iron: 'iron_ingot',
   iron_ore: 'iron_ingot',
+  raw_gold: 'gold_ingot',
   gold_ore: 'gold_ingot',
   sand: 'glass',
   cobblestone: 'stone',
@@ -15,7 +16,19 @@ export const SMELTING_RECIPES = {
   raw_salmon: 'cooked_salmon',
   oak_log: 'coal',
   birch_log: 'coal',
-  spruce_log: 'coal'
+  spruce_log: 'coal',
+  acacia_log: 'coal',
+  jungle_log: 'coal',
+  cherry_log: 'coal',
+  red_sand: 'glass'
+};
+
+// Ore-only auto-smelting map used by the Auto-Smelt mod (never smelts wood, sand, or stone!)
+export const AUTO_SMELT_ORES = {
+  raw_iron: 'iron_ingot',
+  iron_ore: 'iron_ingot',
+  raw_gold: 'gold_ingot',
+  gold_ore: 'gold_ingot'
 };
 
 export const FUEL_VALUES = {
@@ -23,9 +36,15 @@ export const FUEL_VALUES = {
   oak_planks: 15,
   birch_planks: 15,
   spruce_planks: 15,
+  acacia_planks: 15,
+  jungle_planks: 15,
+  cherry_planks: 15,
   oak_log: 15,
   birch_log: 15,
   spruce_log: 15,
+  acacia_log: 15,
+  jungle_log: 15,
+  cherry_log: 15,
   stick: 5,
   crafting_table: 15,
   chest: 15
@@ -40,9 +59,13 @@ const RAW_RECIPES = [
   { out: 'oak_planks', count: 4, ingredients: { oak_log: 1 } },
   { out: 'birch_planks', count: 4, ingredients: { birch_log: 1 } },
   { out: 'spruce_planks', count: 4, ingredients: { spruce_log: 1 } },
+  { out: 'acacia_planks', count: 4, ingredients: { acacia_log: 1 } },
+  { out: 'jungle_planks', count: 4, ingredients: { jungle_log: 1 } },
+  { out: 'cherry_planks', count: 4, ingredients: { cherry_log: 1 } },
   { out: 'stick', count: 4, pattern: ['P', 'P'], map: { P: 'any_planks' } },
   { out: 'crafting_table', count: 1, pattern: ['PP', 'PP'], map: { P: 'any_planks' } },
   { out: 'torch', count: 4, pattern: ['C', 'S'], map: { C: 'coal', S: 'stick' } },
+  { out: 'flint_and_steel', count: 1, ingredients: { iron_ingot: 1, flint: 1 } },
   { out: 'sandstone', count: 1, pattern: ['SS', 'SS'], map: { S: 'sand' } },
   { out: 'stone_bricks', count: 4, pattern: ['SS', 'SS'], map: { S: 'stone' } },
 
@@ -67,6 +90,7 @@ const RAW_RECIPES = [
 const TOOL_MATS = [
   { prefix: 'wooden', mat: 'any_planks' },
   { prefix: 'stone', mat: 'cobblestone' },
+  { prefix: 'golden', mat: 'gold_ingot' },
   { prefix: 'iron', mat: 'iron_ingot' },
   { prefix: 'diamond', mat: 'diamond' }
 ];
@@ -83,6 +107,7 @@ for (const tm of TOOL_MATS) {
 // Armor
 const ARMOR_RECIPES = [
   { prefix: 'leather', mat: 'leather' },
+  { prefix: 'golden', mat: 'gold_ingot' },
   { prefix: 'iron', mat: 'iron_ingot' },
   { prefix: 'diamond', mat: 'diamond' }
 ];
@@ -96,7 +121,7 @@ for (const am of ARMOR_RECIPES) {
   );
 }
 
-export const PLANK_TYPES = ['oak_planks', 'birch_planks', 'spruce_planks'];
+export const PLANK_TYPES = ['oak_planks', 'birch_planks', 'spruce_planks', 'acacia_planks', 'jungle_planks', 'cherry_planks'];
 export const WOOL_TYPES = ['wool_white', 'wool_red', 'wool_blue', 'wool_green', 'wool_yellow'];
 
 export function matchesItemTag(itemId, req) {

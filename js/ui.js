@@ -897,14 +897,16 @@ export class UIManager {
     }
   }
 
-  // Dynamic context-aware buttons: PLACE <-> USE and MINE <-> DAMAGE!
-  updateActionButtons(useMode, damageMode) {
-    if (useMode !== this._lastPlaceMode) {
-      this._lastPlaceMode = useMode;
+  // Dynamic context-aware buttons: PLACE <-> USE <-> EAT and MINE <-> DAMAGE!
+  updateActionButtons(placeMode, damageMode) {
+    const mode = typeof placeMode === 'boolean' ? (placeMode ? 'use' : 'place') : (placeMode || 'place');
+    if (mode !== this._lastPlaceMode) {
+      this._lastPlaceMode = mode;
       if (this.dom.btnPlace) {
-        this.dom.btnPlace.classList.toggle('mode-use', useMode);
-        this.dom.btnPlaceLbl.textContent = useMode ? 'USE' : 'PLACE';
-        this.dom.btnPlaceIcon.src = this.textures.getUiIcon(useMode ? 'use' : 'place');
+        this.dom.btnPlace.classList.toggle('mode-use', mode === 'use');
+        this.dom.btnPlace.classList.toggle('mode-eat', mode === 'eat');
+        this.dom.btnPlaceLbl.textContent = mode === 'use' ? 'USE' : (mode === 'eat' ? 'EAT' : 'PLACE');
+        this.dom.btnPlaceIcon.src = this.textures.getUiIcon(mode === 'use' ? 'use' : (mode === 'eat' ? 'eat' : 'place'));
       }
     }
     if (damageMode !== this._lastBreakMode) {
@@ -917,15 +919,17 @@ export class UIManager {
     }
   }
 
-  updateMiningRing(progress) {
+  updateMiningRing(progress, isEating = false) {
     const ring = this.dom.breakRing;
     const fill = this.dom.breakFill;
     if (progress > 0 && progress < 1) {
       ring.classList.remove('hidden');
+      ring.classList.toggle('eating', Boolean(isEating));
       const circ = 113.1;
       fill.setAttribute('stroke-dashoffset', String(circ * (1 - progress)));
     } else {
       ring.classList.add('hidden');
+      ring.classList.remove('eating');
     }
   }
 
@@ -1135,6 +1139,7 @@ export class UIManager {
       if (!a) return null;
       if (a.id.startsWith('diamond')) return { main: '#4ce2e8', dark: '#279aa3', rim: '#a5f8fc' };
       if (a.id.startsWith('iron')) return { main: '#d8dee6', dark: '#949ea8', rim: '#ffffff' };
+      if (a.id.startsWith('golden') || a.id.startsWith('gold')) return { main: '#f5c731', dark: '#b3740e', rim: '#fff59d' };
       if (a.id.startsWith('leather')) return { main: '#8f5934', dark: '#5e391f', rim: '#b87b4f' };
       return null;
     };
@@ -2226,7 +2231,12 @@ export class UIManager {
         'Birch Forest': '#66a83c',
         Desert: '#dfd09c',
         'Snowy Taiga': '#e4f0fa',
-        Mountains: '#8a919c'
+        Mountains: '#8a919c',
+        Savanna: '#a8ab46',
+        Jungle: '#2b9c30',
+        Badlands: '#c96836',
+        Swamp: '#4f663a',
+        'Cherry Grove': '#f2a2c2'
       };
       for (let sy = 0; sy < h; sy += step) {
         for (let sx = 0; sx < w; sx += step) {

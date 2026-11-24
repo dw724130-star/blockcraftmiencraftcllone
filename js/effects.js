@@ -58,6 +58,7 @@ export class EffectsManager {
     this.bursts = [];
     this.cubeGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
     this.crumbGeoCache = {};
+    this.foodCrumbMats = {};
     this.atlasMat = textures
       ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
       : null;
@@ -160,6 +161,74 @@ export class EffectsManager {
         vy: 1.4 + Math.random() * 2.0 + ny * 0.8,
         vz: nz * (1.2 + Math.random() * 1.4) + (Math.random() - 0.5) * 2.2,
         life: 0.28 + Math.random() * 0.22
+      });
+    }
+  }
+
+  // Spray tiny food crumbs right in front of the player while chewing!
+  spawnEatCrumbs(eyePos, lookDir, foodDef) {
+    if (!this.enabled || !eyePos || !lookDir || this.bursts.length > 64) return;
+    const id = foodDef?.id || 'apple';
+    let color = 0xd99957;
+    if (id === 'apple') color = 0xe32626;
+    else if (id === 'bread') color = 0xe8b95b;
+    else if (id.includes('pork') && id.includes('raw')) color = 0xf2949d;
+    else if (id.includes('beef') || id.includes('venison') || id.includes('mutton')) {
+      color = id.includes('raw') ? 0xd42c38 : 0x8a4522;
+    } else if (id.includes('steak')) color = 0x824020;
+    else if (id.includes('salmon')) color = id.includes('raw') ? 0xe36b5f : 0xf2a45a;
+    else if (id.includes('chicken') || id.includes('rabbit')) {
+      color = id.includes('raw') ? 0xfac4b6 : 0xde983c;
+    }
+
+    let mat = this.foodCrumbMats[color];
+    if (!mat) {
+      mat = new THREE.MeshLambertMaterial({ color });
+      this.foodCrumbMats[color] = mat;
+    }
+
+    const baseX = eyePos.x + lookDir.x * 0.42;
+    const baseY = eyePos.y - 0.16 + lookDir.y * 0.32;
+    const baseZ = eyePos.z + lookDir.z * 0.42;
+
+    for (let i = 0; i < 4; i++) {
+      const m = new THREE.Mesh(this.cubeGeo, mat);
+      m.position.set(
+        baseX + (Math.random() - 0.5) * 0.12,
+        baseY + (Math.random() - 0.5) * 0.08,
+        baseZ + (Math.random() - 0.5) * 0.12
+      );
+      m.scale.setScalar(0.32 + Math.random() * 0.18);
+      this.burstGroup.add(m);
+      this.bursts.push({
+        mesh: m,
+        vx: lookDir.x * (0.9 + Math.random() * 0.8) + (Math.random() - 0.5) * 1.4,
+        vy: 0.9 + Math.random() * 1.2,
+        vz: lookDir.z * (0.9 + Math.random() * 0.8) + (Math.random() - 0.5) * 1.4,
+        life: 0.24 + Math.random() * 0.16
+      });
+    }
+  }
+
+  // Crackling white-gold sparks & charge smoke rising from a priming Creeper!
+  spawnCreeperSpark(x, y, z, intensity = 0.5) {
+    if (!this.enabled || this.bursts.length > 84) return;
+    const count = intensity > 0.65 ? 3 : 2;
+    for (let i = 0; i < count; i++) {
+      const m = new THREE.Mesh(this.sparkGeo, Math.random() < 0.55 ? this.tntWhiteMat : this.sparkMat);
+      m.position.set(
+        x + (Math.random() - 0.5) * 0.72,
+        y + 0.5 + Math.random() * 1.15,
+        z + (Math.random() - 0.5) * 0.72
+      );
+      m.scale.setScalar(0.45 + intensity * 0.45);
+      this.burstGroup.add(m);
+      this.bursts.push({
+        mesh: m,
+        vx: (Math.random() - 0.5) * (1.8 + intensity * 2.5),
+        vy: 2.0 + Math.random() * (2.4 + intensity * 2.2),
+        vz: (Math.random() - 0.5) * (1.8 + intensity * 2.5),
+        life: 0.25 + Math.random() * 0.22
       });
     }
   }
@@ -411,31 +480,38 @@ export class EffectsManager {
     // Style ambient particles per biome
     let vxMult = 1, vyBase = -0.8, size = 0.22, color = 0xffffff, opacity = 0.65;
 
-    if (biome === 'Snowy Taiga' || (biome === 'Mountains' && playerPos.y > 52)) {
+    if (biome === 'Snowy Taiga' || (biome === 'Mountains' && playerPos.y > 118)) {
       // Gentle falling snowflakes
       color = 0xf2f8ff;
       size = 0.28;
       opacity = 0.85;
       vyBase = -2.2;
       vxMult = 1.4;
-    } else if (biome === 'Desert') {
-      // Blowing warm sand dust
-      color = 0xe8d28e;
+    } else if (biome === 'Cherry Grove') {
+      // Drifting soft pink cherry blossom petals!
+      color = 0xffb3d1;
+      size = 0.26;
+      opacity = 0.85;
+      vyBase = -1.0;
+      vxMult = 2.0;
+    } else if (biome === 'Desert' || biome === 'Badlands' || biome === 'Savanna') {
+      // Blowing warm desert/red-canyon sand dust
+      color = biome === 'Badlands' ? 0xd97d4a : 0xe8d28e;
       size = 0.24;
       opacity = 0.55;
       vyBase = -0.25;
       vxMult = 5.5;
-    } else if (biome === 'Forest' || biome === 'Birch Forest') {
-      if (isNight) {
-        // Glowing golden fireflies at night!
+    } else if (biome === 'Forest' || biome === 'Birch Forest' || biome === 'Jungle' || biome === 'Swamp') {
+      if (isNight || biome === 'Swamp') {
+        // Glowing golden-lime fireflies!
         color = 0xd4ff59;
         size = 0.26;
         opacity = 0.92;
         vyBase = 0.25;
         vxMult = 0.8;
       } else {
-        // Drifting forest leaves
-        color = biome === 'Birch Forest' ? 0x8cc947 : 0x529932;
+        // Drifting forest / jungle leaves
+        color = biome === 'Birch Forest' ? 0x8cc947 : (biome === 'Jungle' ? 0x32b838 : 0x529932);
         size = 0.22;
         opacity = 0.72;
         vyBase = -1.1;

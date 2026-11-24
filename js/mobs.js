@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid } from './blocks.js';
+import { SEA_LEVEL } from './world.js';
 
 // Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
 const _scratchV1 = new THREE.Vector3();
@@ -127,6 +128,31 @@ const MOB_TYPES = {
   butterfly: {
     label: 'Butterfly', hostile: false, wildlife: true, butterfly: true, hp: 2, speed: 1.6,
     color: 0xff8c1a, headColor: 0x241914, size: [0.38, 0.25, 0.38], drop: [], xp: 1
+  },
+  // New Biome-Specific Animals!
+  camel: {
+    label: 'Desert Camel', hostile: false, wildlife: true, hp: 18, speed: 2.3,
+    color: 0xd9b36c, headColor: 0xe3c284, size: [0.95, 2.05, 1.55], drop: ['leather', 'leather'], xp: 3
+  },
+  zebra: {
+    label: 'Savanna Zebra', hostile: false, wildlife: true, shy: true, hp: 14, speed: 3.6,
+    color: 0xf0f2f5, headColor: 0xe4e8ed, size: [0.82, 1.55, 1.32], drop: ['leather', 'raw_beef'], xp: 3
+  },
+  panda: {
+    label: 'Jungle Panda', hostile: false, wildlife: true, hp: 18, speed: 1.65,
+    color: 0xf4f6f8, headColor: 0xffffff, size: [0.98, 1.15, 1.25], drop: ['apple', 'leather'], xp: 3
+  },
+  frog: {
+    label: 'Swamp Frog', hostile: false, wildlife: true, hopper: true, floatsOnWater: true, hp: 6, speed: 2.2,
+    color: 0x529c38, headColor: 0x68b849, size: [0.52, 0.38, 0.56], drop: [], xp: 1
+  },
+  polar_bear: {
+    label: 'Polar Bear', hostile: false, wildlife: true, hp: 26, speed: 2.1,
+    color: 0xf2f6fa, headColor: 0xffffff, size: [1.15, 1.35, 1.55], drop: ['raw_salmon', 'leather'], xp: 4
+  },
+  goat: {
+    label: 'Mountain Goat', hostile: false, wildlife: true, hopper: true, hp: 12, speed: 2.8,
+    color: 0xebe6dc, headColor: 0xf5f2eb, size: [0.76, 1.12, 1.08], drop: ['raw_mutton', 'wool_white'], xp: 3
   },
 
   // Village NPCs
@@ -495,6 +521,151 @@ function createMobMesh(type, options = {}) {
       group.add(wp);
       wings.push(wp);
     }
+  } else if (type === 'camel') {
+    // Tall Desert Camel with iconic hump, long legs & drooping snout!
+    bodyMat = makeCoatMat(textures, 0xd9b36c, 0xb88e48, 0xf2d499, 'fur', 121);
+    headMat = makeCoatMat(textures, 0xe0bd79, 0xbd9550, 0xf5dba4, 'fur', 122);
+    usesCoatMap = true;
+    const hoofMat = new THREE.MeshLambertMaterial({ color: 0x594228 });
+    for (const [lx, lz] of [[-0.26, 0.44], [0.26, 0.44], [-0.26, -0.44], [0.26, -0.44]]) {
+      const piv = new THREE.Group();
+      piv.position.set(lx, 0.92, lz);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.18, 0.78, 0.18), bodyMat, 0, -0.39, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.20, 0.14, 0.20), hoofMat, 0, -0.85, 0, false);
+      group.add(piv);
+      legs.push(piv);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.76, 0.56, 1.24), bodyMat, 0, 1.18, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(0.56, 0.32, 0.56), bodyMat, 0, 1.56, -0.06); // iconic hump!
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 1.28, 0.58);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.26, 0.62, 0.26), bodyMat, 0, 0.24, 0.08);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.36, 0.34, 0.54), headMat, 0, 0.60, 0.26);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.26, 0.20, 0.28), headMat, 0, 0.52, 0.58, false);
+    for (const s of [-1, 1]) addShadowMesh(headGroup, new THREE.BoxGeometry(0.10, 0.12, 0.08), bodyMat, s * 0.20, 0.78, 0.14, false);
+    addDetailedEyes(headGroup, eyeMat, 0.18, 0.64, 0.34, 0.09, 0.07, true);
+    group.add(headGroup);
+    tail = addShadowMesh(group, new THREE.BoxGeometry(0.08, 0.42, 0.08), hoofMat, 0, 1.12, -0.65, false);
+  } else if (type === 'zebra') {
+    // Sleek Savanna Zebra with crisp high-contrast striped coat & dark mane!
+    bodyMat = makeCoatMat(textures, 0xf2f4f7, 0x1b1d22, 0xffffff, 'stripes', 123);
+    headMat = makeCoatMat(textures, 0xebedf0, 0x1b1d22, 0xffffff, 'stripes', 124);
+    usesCoatMap = true;
+    const maneMat = new THREE.MeshLambertMaterial({ color: 0x1e2026 });
+    const muzzleMat = new THREE.MeshLambertMaterial({ color: 0x2b2d33 });
+    for (const [lx, lz] of [[-0.22, 0.38], [0.22, 0.38], [-0.22, -0.38], [0.22, -0.38]]) {
+      const piv = new THREE.Group();
+      piv.position.set(lx, 0.72, lz);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.15, 0.58, 0.15), bodyMat, 0, -0.29, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.16, 0.14, 0.16), maneMat, 0, -0.65, 0, false);
+      group.add(piv);
+      legs.push(piv);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.62, 0.50, 1.08), bodyMat, 0, 0.94, 0);
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 1.08, 0.46);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.24, 0.48, 0.28), bodyMat, 0, 0.22, 0.04);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.10, 0.48, 0.10), maneMat, 0, 0.28, -0.10, false); // upright striped mane
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.30, 0.30, 0.48), headMat, 0, 0.48, 0.20);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.22, 0.18, 0.18), muzzleMat, 0, 0.42, 0.46, false);
+    for (const s of [-1, 1]) addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.16, 0.07), maneMat, s * 0.13, 0.68, 0.06, false);
+    addDetailedEyes(headGroup, eyeMat, 0.155, 0.52, 0.24, 0.08, 0.065, true);
+    group.add(headGroup);
+    tail = addShadowMesh(group, new THREE.BoxGeometry(0.10, 0.44, 0.10), maneMat, 0, 0.94, -0.58, false);
+  } else if (type === 'panda') {
+    // Chunky Jungle Panda with black legs, black shoulder band & adorable black eye patches!
+    bodyMat = makeCoatMat(textures, 0xf2f4f6, 0xd8dde3, 0xffffff, 'wool', 125);
+    headMat = bodyMat;
+    usesCoatMap = true;
+    const blackMat = new THREE.MeshLambertMaterial({ color: 0x1b1d22 });
+    for (const [lx, lz] of [[-0.28, 0.34], [0.28, 0.34], [-0.28, -0.34], [0.28, -0.34]]) {
+      const piv = new THREE.Group();
+      piv.position.set(lx, 0.38, lz);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.26, 0.38, 0.26), blackMat, 0, -0.19, 0);
+      group.add(piv);
+      legs.push(piv);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.84, 0.62, 1.06), bodyMat, 0, 0.66, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(0.88, 0.64, 0.32), blackMat, 0, 0.66, 0.26); // black shoulder saddle
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.74, 0.56);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.60, 0.50, 0.46), headMat, 0, 0.06, 0.10);
+    for (const s of [-1, 1]) {
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.16, 0.16, 0.10), blackMat, s * 0.26, 0.32, 0.06, false); // round black ears
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.15, 0.12, 0.04), blackMat, s * 0.14, 0.10, 0.335, false); // eye patches
+    }
+    addDetailedEyes(headGroup, eyeMat, 0.14, 0.10, 0.35, 0.06, 0.055, false);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.24, 0.15, 0.12), bodyMat, 0, -0.06, 0.36, false);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.10, 0.07, 0.05), blackMat, 0, -0.02, 0.42, false);
+    group.add(headGroup);
+    tail = addShadowMesh(group, new THREE.BoxGeometry(0.14, 0.14, 0.12), blackMat, 0, 0.64, -0.56, false);
+  } else if (type === 'frog') {
+    // Vibrant Swamp Frog with bulging top eyes & nimble leaping legs!
+    bodyMat = makeCoatMat(textures, 0x529c38, 0x356e23, 0x7acc54, 'spots', 126);
+    headMat = bodyMat;
+    usesCoatMap = true;
+    const bellyMat = new THREE.MeshLambertMaterial({ color: 0xd9e89b });
+    for (const [lx, lz, wL] of [[-0.22, 0.18, 0.14], [0.22, 0.18, 0.14], [-0.24, -0.16, 0.22], [0.24, -0.16, 0.22]]) {
+      const leg = addShadowMesh(group, new THREE.BoxGeometry(0.12, 0.10, wL), bodyMat, lx, 0.06, lz, false);
+      legs.push(leg);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.46, 0.22, 0.48), bodyMat, 0, 0.18, 0);
+    addShadowMesh(group, new THREE.BoxGeometry(0.40, 0.08, 0.42), bellyMat, 0, 0.09, 0.02, false);
+    // Bulging frog eye bumps on top of head!
+    for (const s of [-1, 1]) {
+      addShadowMesh(group, new THREE.BoxGeometry(0.14, 0.12, 0.14), bodyMat, s * 0.15, 0.33, 0.14, false);
+    }
+    addDetailedEyes(group, eyeMat, 0.15, 0.34, 0.215, 0.09, 0.08, false);
+  } else if (type === 'polar_bear') {
+    // Massive Arctic Polar Bear with broad snowy coat & thick paws!
+    bodyMat = makeCoatMat(textures, 0xf2f6fa, 0xd4dee8, 0xffffff, 'wool', 127);
+    headMat = bodyMat;
+    usesCoatMap = true;
+    const noseMat = new THREE.MeshLambertMaterial({ color: 0x22262e });
+    for (const [lx, lz] of [[-0.32, 0.44], [0.32, 0.44], [-0.32, -0.44], [0.32, -0.44]]) {
+      const piv = new THREE.Group();
+      piv.position.set(lx, 0.54, lz);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.30, 0.54, 0.30), bodyMat, 0, -0.27, 0);
+      group.add(piv);
+      legs.push(piv);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.96, 0.72, 1.32), bodyMat, 0, 0.86, 0);
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.94, 0.68);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.56, 0.50, 0.50), headMat, 0, 0.04, 0.12);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.32, 0.22, 0.26), headMat, 0, -0.06, 0.42, false);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.10, 0.06), noseMat, 0, 0.0, 0.55, false);
+    for (const s of [-1, 1]) addShadowMesh(headGroup, new THREE.BoxGeometry(0.14, 0.14, 0.08), headMat, s * 0.24, 0.30, 0.06, false);
+    addDetailedEyes(headGroup, eyeMat, 0.16, 0.10, 0.375, 0.08, 0.07, false);
+    group.add(headGroup);
+    tail = addShadowMesh(group, new THREE.BoxGeometry(0.18, 0.18, 0.16), bodyMat, 0, 0.88, -0.70, false);
+  } else if (type === 'goat') {
+    // Nimble Alpine Mountain Goat with shaggy cream coat, curved dark horns & beard!
+    bodyMat = makeCoatMat(textures, 0xebe6dc, 0xc9c2b4, 0xffffff, 'wool', 128);
+    headMat = bodyMat;
+    usesCoatMap = true;
+    const hornMat = new THREE.MeshLambertMaterial({ color: 0x3b332d });
+    for (const [lx, lz] of [[-0.20, 0.32], [0.20, 0.32], [-0.20, -0.32], [0.20, -0.32]]) {
+      const piv = new THREE.Group();
+      piv.position.set(lx, 0.46, lz);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.15, 0.36, 0.15), bodyMat, 0, -0.18, 0);
+      addShadowMesh(piv, new THREE.BoxGeometry(0.16, 0.10, 0.16), hornMat, 0, -0.41, 0, false);
+      group.add(piv);
+      legs.push(piv);
+    }
+    addShadowMesh(group, new THREE.BoxGeometry(0.58, 0.50, 0.92), bodyMat, 0, 0.68, 0);
+    headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.84, 0.46);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.34, 0.36, 0.44), headMat, 0, 0.10, 0.12);
+    addShadowMesh(headGroup, new THREE.BoxGeometry(0.12, 0.18, 0.10), bodyMat, 0, -0.12, 0.24, false); // goatee beard!
+    for (const s of [-1, 1]) {
+      const horn = addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.32, 0.08), hornMat, s * 0.12, 0.38, 0.04, false);
+      horn.rotation.x = -0.35;
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.16, 0.08, 0.07), headMat, s * 0.24, 0.18, 0.04, false);
+    }
+    addDetailedEyes(headGroup, eyeMat, 0.175, 0.15, 0.22, 0.08, 0.06, true);
+    group.add(headGroup);
+    tail = addShadowMesh(group, new THREE.BoxGeometry(0.12, 0.14, 0.14), bodyMat, 0, 0.76, -0.50, false);
   } else if (def.villager) {
     // 40x Upgraded Authentic Minecraft UV-Textured Profession Villager Model!
     const profName = profession ? profession.name : 'Farmer';
@@ -961,6 +1132,25 @@ function createMobMesh(type, options = {}) {
     group.add(headGroup);
   }
 
+  // Collect EVERY unique material across the mob's entire mesh hierarchy for full-body red hit flash & creeper white strobe!
+  const matSet = new Set();
+  group.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    if (Array.isArray(obj.material)) {
+      for (const m of obj.material) matSet.add(m);
+    } else {
+      matSet.add(obj.material);
+    }
+  });
+  const allMats = [];
+  for (const mat of matSet) {
+    allMats.push({
+      mat,
+      origColor: mat.color ? mat.color.getHex() : 0xffffff,
+      origEmissive: mat.emissive ? mat.emissive.getHex() : null
+    });
+  }
+
   return {
     group,
     legs,
@@ -970,6 +1160,7 @@ function createMobMesh(type, options = {}) {
     headGroup,
     bodyMat,
     headMat,
+    allMats,
     baseColor: usesCoatMap ? 0xffffff : bodyColor,
     label: customLabel
   };
@@ -983,6 +1174,7 @@ export class EntityManager {
     this.textures = textures;
     this.mobs = [];
     this.drops = [];
+    this.projectiles = [];
     this.spawnTimer = 1.2;
     this.hostileSpawnTimer = 0.85;
     this.ambienceTimer = 4.0;
@@ -1047,6 +1239,43 @@ export class EntityManager {
     return true;
   }
 
+  // Verify (sx, sy, sz) is genuine sunlit open-sky surface (NEVER inside a cave or under a roof/overhang!)
+  isOpenSkySurface(sx, sy, sz) {
+    if (sy <= SEA_LEVEL - 2) return false;
+    // Ensure 2 clear blocks directly above spawn point and no solid ceiling roof above it
+    if (isBlockSolid(this.world.getBlock(sx, sy, sz)) || isBlockSolid(this.world.getBlock(sx, sy + 1, sz))) return false;
+    const topY = this.world.getSurfaceY(sx, sz);
+    return Math.abs(topY - sy) <= 1;
+  }
+
+  // Natural ground blocks allowed for biome passive wildlife (never caves, never structures!)
+  isNaturalAnimalGround(blockId, biome, type) {
+    if (type === 'goat') {
+      return blockId === BLOCK.GRASS || blockId === BLOCK.STONE || blockId === BLOCK.SNOW || blockId === BLOCK.GRAVEL;
+    }
+    if (type === 'camel') {
+      return blockId === BLOCK.SAND || blockId === BLOCK.RED_SAND || blockId === BLOCK.TERRACOTTA || blockId === BLOCK.TERRACOTTA_ORANGE;
+    }
+    if (type === 'polar_bear') {
+      return blockId === BLOCK.SNOW || blockId === BLOCK.ICE || blockId === BLOCK.PACKED_ICE || blockId === BLOCK.GRASS;
+    }
+    if (type === 'frog') {
+      return blockId === BLOCK.SWAMP_GRASS || blockId === BLOCK.MUD || blockId === BLOCK.GRASS || blockId === BLOCK.WATER;
+    }
+    if (type === 'turtle') {
+      return blockId === BLOCK.SAND || blockId === BLOCK.WATER;
+    }
+    return (
+      blockId === BLOCK.GRASS ||
+      blockId === BLOCK.SAVANNA_GRASS ||
+      blockId === BLOCK.JUNGLE_GRASS ||
+      blockId === BLOCK.SWAMP_GRASS ||
+      blockId === BLOCK.SNOW ||
+      blockId === BLOCK.SAND ||
+      blockId === BLOCK.RED_SAND
+    );
+  }
+
   // Spawn a lively Herd / Pack / Flock / School of animals clustered together!
   spawnHerd(type, centerX, centerZ, count = 4, biome = 'Plains', maxTotal = 64) {
     const def = MOB_TYPES[type];
@@ -1055,6 +1284,7 @@ export class EntityManager {
     const hw = Math.max(def.size[0], def.size[2]) * 0.48;
     const herdHomeX = centerX + 0.5;
     const herdHomeZ = centerZ + 0.5;
+    const maxLandY = type === 'goat' ? (SEA_LEVEL + 90) : (SEA_LEVEL + 44);
 
     for (let i = 0; i < count && this.mobs.length < maxTotal; i++) {
       let mob = null;
@@ -1080,7 +1310,16 @@ export class EntityManager {
             mob = this.spawnMob(type, sx + 0.5, sy - 0.12, sz + 0.5, null, biome);
             if (mob) break;
           }
-        } else if (ground === BLOCK.GRASS || ground === BLOCK.SNOW || ground === BLOCK.SAND || ground === BLOCK.DIRT || ground === BLOCK.STONE) {
+        } else if (def.hostile) {
+          if (ground !== BLOCK.AIR && ground !== BLOCK.WATER && !this.mobCollidesAt(sx + 0.5, sy, sz + 0.5, hw, def.size[1])) {
+            mob = this.spawnMob(type, sx + 0.5, sy, sz + 0.5, null, biome);
+            if (mob) break;
+          }
+        } else {
+          // Passive animals: strict open-sky surface, realistic elevation, and biome-matched natural ground!
+          if (sy > maxLandY) continue;
+          if (!this.isOpenSkySurface(sx, sy, sz)) continue;
+          if (!this.isNaturalAnimalGround(ground, biome, type)) continue;
           const spawnY = def.butterfly ? sy + 1.2 : sy;
           if (!this.mobCollidesAt(sx + 0.5, spawnY, sz + 0.5, hw, def.size[1])) {
             mob = this.spawnMob(type, sx + 0.5, spawnY, sz + 0.5, null, biome);
@@ -1106,9 +1345,9 @@ export class EntityManager {
     // 2. Spawn 5 distinct Land Animal Herds (3-5 animals each!) + 1-2 Water Flocks/Schools!
     let landHerds = 0;
     let waterHerds = 0;
-    for (let tries = 0; tries < 75 && (landHerds < 5 || waterHerds < 2); tries++) {
+    for (let tries = 0; tries < 90 && (landHerds < 5 || waterHerds < 2); tries++) {
       const ang = (tries * 1.15) + Math.random() * 0.6;
-      const dist = 10 + Math.random() * 26;
+      const dist = 10 + Math.random() * 28;
       const sx = Math.floor(playerPos.x + Math.cos(ang) * dist);
       const sz = Math.floor(playerPos.z + Math.sin(ang) * dist);
       const sy = this.world.getSurfaceY(sx, sz);
@@ -1116,30 +1355,73 @@ export class EntityManager {
       const biome = this.world.getBiomeAt(sx, sz);
 
       if (ground === BLOCK.WATER && waterHerds < 2) {
-        const wType = Math.random() < 0.6 ? 'fish' : 'duck';
+        const wType = biome === 'Swamp' ? (Math.random() < 0.55 ? 'frog' : 'duck') : (Math.random() < 0.6 ? 'fish' : 'duck');
         const cnt = 3 + Math.floor(Math.random() * 3);
         if (this.spawnHerd(wType, sx, sz, cnt, biome, 64) > 0) waterHerds++;
-      } else if ((ground === BLOCK.GRASS || ground === BLOCK.SNOW || ground === BLOCK.SAND) && landHerds < 5) {
-        const type = this.pickWildlifeForBiome(biome, ground);
-        const herdSize = type === 'butterfly' ? 4 : (3 + Math.floor(Math.random() * 3)); // 3-5 per herd!
+      } else if (landHerds < 5) {
+        const type = this.pickWildlifeForBiome(biome, ground, sy);
+        if (!type) continue;
+        const herdSize = type === 'butterfly' ? 4 : (type === 'polar_bear' || type === 'camel' || type === 'panda' ? (2 + Math.floor(Math.random() * 2)) : (3 + Math.floor(Math.random() * 3)));
         if (this.spawnHerd(type, sx, sz, herdSize, biome, 64) > 0) landHerds++;
       }
     }
   }
 
-  pickWildlifeForBiome(biome, ground) {
-    if (ground === BLOCK.SAND) {
-      return Math.random() < 0.55 ? 'turtle' : 'rabbit';
+  pickWildlifeForBiome(biome, ground, y = SEA_LEVEL + 6) {
+    // High Mountains & Alpine Peaks: ONLY Mountain Goats (never lowland farm animals on tall peaks!)
+    if (biome === 'Mountains' || y > SEA_LEVEL + 44) {
+      if (y > SEA_LEVEL + 90) return null;
+      if (ground === BLOCK.GRASS || ground === BLOCK.STONE || ground === BLOCK.SNOW || ground === BLOCK.GRAVEL) {
+        return 'goat';
+      }
+      return null;
     }
-    if (biome === 'Snowy Taiga') {
-      const pool = ['fox', 'wolf', 'rabbit', 'deer', 'sheep'];
+
+    if (biome === 'Desert') {
+      if (ground !== BLOCK.SAND) return null;
+      if (y <= SEA_LEVEL + 2 && Math.random() < 0.35) return 'turtle';
+      return Math.random() < 0.58 ? 'camel' : 'rabbit';
+    }
+    if (biome === 'Badlands') {
+      if (ground !== BLOCK.RED_SAND && ground !== BLOCK.TERRACOTTA && ground !== BLOCK.TERRACOTTA_ORANGE) return null;
+      return Math.random() < 0.62 ? 'camel' : 'rabbit';
+    }
+    if (biome === 'Savanna') {
+      if (ground !== BLOCK.SAVANNA_GRASS && ground !== BLOCK.GRASS) return null;
+      const pool = ['zebra', 'zebra', 'zebra', 'cow', 'sheep', 'chicken'];
       return pool[Math.floor(Math.random() * pool.length)];
     }
+    if (biome === 'Jungle') {
+      if (ground !== BLOCK.JUNGLE_GRASS && ground !== BLOCK.GRASS) return null;
+      const pool = ['panda', 'panda', 'panda', 'chicken', 'butterfly', 'butterfly'];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+    if (biome === 'Swamp') {
+      if (ground !== BLOCK.SWAMP_GRASS && ground !== BLOCK.MUD && ground !== BLOCK.GRASS) return null;
+      const pool = ['frog', 'frog', 'frog', 'duck', 'pig'];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+    if (biome === 'Snowy Taiga') {
+      if (ground !== BLOCK.SNOW && ground !== BLOCK.GRASS) return null;
+      const pool = ['polar_bear', 'polar_bear', 'fox', 'wolf', 'rabbit'];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+    if (biome === 'Cherry Grove') {
+      if (ground !== BLOCK.GRASS) return null;
+      const pool = ['sheep', 'rabbit', 'butterfly', 'butterfly', 'deer', 'pig'];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+    if (ground === BLOCK.SAND && y <= SEA_LEVEL + 3) {
+      return 'turtle';
+    }
     if (biome === 'Forest' || biome === 'Birch Forest') {
+      if (ground !== BLOCK.GRASS) return null;
       const pool = ['deer', 'deer', 'fox', 'wolf', 'rabbit', 'butterfly', 'pig', 'chicken'];
       return pool[Math.floor(Math.random() * pool.length)];
     }
-    const pool = ['deer', 'rabbit', 'fox', 'butterfly', 'butterfly', 'cow', 'sheep', 'pig', 'chicken', 'duck'];
+    // Plains
+    if (ground !== BLOCK.GRASS) return null;
+    const pool = ['cow', 'sheep', 'pig', 'chicken', 'rabbit', 'deer', 'butterfly', 'butterfly'];
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
@@ -1162,7 +1444,7 @@ export class EntityManager {
     const prof = type === 'villager'
       ? (profession || VILLAGER_PROFESSIONS[Math.floor(Math.random() * VILLAGER_PROFESSIONS.length)])
       : null;
-    const { group, legs, arms, wings, tail, headGroup, bodyMat, headMat, baseColor, label } =
+    const { group, legs, arms, wings, tail, headGroup, bodyMat, headMat, allMats, baseColor, label } =
       createMobMesh(type, { profession: prof, biome, textures: this.textures });
     group.position.set(x, y, z);
     this.group.add(group);
@@ -1183,6 +1465,8 @@ export class EntityManager {
       headGroup,
       bodyMat,
       headMat,
+      allMats: allMats || [],
+      _tintState: 'normal',
       pos: new THREE.Vector3(x, y, z),
       homePos: new THREE.Vector3(x, y, z),
       herdHome: null,
@@ -1201,10 +1485,14 @@ export class EntityManager {
       stuckTimer: 0,
       headBaseColor: headMat ? headMat.color.getHex() : (baseColor ?? 0xffffff),
       attackCd: 0,
+      bowDraw: 0,
+      strafeDir: Math.random() < 0.5 ? 1 : -1,
+      strafeTimer: 1.5 + Math.random() * 2.0,
       fleeTimer: 0,
       panicZigTimer: 0,
       panicJumpTimer: 0,
       fuseTimer: 0,
+      creeperSparkCd: 0,
       orbitRadius: 10 + Math.random() * 14,
       orbitAngle: Math.random() * Math.PI * 2,
       cruiseY: y
@@ -1311,10 +1599,77 @@ export class EntityManager {
     return best;
   }
 
+  // Apply full-body tint to EVERY mesh material of a mob ('normal' | 'hurt' | 'white')
+  setMobTint(mob, state) {
+    if (!mob || mob._tintState === state) return;
+    mob._tintState = state;
+    const mats = mob.allMats || [];
+    for (let i = 0; i < mats.length; i++) {
+      const entry = mats[i];
+      const mat = entry.mat;
+      if (state === 'hurt') {
+        if (mat.color) mat.color.setHex(0xff4d4d);
+        if (mat.emissive) mat.emissive.setHex(0xc81818);
+      } else if (state === 'white') {
+        if (mat.color) mat.color.setHex(0xffffff);
+        if (mat.emissive) mat.emissive.setHex(0xdedede);
+      } else {
+        if (mat.color) mat.color.setHex(entry.origColor);
+        if (mat.emissive && entry.origEmissive !== null) mat.emissive.setHex(entry.origEmissive);
+      }
+    }
+  }
+
+  // Fast 3D voxel line-of-sight check so Skeletons don't shoot arrows through solid walls!
+  hasLineOfSight(x0, y0, z0, x1, y1, z1) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const dz = z1 - z0;
+    const dist = Math.hypot(dx, dy, dz);
+    const steps = Math.max(1, Math.ceil(dist * 2));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      if (isBlockSolid(this.world.getBlock(x0 + dx * t, y0 + dy * t, z0 + dz * t))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Spawn a real 3D flying Arrow projectile (wooden shaft, iron tip, white fletching)!
+  spawnArrow(x, y, z, vx, vy, vz, dmg = 3, shooter = null) {
+    const arrowGroup = new THREE.Group();
+    const shaftMat = new THREE.MeshLambertMaterial({ color: 0x8a5b2e });
+    const tipMat = new THREE.MeshLambertMaterial({ color: 0xd0d8e2 });
+    const featherMat = new THREE.MeshBasicMaterial({ color: 0xf7f9fc });
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.62), shaftMat);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), tipMat);
+    tip.position.set(0, 0, 0.34);
+    const fletchA = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 0.16), featherMat);
+    fletchA.position.set(0, 0, -0.26);
+    const fletchB = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 0.16), featherMat);
+    fletchB.position.set(0, 0, -0.26);
+    arrowGroup.add(shaft, tip, fletchA, fletchB);
+    arrowGroup.position.set(x, y, z);
+    arrowGroup.lookAt(x + vx, y + vy, z + vz);
+    this.group.add(arrowGroup);
+
+    this.projectiles.push({
+      mesh: arrowGroup,
+      pos: new THREE.Vector3(x, y, z),
+      vel: new THREE.Vector3(vx, vy, vz),
+      dmg,
+      shooter,
+      stuck: false,
+      age: 0
+    });
+    if (this.sound && this.sound.playBowShoot) this.sound.playBowShoot();
+  }
+
   hitMob(mob, damage, knockDir, player) {
     if (!mob || mob.hurtCd > 0) return false;
     mob.hp -= Math.max(1, damage || 2);
-    mob.hurtFlash = 0.28;
+    mob.hurtFlash = 0.32;
     mob.hurtCd = 0.22;
     mob.knockbackTimer = 0.36;
 
@@ -1336,8 +1691,7 @@ export class EntityManager {
     mob.vel.x = kx * 7.4;
     mob.vel.z = kz * 7.4;
     mob.vel.y = Math.max(mob.vel.y, 5.4);
-    if (mob.bodyMat) mob.bodyMat.color.setHex(0xff4444);
-    if (mob.headMat) mob.headMat.color.setHex(0xff4444);
+    this.setMobTint(mob, 'hurt');
     if (!mob.def.hostile) {
       // Go haywire! Frantic high-speed zig-zagging + repeated jumps to escape!
       mob.fleeTimer = 5.5 + Math.random() * 2.5;
@@ -1421,7 +1775,7 @@ export class EntityManager {
     return 0;
   }
 
-  update(dt, player, sky, onExplosion, mods = null, gameRules = null) {
+  update(dt, player, sky, onExplosion, mods = null, gameRules = null, effects = null) {
     if (!this.initialPopulated) {
       this.populateInitialWildlife(player.pos);
     }
@@ -1510,15 +1864,17 @@ export class EntityManager {
           const biome = this.world.getBiomeAt(sx, sz);
 
           if (ground === BLOCK.WATER) {
-            const waterMobs = this.mobs.filter((m) => m.type === 'fish' || m.type === 'duck').length;
+            const waterMobs = this.mobs.filter((m) => m.type === 'fish' || m.type === 'duck' || m.type === 'frog').length;
             if (waterMobs < 16) {
-              const wType = Math.random() < 0.65 ? 'fish' : 'duck';
+              const wType = biome === 'Swamp' ? (Math.random() < 0.55 ? 'frog' : 'duck') : (Math.random() < 0.65 ? 'fish' : 'duck');
               this.spawnHerd(wType, sx, sz, 3 + Math.floor(Math.random() * 3), biome, totalPassiveCap);
             }
-          } else if (ground === BLOCK.GRASS || ground === BLOCK.SNOW || ground === BLOCK.SAND) {
-            const type = this.pickWildlifeForBiome(biome, ground);
-            if (!(type === 'butterfly' && isNight)) {
-              const herdSize = 3 + Math.floor(Math.random() * 4); // Herds of 3-6 animals!
+          } else {
+            const type = this.pickWildlifeForBiome(biome, ground, sy);
+            if (type && !(type === 'butterfly' && isNight)) {
+              const herdSize = (type === 'polar_bear' || type === 'camel' || type === 'panda')
+                ? (2 + Math.floor(Math.random() * 2))
+                : (3 + Math.floor(Math.random() * 3));
               this.spawnHerd(type, sx, sz, herdSize, biome, totalPassiveCap);
             }
           }
@@ -1588,10 +1944,10 @@ export class EntityManager {
       if (m.knockbackTimer > 0) m.knockbackTimer = Math.max(0, m.knockbackTimer - dt);
 
       if (m.hurtFlash > 0) {
-        m.hurtFlash -= dt;
-        const hurtCol = m.hurtFlash > 0 ? 0xff4444 : (m.baseColor ?? 0xffffff);
-        if (m.bodyMat) m.bodyMat.color.setHex(hurtCol);
-        if (m.headMat) m.headMat.color.setHex(m.hurtFlash > 0 ? 0xff4444 : (m.headBaseColor ?? 0xffffff));
+        m.hurtFlash = Math.max(0, m.hurtFlash - dt);
+        this.setMobTint(m, m.hurtFlash > 0 ? 'hurt' : 'normal');
+      } else if (m._tintState === 'hurt') {
+        this.setMobTint(m, 'normal');
       }
 
       // --- A. FLYING SONGBIRDS (obstacle-avoiding flight!) ---
@@ -1737,30 +2093,108 @@ export class EntityManager {
 
       // AI Movement
       let moveX = 0, moveZ = 0;
-      if (m.def.hostile && player.mode === 'survival' && !player.dead && distToPlayer < 18) {
+      let creeperShakeX = 0, creeperShakeZ = 0;
+      if (m.def.hostile && player.mode === 'survival' && !player.dead && distToPlayer < 20) {
         const dx = player.pos.x - m.pos.x;
         const dz = player.pos.z - m.pos.z;
         m.yaw = Math.atan2(dx, dz);
 
-        if (m.def.creeper && distToPlayer < 3.2) {
+        if (m.def.creeper && (distToPlayer < 3.4 || (m.fuseTimer > 0 && distToPlayer < 5.6))) {
+          // Dramatic Minecraft Creeper Prime & Swell Animation!
+          const FUSE_MAX = 1.5;
           if (m.fuseTimer === 0 && this.sound && this.sound.playFuse) this.sound.playFuse();
           m.fuseTimer += dt;
-          const pulse = Math.sin(m.fuseTimer * 28) > 0;
-          m.bodyMat.color.setHex(pulse ? 0xffffff : m.baseColor);
-          if (m.headMat) m.headMat.color.setHex(pulse ? 0xffffff : m.baseColor);
-          const swell = 1.0 + (m.fuseTimer / 1.4) * 0.28;
-          m.mesh.scale.set(swell, 1.0 + (m.fuseTimer / 1.4) * 0.12, swell);
-          if (m.fuseTimer >= 1.4) {
+          const p = Math.min(1, m.fuseTimer / FUSE_MAX);
+
+          // Accelerating incandescent white warning strobe across ALL Creeper body parts!
+          const flashFreq = 11 + p * 44;
+          const flashWhite = p > 0.88 || Math.sin(m.fuseTimer * flashFreq) > 0;
+          if (m.hurtFlash <= 0) {
+            this.setMobTint(m, flashWhite ? 'white' : 'normal');
+          }
+
+          // Dramatic bulging squash-and-stretch inflation as pressure builds!
+          const pulseWave = Math.sin(m.fuseTimer * (16 + p * 26)) * (0.06 + p * 0.08);
+          const swellXZ = 1.0 + p * p * 0.62 + pulseWave;
+          const swellY = 1.0 - p * 0.14 + Math.cos(m.fuseTimer * (14 + p * 22)) * (0.04 + p * 0.06);
+          m.mesh.scale.set(swellXZ, Math.max(0.75, swellY), swellXZ);
+
+          // Intense high-frequency body tremble & head stiffen upward!
+          const jitterAmp = p * p * 0.14;
+          creeperShakeX = (Math.random() - 0.5) * jitterAmp;
+          creeperShakeZ = (Math.random() - 0.5) * jitterAmp;
+          if (m.headGroup) {
+            m.headGroup.rotation.x = -p * 0.32;
+          }
+
+          // Emit rising crackling white-gold sparks around the swelling Creeper!
+          m.creeperSparkCd = (m.creeperSparkCd || 0) - dt;
+          if (m.creeperSparkCd <= 0 && effects && effects.spawnCreeperSpark) {
+            m.creeperSparkCd = Math.max(0.05, 0.16 - p * 0.10);
+            effects.spawnCreeperSpark(m.pos.x, m.pos.y, m.pos.z, p);
+          }
+
+          if (m.fuseTimer >= FUSE_MAX) {
             if (onExplosion) onExplosion(m.pos.x, m.pos.y + 0.8, m.pos.z, 3.8);
             this.removeMob(m);
             continue;
           }
+        } else if (m.type === 'skeleton') {
+          // Authentic Ranged Skeleton AI: keeps shooting distance, strafes, draws bow & shoots 3D arrows!
+          m.strafeTimer = (m.strafeTimer || 0) - dt;
+          if (m.strafeTimer <= 0) {
+            m.strafeTimer = 1.6 + Math.random() * 2.0;
+            m.strafeDir = Math.random() < 0.5 ? 1 : -1;
+          }
+          const hasLOS = distToPlayer < 17 && this.hasLineOfSight(
+            m.pos.x, m.pos.y + 1.5, m.pos.z,
+            player.pos.x, player.pos.y + 1.15, player.pos.z
+          );
+
+          if (!hasLOS || distToPlayer > 12.5) {
+            // Advance closer until in clear ranged firing position
+            moveX = Math.sin(m.yaw) * m.def.speed;
+            moveZ = Math.cos(m.yaw) * m.def.speed;
+            m.bowDraw = Math.max(0, (m.bowDraw || 0) - dt * 2.2);
+          } else {
+            // Strafe & keep safe distance while drawing bow!
+            const strafeYaw = m.yaw + (Math.PI * 0.5) * m.strafeDir;
+            const backMul = distToPlayer < 5.0 ? -0.75 : 0;
+            moveX = Math.sin(strafeYaw) * m.def.speed * 0.55 + Math.sin(m.yaw) * m.def.speed * backMul;
+            moveZ = Math.cos(strafeYaw) * m.def.speed * 0.55 + Math.cos(m.yaw) * m.def.speed * backMul;
+
+            if (m.attackCd <= 0) {
+              m.bowDraw = Math.min(1, (m.bowDraw || 0) + dt / 1.15);
+              if (m.bowDraw >= 1) {
+                m.bowDraw = 0;
+                m.attackCd = 1.65;
+                // Aimed ballistic arrow shot toward player's torso with gravity compensation!
+                const sx = m.pos.x + Math.sin(m.yaw) * 0.45;
+                const sy = m.pos.y + 1.48;
+                const sz = m.pos.z + Math.cos(m.yaw) * 0.45;
+                const tx = player.pos.x - sx;
+                const ty = (player.pos.y + 1.05) - sy;
+                const tz = player.pos.z - sz;
+                const hDist = Math.max(0.5, Math.hypot(tx, tz));
+                const speed = 19.5;
+                const flightT = hDist / speed;
+                const spread = 0.055;
+                const vx = (tx / hDist) * speed + (Math.random() - 0.5) * speed * spread;
+                const vz = (tz / hDist) * speed + (Math.random() - 0.5) * speed * spread;
+                const vy = (ty + 0.5 * 14.0 * flightT * flightT) / Math.max(0.12, flightT);
+                const scaledDmg = Math.max(1, Math.round((m.def.dmg || 3) * diffCfg.dmgMul));
+                this.spawnArrow(sx, sy, sz, vx, vy, vz, scaledDmg, m);
+              }
+            }
+          }
         } else {
           if (m.def.creeper && m.fuseTimer > 0) {
-            m.fuseTimer = Math.max(0, m.fuseTimer - dt * 1.5);
-            m.mesh.scale.setScalar(1.0);
-            m.bodyMat.color.setHex(m.baseColor);
-            if (m.headMat) m.headMat.color.setHex(m.baseColor);
+            m.fuseTimer = Math.max(0, m.fuseTimer - dt * 1.8);
+            const p = m.fuseTimer / 1.5;
+            const deflate = 1.0 + p * p * 0.62;
+            m.mesh.scale.set(deflate, 1.0 - p * 0.14, deflate);
+            if (m.hurtFlash <= 0) this.setMobTint(m, 'normal');
+            if (m.fuseTimer <= 0) m.mesh.scale.setScalar(1.0);
           }
           if (distToPlayer > 1.35) {
             moveX = Math.sin(m.yaw) * m.def.speed;
@@ -1772,6 +2206,12 @@ export class EntityManager {
           }
         }
       } else {
+        if (m.def.creeper && m.fuseTimer > 0) {
+          m.fuseTimer = 0;
+          m.mesh.scale.setScalar(1.0);
+          if (m.hurtFlash <= 0) this.setMobTint(m, 'normal');
+        }
+        if (m.type === 'skeleton') m.bowDraw = Math.max(0, (m.bowDraw || 0) - dt * 2.5);
         m.aiTimer -= dt;
         if (m.fleeTimer > 0) {
           // HAYWIRE PANIC ESCAPE! Wild erratic zig-zagging + frantic 2.35x sprinting!
@@ -1908,8 +2348,8 @@ export class EntityManager {
         m.pos.y = ny;
       }
 
-      // Apply transform + limb/arm/head/tail/wing animations
-      m.mesh.position.copy(m.pos);
+      // Apply transform + limb/arm/head/tail/wing animations (with Creeper prime tremor!)
+      m.mesh.position.set(m.pos.x + creeperShakeX, m.pos.y, m.pos.z + creeperShakeZ);
       m.mesh.rotation.y = m.yaw;
       if (speedMag > 0.1) {
         m.walkPhase += dt * speedMag * (m.def.spider ? 5.2 : 3.6);
@@ -1926,11 +2366,17 @@ export class EntityManager {
           else leg.rotation.x *= 0.85;
         });
       }
-      // Articulated Hostile Zombie & Skeleton Arm Sway!
+      // Articulated Hostile Zombie & Skeleton Arm Sway + Bow Draw Aiming!
       if (m.arms && m.arms.length === 2) {
-        const sway = Math.sin(nowSec * 3.2 + m.walkPhase) * 0.12;
-        m.arms[0].rotation.x = -Math.PI * 0.44 + sway;
-        m.arms[1].rotation.x = -Math.PI * 0.44 - sway;
+        if (m.type === 'skeleton' && m.bowDraw > 0.02) {
+          const aimPitch = -Math.PI * 0.50 - m.bowDraw * 0.14;
+          m.arms[0].rotation.x = aimPitch;
+          m.arms[1].rotation.x = aimPitch - 0.06;
+        } else {
+          const sway = Math.sin(nowSec * 3.2 + m.walkPhase) * 0.12;
+          m.arms[0].rotation.x = -Math.PI * 0.44 + sway;
+          m.arms[1].rotation.x = -Math.PI * 0.44 - sway;
+        }
       }
       // Living Head Animation: Villagers make friendly eye contact with nearby player; wildlife grazes!
       if (m.headGroup) {
@@ -1960,6 +2406,52 @@ export class EntityManager {
         m.wings[0].rotation.z = wFlap;
         m.wings[1].rotation.z = -wFlap;
       }
+    }
+
+    // 2b. Update Flying Skeleton Arrows (Ballistic Gravity Arc, Player Hit Damage & Block Sticking!)
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const a = this.projectiles[i];
+      a.age += dt;
+      if (a.age > (a.stuck ? 6.0 : 8.0)) {
+        this.group.remove(a.mesh);
+        this.projectiles.splice(i, 1);
+        continue;
+      }
+      if (a.stuck) continue;
+
+      a.vel.y -= 14.0 * dt;
+      const nx = a.pos.x + a.vel.x * dt;
+      const ny = a.pos.y + a.vel.y * dt;
+      const nz = a.pos.z + a.vel.z * dt;
+
+      // Check collision with Player AABB!
+      if (player && player.mode === 'survival' && !player.dead) {
+        const pdx = Math.abs(nx - player.pos.x);
+        const pdz = Math.abs(nz - player.pos.z);
+        if (pdx < 0.45 && pdz < 0.45 && ny >= player.pos.y && ny <= player.pos.y + 1.8) {
+          const hLen = Math.max(0.01, Math.hypot(a.vel.x, a.vel.z));
+          player.vel.x += (a.vel.x / hLen) * 4.5;
+          player.vel.z += (a.vel.z / hLen) * 4.5;
+          player.vel.y = Math.max(player.vel.y, 2.6);
+          player.takeDamage(a.dmg, 'Shot by Skeleton');
+          if (this.sound && this.sound.playArrowHit) this.sound.playArrowHit();
+          this.group.remove(a.mesh);
+          this.projectiles.splice(i, 1);
+          continue;
+        }
+      }
+
+      // Check collision with solid terrain blocks (arrow sticks cleanly into walls/ground!)
+      if (isBlockSolid(this.world.getBlock(nx, ny, nz))) {
+        a.stuck = true;
+        a.age = 0;
+        if (this.sound && this.sound.playArrowHit) this.sound.playArrowHit();
+        continue;
+      }
+
+      a.pos.set(nx, ny, nz);
+      a.mesh.position.copy(a.pos);
+      a.mesh.lookAt(nx + a.vel.x, ny + a.vel.y, nz + a.vel.z);
     }
 
     // 3. Update Pixel-Art 3D Dropped Items & Blocks
@@ -2014,8 +2506,10 @@ export class EntityManager {
   clearAll() {
     for (const m of this.mobs) this.group.remove(m.mesh);
     for (const d of this.drops) this.group.remove(d.mesh);
+    for (const p of this.projectiles) this.group.remove(p.mesh);
     this.mobs = [];
     this.drops = [];
+    this.projectiles = [];
     this._pendingVillageSpawns = [];
     this.initialPopulated = false;
   }

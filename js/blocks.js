@@ -58,7 +58,27 @@ export const BLOCK = {
   BED_FOOT_E: 54,   // Foot half facing East (+X) (partner head at x + 1)
   BED_HEAD_E: 55,   // Head half facing East (+X) (partner foot at x - 1)
   BED_FOOT_W: 56,   // Foot half facing West (-X) (partner head at x - 1)
-  BED_HEAD_W: 57    // Head half facing West (-X) (partner foot at x + 1)
+  BED_HEAD_W: 57,   // Head half facing West (-X) (partner foot at x + 1)
+  ACACIA_LOG: 58,
+  ACACIA_LEAVES: 59,
+  ACACIA_PLANKS: 60,
+  JUNGLE_LOG: 61,
+  JUNGLE_LEAVES: 62,
+  JUNGLE_PLANKS: 63,
+  CHERRY_LOG: 64,
+  CHERRY_LEAVES: 65,
+  CHERRY_PLANKS: 66,
+  RED_SAND: 67,
+  TERRACOTTA: 68,
+  TERRACOTTA_RED: 69,
+  TERRACOTTA_ORANGE: 70,
+  TERRACOTTA_YELLOW: 71,
+  MOSSY_COBBLESTONE: 72,
+  MUD: 73,
+  PACKED_ICE: 74,
+  SAVANNA_GRASS: 75,
+  JUNGLE_GRASS: 76,
+  SWAMP_GRASS: 77
 };
 
 // Block numeric ID -> string item key
@@ -130,7 +150,7 @@ regBlock(BLOCK.ICE, 'ice', { name: 'Ice', hardness: 0.8, transparent: true, tool
 
 regBlock(BLOCK.COAL_ORE, 'coal_ore', { name: 'Coal Ore', hardness: 2.8, tool: 'pickaxe', minTier: 1, sound: 'stone', drop: 'coal', dropCount: 1, xp: 2, faces: { all: 'coal_ore' } });
 regBlock(BLOCK.IRON_ORE, 'iron_ore', { name: 'Iron Ore', hardness: 3.2, tool: 'pickaxe', minTier: 2, sound: 'stone', drop: 'raw_iron', dropCount: 1, xp: 3, faces: { all: 'iron_ore' } });
-regBlock(BLOCK.GOLD_ORE, 'gold_ore', { name: 'Gold Ore', hardness: 3.5, tool: 'pickaxe', minTier: 3, sound: 'stone', drop: 'gold_ore', dropCount: 1, xp: 5, faces: { all: 'gold_ore' } });
+regBlock(BLOCK.GOLD_ORE, 'gold_ore', { name: 'Gold Ore', hardness: 3.5, tool: 'pickaxe', minTier: 3, sound: 'stone', drop: 'raw_gold', dropCount: 1, xp: 5, faces: { all: 'gold_ore' } });
 regBlock(BLOCK.DIAMOND_ORE, 'diamond_ore', { name: 'Diamond Ore', hardness: 4.5, tool: 'pickaxe', minTier: 3, sound: 'stone', drop: 'diamond', dropCount: 1, xp: 10, faces: { all: 'diamond_ore' } });
 
 regBlock(BLOCK.CRAFTING_TABLE, 'crafting_table', { name: 'Crafting Table', hardness: 1.6, tool: 'axe', sound: 'wood', interactive: 'crafting_table', faces: { top: 'craft_top', side: 'craft_side', bottom: 'oak_planks' } });
@@ -171,11 +191,41 @@ regBlock(BLOCK.DIAMOND_BLOCK, 'diamond_block', { name: 'Block of Diamond', hardn
 regBlock(BLOCK.LADDER, 'ladder', { name: 'Ladder', solid: false, transparent: true, cross: true, climbable: true, hardness: 0.5, tool: 'axe', sound: 'wood', faces: { all: 'ladder' } });
 regBlock(BLOCK.FARMLAND, 'farmland', { name: 'Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'farmland_top', side: 'dirt', bottom: 'dirt' } });
 
+// --- NEW BIOME BLOCKS (Savanna, Jungle, Cherry Grove, Badlands, Swamp, Frozen) ---
+regBlock(BLOCK.ACACIA_LOG, 'acacia_log', { name: 'Acacia Log', hardness: 1.8, tool: 'axe', sound: 'wood', faces: { top: 'acacia_log_top', side: 'acacia_log_side', bottom: 'acacia_log_top' } });
+regBlock(BLOCK.ACACIA_LEAVES, 'acacia_leaves', { name: 'Acacia Leaves', hardness: 0.35, transparent: true, sound: 'grass', drop: 'acacia_leaves', faces: { all: 'acacia_leaves' } });
+regBlock(BLOCK.ACACIA_PLANKS, 'acacia_planks', { name: 'Acacia Planks', hardness: 1.5, tool: 'axe', sound: 'wood', faces: { all: 'acacia_planks' } });
+
+regBlock(BLOCK.JUNGLE_LOG, 'jungle_log', { name: 'Jungle Log', hardness: 1.8, tool: 'axe', sound: 'wood', faces: { top: 'jungle_log_top', side: 'jungle_log_side', bottom: 'jungle_log_top' } });
+regBlock(BLOCK.JUNGLE_LEAVES, 'jungle_leaves', { name: 'Jungle Leaves', hardness: 0.35, transparent: true, sound: 'grass', drop: 'jungle_leaves', faces: { all: 'jungle_leaves' } });
+regBlock(BLOCK.JUNGLE_PLANKS, 'jungle_planks', { name: 'Jungle Planks', hardness: 1.5, tool: 'axe', sound: 'wood', faces: { all: 'jungle_planks' } });
+
+regBlock(BLOCK.CHERRY_LOG, 'cherry_log', { name: 'Cherry Log', hardness: 1.8, tool: 'axe', sound: 'wood', faces: { top: 'cherry_log_top', side: 'cherry_log_side', bottom: 'cherry_log_top' } });
+regBlock(BLOCK.CHERRY_LEAVES, 'cherry_leaves', { name: 'Cherry Leaves', hardness: 0.35, transparent: true, sound: 'grass', drop: 'cherry_leaves', faces: { all: 'cherry_leaves' } });
+regBlock(BLOCK.CHERRY_PLANKS, 'cherry_planks', { name: 'Cherry Planks', hardness: 1.5, tool: 'axe', sound: 'wood', faces: { all: 'cherry_planks' } });
+
+regBlock(BLOCK.RED_SAND, 'red_sand', { name: 'Red Sand', hardness: 0.6, tool: 'shovel', sound: 'sand', faces: { all: 'red_sand' } });
+regBlock(BLOCK.TERRACOTTA, 'terracotta', { name: 'Terracotta', hardness: 1.9, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'terracotta' } });
+regBlock(BLOCK.TERRACOTTA_RED, 'terracotta_red', { name: 'Red Terracotta', hardness: 1.9, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'terracotta_red' } });
+regBlock(BLOCK.TERRACOTTA_ORANGE, 'terracotta_orange', { name: 'Orange Terracotta', hardness: 1.9, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'terracotta_orange' } });
+regBlock(BLOCK.TERRACOTTA_YELLOW, 'terracotta_yellow', { name: 'Yellow Terracotta', hardness: 1.9, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'terracotta_yellow' } });
+
+regBlock(BLOCK.MOSSY_COBBLESTONE, 'mossy_cobblestone', { name: 'Mossy Cobblestone', hardness: 2.4, tool: 'pickaxe', minTier: 1, sound: 'stone', faces: { all: 'mossy_cobblestone' } });
+regBlock(BLOCK.MUD, 'mud', { name: 'Mud', hardness: 0.6, tool: 'shovel', sound: 'dirt', faces: { all: 'mud' } });
+regBlock(BLOCK.PACKED_ICE, 'packed_ice', { name: 'Packed Ice', hardness: 1.2, tool: 'pickaxe', sound: 'glass', faces: { all: 'packed_ice' } });
+
+regBlock(BLOCK.SAVANNA_GRASS, 'savanna_grass', { name: 'Savanna Grass', hardness: 0.7, tool: 'shovel', sound: 'grass', drop: 'dirt', faces: { top: 'savanna_grass_top', side: 'savanna_grass_side', bottom: 'dirt' } });
+regBlock(BLOCK.JUNGLE_GRASS, 'jungle_grass', { name: 'Jungle Grass', hardness: 0.7, tool: 'shovel', sound: 'grass', drop: 'dirt', faces: { top: 'jungle_grass_top', side: 'jungle_grass_side', bottom: 'dirt' } });
+regBlock(BLOCK.SWAMP_GRASS, 'swamp_grass', { name: 'Swamp Grass', hardness: 0.7, tool: 'shovel', sound: 'grass', drop: 'dirt', faces: { top: 'swamp_grass_top', side: 'swamp_grass_side', bottom: 'dirt' } });
+
 // --- MATERIALS & FOOD ---
 regItem('stick', { name: 'Stick', icon: 'stick' });
 regItem('coal', { name: 'Coal', icon: 'coal', fuel: 80 });
+regItem('flint', { name: 'Flint', icon: 'flint' });
+regItem('flint_and_steel', { name: 'Flint and Steel', stackSize: 1, toolType: 'flint_and_steel', durability: 64, icon: 'flint_and_steel' });
 regItem('raw_iron', { name: 'Raw Iron', icon: 'raw_iron' });
 regItem('iron_ingot', { name: 'Iron Ingot', icon: 'iron_ingot' });
+regItem('raw_gold', { name: 'Raw Gold', icon: 'raw_gold' });
 regItem('gold_ingot', { name: 'Gold Ingot', icon: 'gold_ingot' });
 regItem('diamond', { name: 'Diamond', icon: 'diamond' });
 regItem('emerald', { name: 'Emerald', icon: 'emerald' });
@@ -206,6 +256,7 @@ regItem('cooked_salmon', { name: 'Cooked Salmon', icon: 'cooked_salmon', food: 7
 const TIERS = [
   { key: 'wooden', name: 'Wooden', tier: 1, speed: 2.2, dur: 60, dmg: 1 },
   { key: 'stone', name: 'Stone', tier: 2, speed: 4.0, dur: 132, dmg: 2 },
+  { key: 'golden', name: 'Golden', tier: 2, speed: 11.5, dur: 64, dmg: 2 },
   { key: 'iron', name: 'Iron', tier: 3, speed: 6.2, dur: 251, dmg: 3 },
   { key: 'diamond', name: 'Diamond', tier: 4, speed: 9.0, dur: 1561, dmg: 4 }
 ];
@@ -232,6 +283,7 @@ for (const t of TIERS) {
 // --- ARMOR ---
 const ARMOR_MATS = [
   { key: 'leather', name: 'Leather', def: [1, 3, 2, 1], dur: 80 },
+  { key: 'golden', name: 'Golden', def: [2, 5, 3, 1], dur: 112 },
   { key: 'iron', name: 'Iron', def: [2, 6, 5, 2], dur: 240 },
   { key: 'diamond', name: 'Diamond', def: [3, 8, 6, 3], dur: 520 }
 ];
@@ -323,7 +375,7 @@ export function getItemCategory(def) {
   if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
     return 'utility';
   }
-  if (['grass', 'dirt', 'sand', 'gravel', 'water', 'oak_log', 'oak_leaves', 'birch_log', 'birch_leaves', 'spruce_log', 'spruce_leaves', 'cactus', 'snow', 'ice', 'tall_grass', 'flower_red', 'flower_yellow', 'farmland', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'].includes(id)) {
+  if (['grass', 'savanna_grass', 'jungle_grass', 'swamp_grass', 'dirt', 'mud', 'sand', 'red_sand', 'gravel', 'water', 'oak_log', 'oak_leaves', 'birch_log', 'birch_leaves', 'spruce_log', 'spruce_leaves', 'acacia_log', 'acacia_leaves', 'jungle_log', 'jungle_leaves', 'cherry_log', 'cherry_leaves', 'cactus', 'snow', 'ice', 'packed_ice', 'tall_grass', 'flower_red', 'flower_yellow', 'farmland', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'].includes(id)) {
     return 'nature';
   }
   return 'building';

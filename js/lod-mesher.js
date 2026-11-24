@@ -10,9 +10,11 @@
 
 // Self-contained kernel factory — stringified verbatim into inline Blob Web Workers AND used directly on main thread!
 export function createLodKernel(seed, worldType) {
-  const SEA_LEVEL = 34;
-  const CHUNK_HEIGHT = 96;
+  const SEA_LEVEL = 64;
+  const CHUNK_HEIGHT = 512;
   const CHUNK_SIZE = 16;
+  const SNOW_LINE = SEA_LEVEL + 64;
+  const ROCK_LINE = SEA_LEVEL + 46;
   const CELLS = 32; // 32x32 voxel columns per super-region -> 4x higher detail & fewer draw calls!
   const PAD = CELLS + 2; // 34x34 padded grid for exact slopes, cliffs, and corner AO
 
@@ -111,35 +113,40 @@ export function createLodKernel(seed, worldType) {
   }
 
   // Zero-allocation terrain column sampler matching World.sampleColumn() exactly!
-  // Biome IDs: 0=Plains, 1=Mountains, 2=Desert, 3=Snowy Taiga, 4=Forest, 5=Birch Forest
-  let outH = 36;
+  // Biome IDs: 0=Plains, 1=Mountains, 2=Desert, 3=Snowy Taiga, 4=Forest, 5=Birch Forest,
+  //            6=Savanna, 7=Jungle, 8=Badlands, 9=Swamp, 10=Cherry Grove
+  let outH = SEA_LEVEL + 2;
   let outB = 0;
 
   function sampleColumnLod(wx, wz, detailLevel) {
     if (isFlat) {
-      outH = 36;
+      outH = SEA_LEVEL + 2;
       outB = 0;
       return;
     }
-    // Adaptive octaves: full precision on near/mid tiers (step<=4), ultra-fast macro octaves on 32m/64m horizon tiers!
     const octBiome = detailLevel >= 2 ? 2 : 3;
-    const temp = fbm2D(permB, wx * 0.0034, wz * 0.0034, octBiome);
-    const moist = fbm2D(permM, wx * 0.0034, wz * 0.0034, octBiome);
-    const mountField = fbm2D(permH, wx * 0.0038 + 50, wz * 0.0038 - 50, octBiome);
+    const temp = fbm2D(permB, wx * 0.00145, wz * 0.00145, octBiome);
+    const moist = fbm2D(permM, wx * 0.00145, wz * 0.00145, octBiome);
+    const mountField = fbm2D(permH, wx * 0.00155 + 50, wz * 0.00155 - 50, octBiome);
+    const octCont = detailLevel >= 3 ? 2 : (detailLevel >= 1 ? 3 : 4);
+    const cont = fbm2D(permH, wx * 0.0018, wz * 0.0018, octCont);
 
     let biome = 0;
-    if (mountField > 0.16) biome = 1;
-    else if (temp > 0.15 && moist < 0.03) biome = 2;
-    else if (temp < -0.14) biome = 3;
-    else if (moist > 0.11) biome = temp > 0.0 ? 4 : 5;
+    if (mountField > 0.145) biome = 1;
+    else if (temp > 0.21 && moist < -0.05) biome = 8;
+    else if (temp > 0.13 && moist < 0.01) biome = 2;
+    else if (temp > 0.10 && moist < 0.11) biome = 6;
+    else if (temp > 0.09 && moist >= 0.11) biome = 7;
+    else if (temp < -0.13) biome = 3;
+    else if (moist > 0.13 && cont < 0.04 && temp > -0.06) biome = 9;
+    else if (mountField > 0.055 && temp > -0.08 && temp < 0.10 && moist > -0.05) biome = 10;
+    else if (moist > 0.07) biome = temp > 0.0 ? 4 : 5;
 
-    const octCont = detailLevel >= 3 ? 2 : (detailLevel >= 1 ? 3 : 4);
     const octHills = detailLevel >= 3 ? 1 : (detailLevel >= 1 ? 2 : 3);
-    const cont = fbm2D(permH, wx * 0.0042, wz * 0.0042, octCont);
-    const hills = fbm2D(permH, wx * 0.015, wz * 0.015, octHills);
-    const micro = detailLevel === 0 ? noise2D(permH, wx * 0.048, wz * 0.048) * 1.4 : 0;
+    const hills = fbm2D(permH, wx * 0.0085, wz * 0.0085, octHills);
+    const micro = detailLevel === 0 ? noise2D(permH, wx * 0.042, wz * 0.042) * 1.3 : 0;
 
-    let mRaw = (mountField - 0.02) / 0.34;
+    let mRaw = (mountField - 0.01) / 0.34;
     if (mRaw < 0) mRaw = 0;
     else if (mRaw > 1) mRaw = 1;
     const mSmooth = mRaw * mRaw * (3 - 2 * mRaw);
@@ -147,54 +154,80 @@ export function createLodKernel(seed, worldType) {
     let alpineBoost = 0;
     if (mSmooth > 0.001) {
       const warpOct = detailLevel >= 2 ? 1 : 2;
-      const warpX = fbm2D(permB, wx * 0.009 + 11, wz * 0.009 - 19, warpOct) * 28;
-      const warpZ = fbm2D(permM, wx * 0.009 - 27, wz * 0.009 + 33, warpOct) * 28;
+      const warpX = fbm2D(permB, wx * 0.0042 + 11, wz * 0.0042 - 19, warpOct) * 48;
+      const warpZ = fbm2D(permM, wx * 0.0042 - 27, wz * 0.0042 + 33, warpOct) * 48;
       const rx = wx + warpX;
       const rz = wz + warpZ;
 
-      const r1 = 1.0 - Math.abs(noise2D(permH, rx * 0.0085, rz * 0.0085) * 1.85);
-      const ridgeA = r1 > 0 ? Math.pow(r1, 1.75) : 0;
+      const r1 = 1.0 - Math.abs(noise2D(permH, rx * 0.0044, rz * 0.0044) * 1.85);
+      const ridgeA = r1 > 0 ? Math.pow(r1, 1.65) : 0;
 
       let ridgeB = 0;
       let ridgeC = 0;
       if (detailLevel < 3) {
-        const r2 = 1.0 - Math.abs(noise2D(permH, rx * 0.019 + 41, rz * 0.019 - 17) * 1.85);
-        if (r2 > 0) ridgeB = (r2 * r2) * (0.35 + 0.65 * ridgeA);
+        const r2 = 1.0 - Math.abs(noise2D(permH, rx * 0.0105 + 41, rz * 0.0105 - 17) * 1.85);
+        if (r2 > 0) ridgeB = Math.pow(r2, 1.95) * (0.35 + 0.65 * ridgeA);
         if (detailLevel === 0) {
-          const r3 = 1.0 - Math.abs(noise2D(permH, rx * 0.042 - 13, rz * 0.042 + 29) * 1.85);
-          if (r3 > 0) ridgeC = Math.pow(r3, 2.2) * (0.25 + 0.75 * ridgeB);
+          const r3 = 1.0 - Math.abs(noise2D(permH, rx * 0.025 - 13, rz * 0.025 + 29) * 1.85);
+          if (r3 > 0) ridgeC = Math.pow(r3, 2.1) * (0.25 + 0.75 * ridgeB);
         }
       }
 
-      alpineBoost = mSmooth * 10.5 + (mSmooth * mSmooth) * (ridgeA * 34.0 + ridgeB * 14.0 + ridgeC * 4.5);
+      alpineBoost = mSmooth * 24.0 + (mSmooth * mSmooth) * (ridgeA * 106.0 + ridgeB * 40.0 + ridgeC * 12.0);
     }
 
-    // Rivers (<20m wide) and small ponds are sub-Nyquist at 32m/64m horizon stride (skip on detailLevel 3 for 2x speedup!)
+    let valleyCarve = 0;
     let riverCarve = 0;
     let pondCarve = 0;
     if (detailLevel < 3) {
       const octRiv = detailLevel >= 1 ? 2 : 3;
-      const riverRaw = Math.abs(fbm2D(permM, wx * 0.0052 + 200, wz * 0.0052 - 150, octRiv));
-      const riverT = riverRaw < 0.056 ? (1 - riverRaw / 0.056) : 0;
-      riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 11.5 * (1 - mSmooth * 0.72);
+      const riverRaw = Math.abs(fbm2D(permM, wx * 0.0028 + 200, wz * 0.0028 - 150, octRiv));
+      const valleyT = riverRaw < 0.14 ? (1 - riverRaw / 0.14) : 0;
+      valleyCarve = (valleyT * valleyT * (3 - 2 * valleyT)) * 12.0 * (1 - mSmooth * 0.45);
+      const riverT = riverRaw < 0.044 ? (1 - riverRaw / 0.044) : 0;
+      riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 14.0 * (1 - mSmooth * 0.72);
 
       const pondOct = detailLevel >= 2 ? 1 : 2;
-      const pondNoise = fbm2D(permB, wx * 0.011 - 90, wz * 0.011 + 110, pondOct);
+      const pondNoise = fbm2D(permB, wx * 0.0075 - 90, wz * 0.0075 + 110, pondOct);
       let pondT = pondNoise < -0.24 ? (-0.24 - pondNoise) / 0.22 : 0;
       if (pondT > 1) pondT = 1;
-      pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 7.5 * (1 - mSmooth * 0.9);
+      pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 9.0 * (1 - mSmooth * 0.9);
     }
 
     let flatBlend = 1 - mSmooth * 1.8;
     if (flatBlend < 0) flatBlend = 0;
     else if (flatBlend > 1) flatBlend = 1;
-    const hillAmp = (temp > 0.14 ? 4.0 : 6.4) * flatBlend + 3.0 * mSmooth;
-    const terrace = detailLevel < 3 ? Math.sin(hills * 3.14159) * 0.45 * flatBlend : 0;
 
-    const baseH = SEA_LEVEL + 4.8 + cont * 13.0 + (hills * hillAmp + terrace) + micro + alpineBoost - riverCarve - pondCarve;
+    let biomeOffset = 0;
+    let hillAmp = (temp > 0.13 ? 5.5 : 8.2) * flatBlend + 4.5 * mSmooth;
+    if (biome === 8) {
+      const mesaRaw = Math.max(0, Math.min(1, (hills + 0.18) * 2.2));
+      const stepped = Math.floor(mesaRaw * 4) * 7.0 + Math.min(1, (mesaRaw * 4) % 1 * 3.5) * 2.0;
+      biomeOffset = stepped * flatBlend;
+      hillAmp = 2.5 * flatBlend;
+    } else if (biome === 6) {
+      biomeOffset = (hills > 0.12 ? 9.0 : 2.5) * flatBlend;
+      hillAmp = 4.5 * flatBlend;
+    } else if (biome === 7) {
+      hillAmp = 10.5 * flatBlend;
+      biomeOffset = 4.0 * flatBlend;
+    } else if (biome === 9) {
+      hillAmp = 2.4 * flatBlend;
+      biomeOffset = -6.5 * flatBlend;
+    } else if (biome === 10) {
+      biomeOffset = 8.0 * flatBlend;
+      hillAmp = 6.5 * flatBlend;
+    }
+
+    const terrace = detailLevel < 3 ? Math.sin(hills * 3.14159) * 0.5 * flatBlend : 0;
+    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve;
+    if (biome === 9 && mSmooth < 0.15) {
+      baseH = Math.min(baseH, SEA_LEVEL + 3.5 + hills * 3.0);
+      baseH = Math.max(baseH, SEA_LEVEL - 2.5);
+    }
     let h = Math.floor(baseH);
-    if (h < 8) h = 8;
-    else if (h > CHUNK_HEIGHT - 8) h = CHUNK_HEIGHT - 8;
+    if (h < 10) h = 10;
+    else if (h > CHUNK_HEIGHT - 16) h = CHUNK_HEIGHT - 16;
     outH = h;
     outB = biome;
   }
@@ -308,7 +341,7 @@ export function createLodKernel(seed, worldType) {
             sampleColumnLod(centerWx, centerWz, 0);
             const baseY = outH;
             const vBiome = outB;
-            if (baseY > SEA_LEVEL + 1 && baseY <= 56 && vBiome !== 1) {
+            if (baseY > SEA_LEVEL + 1 && baseY <= SEA_LEVEL + 36 && vBiome !== 1 && vBiome !== 9) {
               // 3x3 chunk village footprint: [(vcx-1)*16 .. (vcx+2)*16)
               const vx0 = (vcx - 1) * CHUNK_SIZE;
               const vz0 = (vcz - 1) * CHUNK_SIZE;
@@ -481,6 +514,21 @@ export function createLodKernel(seed, worldType) {
             mat = MAT_WATER;
             sMat = MAT_WATER;
           }
+        } else if (biome === 8) {
+          // Badlands / Mesa — stratified terracotta canyon bands & red sand floor!
+          if (h <= SEA_LEVEL + 6) {
+            topRGB = packRGB(204, 102, 52);
+            sideRGB = packRGB(178, 86, 42);
+          } else {
+            const band = h & 7;
+            if (band === 1 || band === 6) topRGB = packRGB(190, 96, 44);
+            else if (band === 3 || band === 7) topRGB = packRGB(156, 62, 48);
+            else if (band === 4) topRGB = packRGB(202, 146, 44);
+            else topRGB = packRGB(160, 102, 74);
+            sideRGB = packRGB(152, 82, 54);
+          }
+          mat = MAT_ROCK;
+          sMat = MAT_ROCK;
         } else if (biome === 2) {
           // Desert — clean golden sand dunes & sandstone cliffs + occasional cactus on Tier 0
           const bh = coordHash(cellX, cellZ, seed + 713);
@@ -491,7 +539,6 @@ export function createLodKernel(seed, worldType) {
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
           } else {
-            // Subtle quantized dune tone (2 levels) so flat deserts merge greedily
             const dune = (h & 3) === 0 ? 1.0 : 0.97;
             topRGB = packRGB(220 * dune, 202 * dune, 142 * dune);
             sideRGB = packRGB(198, 180, 124);
@@ -499,8 +546,13 @@ export function createLodKernel(seed, worldType) {
             sMat = MAT_TERRAIN;
           }
         } else if (!isFlat && h <= SEA_LEVEL + 1) {
-          // Shoreline: gravel in mountains, warm sand beach elsewhere
-          if (biome === 1 && normSlope >= 1.2) {
+          // Shoreline: mud in swamp, gravel in mountains, warm sand beach elsewhere
+          if (biome === 9) {
+            topRGB = packRGB(68, 64, 68);
+            sideRGB = packRGB(54, 50, 54);
+            mat = MAT_TERRAIN;
+            sMat = MAT_TERRAIN;
+          } else if (biome === 1 && normSlope >= 1.2) {
             topRGB = packRGB(144, 146, 152);
             sideRGB = packRGB(122, 124, 130);
             mat = MAT_ROCK;
@@ -511,19 +563,18 @@ export function createLodKernel(seed, worldType) {
             mat = MAT_TERRAIN;
             sMat = MAT_TERRAIN;
           }
-        } else if (!isFlat && ((normSlope >= 2.2 && h > SEA_LEVEL + 4) || (h >= 52 && h < 58 && normSlope >= 1.35))) {
-          // Steep Exposed Granite & Gravel Alpine Cliffs (matches generateChunk slope>=3 rock!)
-          const rockVar = h >= 55 ? 1.05 : 0.98;
+        } else if (!isFlat && ((normSlope >= 2.2 && h > SEA_LEVEL + 6) || (h >= ROCK_LINE && h < SNOW_LINE && normSlope >= 1.35))) {
+          // Steep Exposed Granite & Gravel Alpine Cliffs
+          const rockVar = h >= ROCK_LINE + 8 ? 1.05 : 0.98;
           topRGB = packRGB(132 * rockVar, 136 * rockVar, 144 * rockVar);
           sideRGB = packRGB(116 * rockVar, 120 * rockVar, 128 * rockVar);
           mat = MAT_ROCK;
           sMat = MAT_ROCK;
-        } else if (h >= 58 || (biome === 3 && h >= SEA_LEVEL + 2)) {
+        } else if (h >= SNOW_LINE || (biome === 3 && h >= SEA_LEVEL + 2)) {
           // Alpine Snow Peaks & Snowy Taiga Conifer Forests
           const bh = allowTreePillars ? coordHash(cellX, cellZ, seed + 713) : 0;
           const treeDens = step <= 2 ? 0.68 : (step === 4 ? 0.56 : 0.50);
-          if (allowTreePillars && biome === 3 && h < 57 && normSlope < 1.9 && bh > treeDens) {
-            // Crisp conical Alpine Spruce canopy (varied 4..7 block heights + occasional snow-dusted top!)
+          if (allowTreePillars && biome === 3 && h < SNOW_LINE - 2 && normSlope < 1.9 && bh > treeDens) {
             const crownH = 4 + (((bh * 100) | 0) & 3);
             yTop = h + crownH;
             const snowTip = bh > 0.89;
@@ -531,25 +582,82 @@ export function createLodKernel(seed, worldType) {
             sideRGB = packRGB(34, 70, 46);
             mat = snowTip ? MAT_SNOW : MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
-          } else if (!allowTreePillars && biome === 3 && h < 56) {
-            // Smooth velvety pine-and-snow horizon taiga (ultra-greedy!)
+          } else if (!allowTreePillars && biome === 3 && h < SNOW_LINE - 4) {
             topRGB = packRGB(122, 152, 146);
             sideRGB = packRGB(96, 114, 118);
             mat = MAT_SNOW;
             sMat = MAT_ROCK;
           } else {
-            // Bright crisp Alpine Snow Cap over dark granite cliffs
             topRGB = packRGB(240, 246, 255);
             sideRGB = packRGB(134, 139, 148);
             mat = MAT_SNOW;
             sMat = MAT_ROCK;
           }
-        } else if (h >= 52) {
-          // High mountain stone / gravel plateau
+        } else if (h >= ROCK_LINE) {
           topRGB = packRGB(136, 140, 148);
           sideRGB = packRGB(118, 122, 130);
           mat = MAT_ROCK;
           sMat = MAT_ROCK;
+        } else if (biome === 6) {
+          // Warm Golden-Olive Savanna with scattered Acacia crowns!
+          const bh = allowTreePillars ? coordHash(cellX, cellZ, seed + 713) : 0;
+          if (allowTreePillars && normSlope < 1.8 && bh > 0.84) {
+            yTop = h + 5;
+            topRGB = packRGB(124, 146, 46);
+            sideRGB = packRGB(98, 116, 36);
+            mat = MAT_FOLIAGE;
+            sMat = MAT_FOLIAGE;
+          } else {
+            topRGB = packRGB(154, 158, 66);
+            sideRGB = packRGB(126, 94, 58);
+            mat = MAT_TERRAIN;
+            sMat = MAT_TERRAIN;
+          }
+        } else if (biome === 7) {
+          // Deep Lush Emerald Jungle with tall dense canopies!
+          const bh = allowTreePillars ? coordHash(cellX, cellZ, seed + 713) : 0;
+          if (allowTreePillars && normSlope < 2.1 && bh > 0.44) {
+            yTop = h + 7 + (((bh * 53) | 0) & 3);
+            topRGB = packRGB(42, 148, 42);
+            sideRGB = packRGB(30, 114, 30);
+            mat = MAT_FOLIAGE;
+            sMat = MAT_FOLIAGE;
+          } else {
+            topRGB = packRGB(52, 162, 56);
+            sideRGB = packRGB(96, 76, 48);
+            mat = MAT_TERRAIN;
+            sMat = MAT_TERRAIN;
+          }
+        } else if (biome === 9) {
+          // Murky Wetland Swamp with dark mossy trees!
+          const bh = allowTreePillars ? coordHash(cellX, cellZ, seed + 713) : 0;
+          if (allowTreePillars && normSlope < 1.6 && bh > 0.72) {
+            yTop = h + 4;
+            topRGB = packRGB(64, 96, 46);
+            sideRGB = packRGB(50, 74, 36);
+            mat = MAT_FOLIAGE;
+            sMat = MAT_FOLIAGE;
+          } else {
+            topRGB = packRGB(84, 108, 62);
+            sideRGB = packRGB(66, 62, 64);
+            mat = MAT_TERRAIN;
+            sMat = MAT_TERRAIN;
+          }
+        } else if (biome === 10) {
+          // Cherry Grove with blooming pink sakura trees!
+          const bh = allowTreePillars ? coordHash(cellX, cellZ, seed + 713) : 0;
+          if (allowTreePillars && normSlope < 2.0 && bh > 0.62) {
+            yTop = h + 5;
+            topRGB = packRGB(246, 166, 198);
+            sideRGB = packRGB(218, 128, 166);
+            mat = MAT_FOLIAGE;
+            sMat = MAT_FOLIAGE;
+          } else {
+            topRGB = packRGB(108, 174, 72);
+            sideRGB = packRGB(122, 92, 62);
+            mat = MAT_TERRAIN;
+            sMat = MAT_TERRAIN;
+          }
         } else if (biome === 4) {
           // Lush Oak Forest (with ~18% mixed birch crowns just like generateChunk!)
           if (!allowTreePillars) {
