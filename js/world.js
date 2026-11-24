@@ -258,7 +258,8 @@ const SCRATCH_BUCKETS = {
   opaque: new MeshBucket(16384, true),
   cutout: new MeshBucket(8192, false),
   staticCutout: new MeshBucket(4096, false),
-  water: new MeshBucket(4096, false)
+  water: new MeshBucket(4096, false),
+  fire: new MeshBucket(2048, false)
 };
 // Dual coarse 4x4x4 trilinear cave grids (Minecraft 1.18 Spaghetti + Cheese Caverns, up to Y=252!)
 const CAVE_GRID = new Float32Array(5 * 64 * 5);
@@ -283,7 +284,10 @@ const FLAMMABLE_SET = new Set([
   BLOCK.OAK_PLANKS, BLOCK.BIRCH_PLANKS, BLOCK.SPRUCE_PLANKS, BLOCK.ACACIA_PLANKS, BLOCK.JUNGLE_PLANKS, BLOCK.CHERRY_PLANKS,
   BLOCK.CRAFTING_TABLE, BLOCK.BOOKSHELF, BLOCK.LADDER, BLOCK.TALL_GRASS, BLOCK.FLOWER_RED, BLOCK.FLOWER_YELLOW,
   BLOCK.WOOL_WHITE, BLOCK.WOOL_RED, BLOCK.WOOL_BLUE, BLOCK.WOOL_GREEN, BLOCK.WOOL_YELLOW,
-  BLOCK.BED, BLOCK.BED_HEAD_N, BLOCK.BED_FOOT_S, BLOCK.BED_HEAD_S, BLOCK.BED_FOOT_E, BLOCK.BED_HEAD_E, BLOCK.BED_FOOT_W, BLOCK.BED_HEAD_W
+  BLOCK.BED, BLOCK.BED_HEAD_N, BLOCK.BED_FOOT_S, BLOCK.BED_HEAD_S, BLOCK.BED_FOOT_E, BLOCK.BED_HEAD_E, BLOCK.BED_FOOT_W, BLOCK.BED_HEAD_W,
+  BLOCK.OAK_DOOR_B, BLOCK.OAK_DOOR_T, BLOCK.BIRCH_DOOR_B, BLOCK.BIRCH_DOOR_T,
+  BLOCK.SPRUCE_DOOR_B, BLOCK.SPRUCE_DOOR_T, BLOCK.ACACIA_DOOR_B, BLOCK.ACACIA_DOOR_T,
+  BLOCK.JUNGLE_DOOR_B, BLOCK.JUNGLE_DOOR_T, BLOCK.CHERRY_DOOR_B, BLOCK.CHERRY_DOOR_T
 ]);
 const FAST_BURN_SET = new Set([
   BLOCK.OAK_LEAVES, BLOCK.BIRCH_LEAVES, BLOCK.SPRUCE_LEAVES, BLOCK.ACACIA_LEAVES, BLOCK.JUNGLE_LEAVES, BLOCK.CHERRY_LEAVES,
@@ -342,6 +346,7 @@ export class World {
       uWaveStrength: { value: this.shaderMode === 'off' ? 0.0 : (this.shaderMode === 'ultra' ? 1.15 : 0.9) },
       uShaderOn: { value: this.shaderMode === 'off' ? 0.0 : 1.0 },
       uSunDir: { value: new THREE.Vector3(0.6, 0.5, -0.25).normalize() },
+      uMoonDir: { value: new THREE.Vector3(-0.6, -0.5, 0.25).normalize() },
       uTopColor: { value: new THREE.Color(0x245ec2) },
       uMidColor: { value: new THREE.Color(0x63a8ed) },
       uHorizonColor: { value: new THREE.Color(0xd4e8fa) },
@@ -370,6 +375,7 @@ export class World {
         uTime: this.shaderUniforms.uTime,
         uShaderOn: this.shaderUniforms.uShaderOn,
         uSunDir: this.shaderUniforms.uSunDir,
+        uMoonDir: this.shaderUniforms.uMoonDir,
         uSunColor: this.shaderUniforms.uSunColor,
         uHorizonColor: this.shaderUniforms.uHorizonColor,
         uSunsetColor: this.shaderUniforms.uSunsetColor,
@@ -399,6 +405,7 @@ export class World {
         uniform float uTime;
         uniform float uShaderOn;
         uniform vec3 uSunDir;
+        uniform vec3 uMoonDir;
         uniform vec3 uSunColor;
         uniform vec3 uHorizonColor;
         uniform vec3 uSunsetColor;
@@ -433,24 +440,34 @@ export class World {
            vec3 L = normalize(uSunDir);
            vec3 V = -viewDir;
 
-           // BSL Warm Sunlight Bounce vs Airy Luminous Sky-Tinted Shadows (never crushed black!)
+           // Complementary / BSL Dramatic Golden Sunlight vs Cool Periwinkle Shadows + Sapphire Moonlight Rim!
            float ndl = dot(N, L);
-           float sunLit = smoothstep(-0.2, 0.55, ndl);
-           vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
-           vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
+           float sunLit = smoothstep(-0.22, 0.58, ndl);
+           vec3 warmSunTint = mix(vec3(1.10, 1.04, 0.94), vec3(1.34, 1.02, 0.78), uSunsetFactor);
+           vec3 coolShadowTint = mix(vec3(0.84, 0.91, 1.09), vec3(0.92, 0.98, 1.10), uDayFactor);
            gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
+
            // Gentle outdoor sky ambient bounce lift in shadowed areas (only above caves)
            float outdoorLift = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
-           gl_FragColor.rgb += uHorizonColor * 0.032 * uDayFactor * outdoorLift * (1.0 - sunLit * 0.7);
+           gl_FragColor.rgb += uHorizonColor * 0.042 * uDayFactor * outdoorLift * (1.0 - sunLit * 0.65);
 
-           // Crisp BSL Sun-Rim Specular Sheen (zero pow() transcendental calls!)
+           // Cool Sapphire-Cyan Moonlight Key & Silhouette Rim Lighting at Night (Image 4!)
+           float nightAmt = clamp(1.0 - uDayFactor * 1.5, 0.0, 1.0) * outdoorLift;
+           if (nightAmt > 0.01) {
+             vec3 M = normalize(uMoonDir);
+             float moonLit = smoothstep(-0.15, 0.65, dot(N, M));
+             float rimN = pow(1.0 - max(0.0, dot(N, V)), 2.8);
+             gl_FragColor.rgb += vec3(0.16, 0.34, 0.68) * (moonLit * 0.32 + rimN * 0.24) * nightAmt;
+           }
+
+           // Crisp Sun-Rim Specular Sheen
            vec3 H = normalize(V + L);
            float nh = max(0.0, dot(N, H));
            float nh2 = nh * nh;
            float nh4 = nh2 * nh2;
            float nh16 = nh4 * nh4 * nh4 * nh4;
-           float spec = nh16 * sunLit * uDayFactor * (0.09 + 0.14 * uSunsetFactor);
-           gl_FragColor.rgb += uSunColor * spec * (1.0 - smoothstep(40.0, 140.0, dist) * 0.7);
+           float spec = nh16 * sunLit * uDayFactor * (0.11 + 0.18 * uSunsetFactor);
+           gl_FragColor.rgb += uSunColor * spec * (1.0 - smoothstep(40.0, 160.0, dist) * 0.65);
 
            // Shimmering Underwater Caustics projected onto submerged terrain!
            if (vWorldPos.y < ${SEA_LEVEL}.05 && N.y > 0.25 && uDayFactor > 0.05) {
@@ -459,20 +476,28 @@ export class World {
              float c1 = sin(vWorldPos.x * 2.1 + uTime * 2.0 + vWorldPos.z * 0.9);
              float c2 = cos(vWorldPos.z * 2.3 - uTime * 1.8 - vWorldPos.x * 0.8);
              float cSum = max(0.0, (c1 + c2) * 0.5);
-             gl_FragColor.rgb += vec3(0.18, 0.42, 0.48) * (cSum * cSum * cSum) * depthFade * uDayFactor * 0.65;
+             gl_FragColor.rgb += vec3(0.20, 0.48, 0.54) * (cSum * cSum * cSum) * depthFade * uDayFactor * 0.72;
            }
 
-           // Warm torch & glowstone emissive radiance (glows vibrantly day & night!)
+           // Blazing HDR Torch, Glowstone & Lava Emissive Radiance (triggers warm halo in PostFX Bloom!)
            if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.2;
+             gl_FragColor.rgb += vec3(1.15, 0.80, 0.30) * vEmissive * 3.9;
            }
 
-           // BSL Volumetric Sun-Aligned Atmospheric Aerial Perspective Haze (fast mul-chain!)
-           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist);
+           // Dreamy Low-Altitude Atmospheric Valley Mist + Volumetric Sun-Aligned Horizon Haze (Images 3 & 4!)
            float sa = max(0.0, dot(viewDir, L));
            float sunAlign = sa * sa * sa;
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
+           float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
+           float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorLift * mix(0.42, 0.52, uSunsetFactor) * (1.0 - smoothstep(180.0, 320.0, dist) * 0.35);
+           vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
+           vec3 mistNight = vec3(0.11, 0.28, 0.58);
+           vec3 mistCol = mix(mistNight, mistDay, uDayFactor);
+           mistCol = mix(mistCol, uSunsetColor * 1.15, sunAlign * uSunsetFactor * 0.45);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, mistCol, clamp(valleyMist, 0.0, 0.62));
+
+           float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist) * outdoorLift;
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
            gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
          } else {
            if (vEmissive > 0.01) {
@@ -494,7 +519,7 @@ export class World {
         polygonOffsetFactor: withInnerCutout ? 2 : 0,
         polygonOffsetUnits: withInnerCutout ? 2 : 0
       });
-      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v28' : 'lod_outer_v28');
+      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v29' : 'lod_outer_v29');
       mat.onBeforeCompile = (shader) => {
         const uniforms = {
           uTime: this.shaderUniforms.uTime,
@@ -649,31 +674,39 @@ export class World {
                  gl_FragColor.rgb += uSunColor * (nh64 * 1.9 + nh16 * 0.28) * sunUp;
                }
              } else {
-               float sunLit = smoothstep(-0.2, 0.55, dot(N, L));
-               vec3 warmSunTint = mix(vec3(1.06, 1.03, 0.96), vec3(1.20, 1.02, 0.85), uSunsetFactor);
-               vec3 coolShadowTint = mix(vec3(0.92, 0.96, 1.06), vec3(0.96, 1.01, 1.08), uDayFactor);
+               float sunLit = smoothstep(-0.22, 0.58, dot(N, L));
+               vec3 warmSunTint = mix(vec3(1.10, 1.04, 0.94), vec3(1.34, 1.02, 0.78), uSunsetFactor);
+               vec3 coolShadowTint = mix(vec3(0.84, 0.91, 1.09), vec3(0.92, 0.98, 1.10), uDayFactor);
                gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
-               gl_FragColor.rgb += uHorizonColor * 0.032 * uDayFactor * (1.0 - sunLit * 0.7);
+               gl_FragColor.rgb += uHorizonColor * 0.042 * uDayFactor * (1.0 - sunLit * 0.65);
 
                if (vMat > 0.37 && vMat < 0.62) {
                  float saF = max(0.0, dot(viewDir, L));
-                 float sss = (saF * saF * saF) * 0.22 * uDayFactor;
+                 float sss = (saF * saF * saF) * 0.32 * uDayFactor;
                  gl_FragColor.rgb += gl_FragColor.rgb * uSunColor * sss;
                } else if (vMat > 0.62 && vMat < 0.85) {
                  vec3 H = normalize(-viewDir + L);
                  float nh = max(0.0, dot(N, H));
                  float nh2 = nh * nh;
                  float nh8 = nh2 * nh2 * nh2 * nh2;
-                 gl_FragColor.rgb += uSunColor * (nh8 * 0.18 * sunLit * uDayFactor);
+                 gl_FragColor.rgb += uSunColor * (nh8 * 0.24 * sunLit * uDayFactor);
                }
              }
 
-             // Volumetric Sun-Aligned Atmospheric Aerial Perspective Haze out to 512 chunks!
-             float hazeFactor = smoothstep(uFogNear * 0.45, uFogFar, dist);
+             // Matching Low-Altitude Valley Mist + Volumetric Sun-Aligned Horizon Haze out to 1024 chunks!
              float sa = max(0.0, dot(viewDir, L));
              float sunAlign = sa * sa * sa;
-             vec3 atmFog = mix(uHorizonColor, uSunColor * 1.08, sunAlign * (0.32 + 0.56 * uSunsetFactor) * uDayFactor);
-             atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.42);
+             float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
+             float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * mix(0.42, 0.52, uSunsetFactor) * (1.0 - smoothstep(180.0, 420.0, dist) * 0.30);
+             vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
+             vec3 mistNight = vec3(0.11, 0.28, 0.58);
+             vec3 mistCol = mix(mistNight, mistDay, uDayFactor);
+             mistCol = mix(mistCol, uSunsetColor * 1.15, sunAlign * uSunsetFactor * 0.45);
+             gl_FragColor.rgb = mix(gl_FragColor.rgb, mistCol, clamp(valleyMist, 0.0, 0.62));
+
+             float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist);
+             vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+             atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
              gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
            } else {
              #include <fog_fragment>
@@ -747,16 +780,24 @@ export class World {
            vec3 viewVec = vWorldPos - cameraPosition;
            float dist = length(viewVec);
            vec3 viewDir = viewVec / max(dist, 0.001);
-           float sunAlign = max(0.0, dot(viewDir, normalize(uSunDir)));
-           // Translucent backlit leaves & sunlit grass glow!
-           float sss = pow(sunAlign, 3.0) * 0.28 * uDayFactor;
+           float sa = max(0.0, dot(viewDir, normalize(uSunDir)));
+           float sunAlign = sa * sa * sa;
+           // Lush translucent backlit leaves & sunlit grass glow!
+           float sss = sunAlign * (0.36 + 0.28 * uSunsetFactor) * uDayFactor;
            gl_FragColor.rgb += gl_FragColor.rgb * uSunColor * sss;
            if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.75, 0.3) * vEmissive * 2.6;
+             gl_FragColor.rgb += vec3(1.15, 0.80, 0.30) * vEmissive * 3.4;
            }
-           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, pow(sunAlign, 3.0) * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor, pow(sunAlign, 3.0) * uSunsetFactor * 0.35);
+           float outdoorLift = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
+           float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
+           float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorLift * mix(0.40, 0.50, uSunsetFactor);
+           vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
+           vec3 mistCol = mix(vec3(0.11, 0.28, 0.58), mistDay, uDayFactor);
+           gl_FragColor.rgb = mix(gl_FragColor.rgb, mistCol, clamp(valleyMist, 0.0, 0.58));
+
+           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist) * outdoorLift;
+           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+           atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.45);
            gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
          } else {
            #include <fog_fragment>
@@ -826,17 +867,128 @@ export class World {
       );
     };
 
-    // 3. Ultra-Fast Watertight BSL Reflective Water Shader (10x faster GPU fill-rate & ZERO T-junction holes!)
+    // 2c. Dedicated 10x Animated Pixel-Art Minecraft Fire Shader (roaring 16x16 flames + HDR glow + subtle sway!)
+    this.fireMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: this.shaderUniforms.uTime,
+        uFogNear: this.shaderUniforms.uFogNear,
+        uFogFar: this.shaderUniforms.uFogFar,
+        uHorizonColor: this.shaderUniforms.uHorizonColor,
+        uShaderOn: this.shaderUniforms.uShaderOn
+      },
+      side: THREE.DoubleSide,
+      transparent: false,
+      depthWrite: true,
+      vertexShader: `
+        uniform float uTime;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        varying float vPhase;
+        void main() {
+          vUv = uv;
+          vec3 p = position;
+          // Unique per-block animation phase so flames across a burning tree dance organically!
+          vec3 cell = floor(p + vec3(0.01));
+          vPhase = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453) * 16.0;
+          // Subtle lively lick/sway only at upper flame tips (base stays locked flush to wood/leaves!)
+          float tip = smoothstep(0.15, 1.0, uv.y);
+          float flick = sin(uTime * 11.5 + vPhase + p.y * 4.0) * 0.045 * tip;
+          float flickZ = cos(uTime * 9.8 + vPhase * 1.3 + p.x * 3.5) * 0.045 * tip;
+          p.x += flick;
+          p.z += flickZ;
+          vWorldPos = p;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uFogNear;
+        uniform float uFogFar;
+        uniform vec3 uHorizonColor;
+        uniform float uShaderOn;
+        varying vec2 vUv;
+        varying vec3 vWorldPos;
+        varying float vPhase;
+
+        float fHash(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        float fNoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(fHash(i), fHash(i + vec2(1.0, 0.0)), f.x),
+            mix(fHash(i + vec2(0.0, 1.0)), fHash(i + vec2(1.0, 1.0)), f.x),
+            f.y
+          );
+        }
+
+        void main() {
+          // Authentic 16x16 quantized Minecraft pixel-art fire roaring upward at 18 FPS!
+          vec2 pix = floor(vUv * 16.0) / 16.0;
+          float tStep = floor(uTime * 18.0 + vPhase) * 0.145;
+
+          // Multi-tongue roaring flame turbulence scrolling upward
+          float n1 = fNoise(vec2(pix.x * 4.5 + vPhase * 0.7, pix.y * 3.6 - tStep * 2.2));
+          float n2 = fNoise(vec2(pix.x * 9.0 - vPhase * 0.4, pix.y * 7.2 - tStep * 3.9));
+          float tongues = sin(pix.x * 18.8495 + sin(tStep * 1.6 + vPhase) * 1.8) * 0.14;
+          float edgePinch = 1.0 - pow(abs(pix.x - 0.5) * 2.0, 2.6) * (0.28 + 0.58 * pix.y);
+
+          float heat = (1.0 - pix.y * 1.04) * edgePinch + (n1 * 0.58 + n2 * 0.34 - 0.30) + tongues * pix.y;
+
+          // Occasional detached rising pixel sparks licking above the main flame!
+          float spark = step(0.84, fHash(vec2(floor(pix.x * 16.0), floor(pix.y * 16.0 - floor(uTime * 14.0 + vPhase)))))
+                      * step(0.45, pix.y) * step(pix.y, 0.94) * step(0.18, heat + 0.25);
+
+          if (heat < 0.14 && spark < 0.5) discard;
+
+          // Authentic Minecraft Fire Palette (incandescent white-yellow core -> bright gold -> fiery orange -> crimson tip!)
+          vec3 col;
+          if (spark > 0.5 && heat < 0.18) {
+            col = vec3(1.55, 0.72, 0.10);
+          } else if (heat > 0.72) {
+            col = vec3(2.25, 2.15, 1.65); // blazing HDR white-cream core (triggers soft warm bloom!)
+          } else if (heat > 0.52) {
+            col = vec3(1.85, 1.38, 0.24); // luminous golden yellow
+          } else if (heat > 0.32) {
+            col = vec3(1.55, 0.64, 0.06); // vivid fiery orange
+          } else {
+            col = vec3(1.18, 0.24, 0.03); // flickering crimson ember tip
+          }
+
+          float pulse = 0.93 + 0.09 * sin(uTime * 23.0 + vPhase * 2.0);
+          col *= pulse;
+
+          if (uShaderOn > 0.5) {
+            float dist = length(vWorldPos - cameraPosition);
+            float haze = smoothstep(uFogNear * 0.55, uFogFar, dist);
+            col = mix(col, uHorizonColor, haze);
+          }
+
+          gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `
+    });
+
+    // 3. Mirror-Like Glassy Sky, Cloud, Sun & Crescent-Moon Reflective Water Shader (Image 2!)
     this.waterMat = new THREE.ShaderMaterial({
       uniforms: {
         uTime: this.shaderUniforms.uTime,
         uWaveStrength: this.shaderUniforms.uWaveStrength,
         uSunDir: this.shaderUniforms.uSunDir,
+        uMoonDir: this.shaderUniforms.uMoonDir,
         uTopColor: this.shaderUniforms.uTopColor,
         uMidColor: this.shaderUniforms.uMidColor,
         uHorizonColor: this.shaderUniforms.uHorizonColor,
         uSunsetColor: this.shaderUniforms.uSunsetColor,
         uSunColor: this.shaderUniforms.uSunColor,
+        uCloudLitColor: this.shaderUniforms.uCloudLitColor,
         uDayFactor: this.shaderUniforms.uDayFactor,
         uSunsetFactor: this.shaderUniforms.uSunsetFactor,
         uRainFactor: this.shaderUniforms.uRainFactor,
@@ -850,7 +1002,6 @@ export class World {
         varying vec3 vWorldPos;
         varying vec3 vBaseNormal;
         void main() {
-          // Keep water vertices 100% watertight across greedy quads & chunk seams (ZERO cracks or holes!)
           vWorldPos = position;
           vBaseNormal = normal;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -860,11 +1011,13 @@ export class World {
         uniform float uTime;
         uniform float uWaveStrength;
         uniform vec3 uSunDir;
+        uniform vec3 uMoonDir;
         uniform vec3 uTopColor;
         uniform vec3 uMidColor;
         uniform vec3 uHorizonColor;
         uniform vec3 uSunsetColor;
         uniform vec3 uSunColor;
+        uniform vec3 uCloudLitColor;
         uniform float uDayFactor;
         uniform float uSunsetFactor;
         uniform float uRainFactor;
@@ -878,14 +1031,15 @@ export class World {
           float dist = length(viewVec);
           vec3 V = viewVec / max(dist, 0.001);
           vec3 sunDir = normalize(uSunDir);
+          vec3 moonDir = normalize(uMoonDir);
 
-          // Ultra-fast pure-analytic silky animated ripple normal (ZERO per-pixel noise2D/hash!)
+          // Silky multi-directional water ripples (subtler at golden hour for glassy mirror lake reflections!)
           vec2 p = vWorldPos.xz;
           float t = uTime;
-          float wA = sin(p.x * 1.85 + t * 1.75 + p.y * 0.85);
-          float wB = cos(p.y * 2.15 - t * 1.45 - p.x * 0.65);
-          float wC = sin((p.x - p.y) * 2.9 + t * 2.2) * 0.45;
-          float amp = mix(0.015, 0.095, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(40.0, 140.0, dist) * 0.55);
+          float wA = sin(p.x * 1.75 + t * 1.65 + p.y * 0.78);
+          float wB = cos(p.y * 2.05 - t * 1.35 - p.x * 0.62);
+          float wC = sin((p.x - p.y) * 2.8 + t * 2.1) * 0.42;
+          float amp = mix(0.010, 0.068, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(35.0, 145.0, dist) * 0.62);
           vec3 N = vBaseNormal.y > 0.5
             ? normalize(vec3((wA + wC) * amp, 1.0, (wB - wC) * amp))
             : normalize(vBaseNormal);
@@ -894,45 +1048,65 @@ export class World {
           float skyMask = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
           float NoV = max(0.0, dot(N, V));
           float omv = 1.0 - NoV;
-          float fresnel = clamp(0.12 + 0.86 * omv * omv * omv, 0.12, 0.95) * skyMask;
+          // Rich mirror Fresnel (ultra-reflective at grazing golden-hour angles just like Image 2!)
+          float fresnel = clamp(0.18 + 0.80 * omv * omv * omv, 0.18, 0.97) * skyMask;
 
-          // Instant analytic sky mirror reflection (10x faster than FBM reflection!)
+          // Glassy Mirror Reflection of Sky Gradient + Sun Horizon + Reflected Cloud Wisps!
           vec3 R = reflect(-V, N);
-          float rY = clamp(abs(R.y), 0.02, 1.0);
-          vec3 reflCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.38, rY));
-          reflCol = mix(reflCol, uTopColor, smoothstep(0.28, 0.92, rY));
+          float rY = clamp(abs(R.y), 0.015, 1.0);
+          vec3 reflCol = mix(uHorizonColor * 1.08, uMidColor, smoothstep(0.0, 0.34, rY));
+          reflCol = mix(reflCol, uTopColor, smoothstep(0.24, 0.90, rY));
+
           float rSun = max(0.0, dot(normalize(R), sunDir));
           float rSun2 = rSun * rSun;
           float rSun4 = rSun2 * rSun2;
-          reflCol = mix(reflCol, uSunsetColor, (1.0 - rY) * (0.28 + 0.52 * rSun2) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
-          reflCol += uSunColor * (rSun4 * rSun4 * 0.45) * smoothstep(-0.1, 0.06, sunDir.y) * (1.0 - uRainFactor * 0.8);
+          float rSun16 = rSun4 * rSun4 * rSun4 * rSun4;
+          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.82) * skyMask;
+          reflCol = mix(reflCol, uSunsetColor * 1.16, (1.0 - rY) * (0.36 + 0.64 * rSun2) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+          reflCol += uSunColor * (rSun4 * 0.45 + rSun16 * 1.25) * sunUp;
 
-          // Rich BSL turquoise-to-sapphire water tint + subtle ripple shimmer
-          vec3 deepWater = mix(vec3(0.02, 0.06, 0.12), vec3(0.05, 0.30, 0.44), uDayFactor * skyMask);
-          deepWater = mix(deepWater, vec3(0.15, 0.12, 0.22), uSunsetFactor * 0.5 * skyMask);
-          deepWater += vec3(0.05, 0.16, 0.20) * (0.5 + 0.5 * wA * wB) * 0.28 * uDayFactor * skyMask;
+          // Subtle shimmering reflected cloud wisps across the mirror lake surface!
+          float cWave = 0.5 + 0.5 * sin(R.x * 8.5 + t * 0.18 + sin(R.z * 6.0));
+          float cMask = smoothstep(0.58, 0.92, cWave) * smoothstep(0.05, 0.32, rY) * (1.0 - rY * 0.65);
+          reflCol = mix(reflCol, uCloudLitColor * 1.08, cMask * 0.32 * (1.0 - uRainFactor * 0.5));
+
+          // Deep glassy obsidian-emerald to sapphire lake body (gives dramatic mirror contrast like Image 2!)
+          vec3 deepWater = mix(vec3(0.015, 0.045, 0.11), vec3(0.03, 0.24, 0.36), uDayFactor * skyMask);
+          deepWater = mix(deepWater, vec3(0.07, 0.05, 0.09), uSunsetFactor * 0.68 * skyMask);
+          deepWater += vec3(0.04, 0.14, 0.18) * (0.5 + 0.5 * wA * wB) * 0.26 * uDayFactor * skyMask;
 
           vec3 col = mix(deepWater, reflCol, fresnel);
 
-          // Crisp Sparkling Sun Specular Glitter (fast mul-chain, zero pow()!)
+          // Blazing Sparkling Golden Sun Column Reflection (triggers soft bloom glints!)
           vec3 H = normalize(V + sunDir);
           float nh = max(0.0, dot(N, H));
           float nh2 = nh * nh;
           float nh4 = nh2 * nh2;
           float nh16 = nh4 * nh4 * nh4 * nh4;
           float nh64 = nh16 * nh16 * nh16 * nh16;
-          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.85) * skyMask;
-          col += uSunColor * (nh64 * 2.2 + nh16 * 0.32) * sunUp;
+          col += uSunColor * (nh64 * 3.4 + nh16 * 0.52) * sunUp;
 
-          // Atmospheric Distance Haze matching Terrain & Sky seamlessly!
-          float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist) * skyMask;
+          // Shimmering Silver-Cyan Crescent Moon Reflection Column at Night (Image 4!)
+          float moonUp = smoothstep(-0.08, 0.08, moonDir.y) * (1.0 - uDayFactor * 0.88) * (1.0 - uRainFactor * 0.82) * skyMask;
+          if (moonUp > 0.01) {
+            vec3 Hm = normalize(V + moonDir);
+            float nm = max(0.0, dot(N, Hm));
+            float nm2 = nm * nm;
+            float nm4 = nm2 * nm2;
+            float nm16 = nm4 * nm4 * nm4 * nm4;
+            float nm64 = nm16 * nm16 * nm16 * nm16;
+            col += vec3(0.65, 0.90, 1.35) * (nm64 * 2.2 + nm16 * 0.34) * moonUp;
+          }
+
+          // Low Valley Mist & Seamless Atmospheric Distance Haze!
+          float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist) * skyMask;
           float sa = max(0.0, dot(-V, sunDir));
           float sunAlign = sa * sa * sa;
-          vec3 atmFog = mix(uHorizonColor, uSunColor * 1.06, sunAlign * (0.30 + 0.54 * uSunsetFactor) * uDayFactor);
-          atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.38);
+          vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+          atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
           col = mix(col, atmFog, hazeFactor);
 
-          float alpha = mix(mix(0.76, 0.95, fresnel), 1.0, hazeFactor);
+          float alpha = mix(mix(0.80, 0.97, fresnel), 1.0, hazeFactor);
           gl_FragColor = vec4(col, alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
@@ -3640,8 +3814,8 @@ export class World {
         }
       }
 
-      // 4. Burn out naturally if unsupported or after fuel is gone (unless eternal base)
-      const supported = isBlockSolid(below) || hasFuelNeighbor;
+      // 4. Burn out naturally if unsupported or after fuel is gone (stays clinging to trees, leaves & wood sides!)
+      const supported = isBlockSolid(below) || LEAF_BLOCK_SET.has(below) || hasFuelNeighbor;
       if (!supported || (!eternalBase && !hasFuelNeighbor && f.age > 4.5 + Math.random() * 4.0) || (!eternalBase && f.age > 26)) {
         this.setBlock(x, y, z, BLOCK.AIR, true);
       }
@@ -3790,10 +3964,12 @@ export class World {
     const bCutout = SCRATCH_BUCKETS.cutout;
     const bStatic = SCRATCH_BUCKETS.staticCutout;
     const bWater = SCRATCH_BUCKETS.water;
+    const bFire = SCRATCH_BUCKETS.fire;
     bOpaque.reset();
     bCutout.reset();
     bStatic.reset();
     bWater.reset();
+    bFire.reset();
 
     const cx = chunk.cx;
     const cz = chunk.cz;
@@ -4011,6 +4187,53 @@ export class World {
           }
 
           // Cross-quad blocks (flowers, tall grass, blazing fire sway; ladders stay static!)
+          // 10x Authentic Tree-Clinging 3D Animated Minecraft Fire Geometry!
+          // Clings to sides of leaves, logs & walls (like real Minecraft burning trees!) + multi-curtain floor flames!
+          if (id === BLOCK.FIRE) {
+            const isFireSupport = (nid) => nid !== 0 && (solidTable[nid] === 1 || LEAF_BLOCK_SET.has(nid) || FLAMMABLE_SET.has(nid));
+            const supBelow = isFireSupport(fastGet(lx, y - 1, lz));
+            const supAbove = isFireSupport(fastGet(lx, y + 1, lz));
+            const supPX = isFireSupport(fastGet(lx + 1, y, lz));
+            const supNX = isFireSupport(fastGet(lx - 1, y, lz));
+            const supPZ = isFireSupport(fastGet(lx, y, lz + 1));
+            const supNZ = isFireSupport(fastGet(lx, y, lz - 1));
+            const hasAnySide = supPX || supNX || supPZ || supNZ;
+
+            const pushFlame = (x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3) => {
+              bFire.pushQuad(
+                x0, y0, z0, 0, 0, 1.0,
+                x1, y1, z1, 1, 0, 1.0,
+                x2, y2, z2, 1, 1, 1.0,
+                x3, y3, z3, 0, 1, 1.0,
+                0, 1, 0
+              );
+            };
+
+            // Side-clinging flame curtains hugging adjacent tree leaves, trunks & walls!
+            const hSide = 1.22;
+            if (supPX) pushFlame(wx + 0.96, y, wz + 0.02, wx + 0.96, y, wz + 0.98, wx + 0.84, y + hSide, wz + 0.98, wx + 0.84, y + hSide, wz + 0.02);
+            if (supNX) pushFlame(wx + 0.04, y, wz + 0.98, wx + 0.04, y, wz + 0.02, wx + 0.16, y + hSide, wz + 0.02, wx + 0.16, y + hSide, wz + 0.98);
+            if (supPZ) pushFlame(wx + 0.98, y, wz + 0.96, wx + 0.02, y, wz + 0.96, wx + 0.02, y + hSide, wz + 0.84, wx + 0.98, y + hSide, wz + 0.84);
+            if (supNZ) pushFlame(wx + 0.02, y, wz + 0.04, wx + 0.98, y, wz + 0.04, wx + 0.98, y + hSide, wz + 0.16, wx + 0.02, y + hSide, wz + 0.16);
+
+            // Multi-layered roaring floor flames (4 inward-slanted perimeter curtains + 2 crossed inner tongues!)
+            if (supBelow || !hasAnySide) {
+              const hFloor = 1.24;
+              pushFlame(wx + 0.04, y, wz + 0.04, wx + 0.96, y, wz + 0.04, wx + 0.92, y + hFloor, wz + 0.28, wx + 0.08, y + hFloor, wz + 0.28);
+              pushFlame(wx + 0.96, y, wz + 0.96, wx + 0.04, y, wz + 0.96, wx + 0.08, y + hFloor, wz + 0.72, wx + 0.92, y + hFloor, wz + 0.72);
+              pushFlame(wx + 0.04, y, wz + 0.96, wx + 0.04, y, wz + 0.04, wx + 0.28, y + hFloor, wz + 0.08, wx + 0.28, y + hFloor, wz + 0.92);
+              pushFlame(wx + 0.96, y, wz + 0.04, wx + 0.96, y, wz + 0.96, wx + 0.72, y + hFloor, wz + 0.92, wx + 0.72, y + hFloor, wz + 0.08);
+              // Inner crossed flame core
+              pushFlame(wx + 0.14, y, wz + 0.14, wx + 0.86, y, wz + 0.86, wx + 0.86, y + 1.14, wz + 0.86, wx + 0.14, y + 1.14, wz + 0.14);
+              pushFlame(wx + 0.14, y, wz + 0.86, wx + 0.86, y, wz + 0.14, wx + 0.86, y + 1.14, wz + 0.14, wx + 0.14, y + 1.14, wz + 0.86);
+            } else if (supAbove) {
+              // Under-canopy flame licks beneath burning tree branches!
+              pushFlame(wx + 0.12, y + 0.15, wz + 0.12, wx + 0.88, y + 0.15, wz + 0.88, wx + 0.88, y + 0.99, wz + 0.88, wx + 0.12, y + 0.99, wz + 0.12);
+              pushFlame(wx + 0.12, y + 0.15, wz + 0.88, wx + 0.88, y + 0.15, wz + 0.12, wx + 0.88, y + 0.99, wz + 0.12, wx + 0.12, y + 0.99, wz + 0.88);
+            }
+            continue;
+          }
+
           if (def.cross) {
             const isStaticCross = id === BLOCK.LADDER;
             const isFire = id === BLOCK.FIRE;
@@ -4482,6 +4705,7 @@ export class World {
     addBucket(bOpaque, this.opaqueMat, 0, true);
     addBucket(bCutout, this.cutoutMat, 1, false);
     addBucket(bStatic, this.staticCutoutMat, 1, false);
+    addBucket(bFire, this.fireMat, 2, false);
     // Water draws at renderOrder 3 (AFTER Early-Z SkyDome at renderOrder 2!)
     addBucket(bWater, this.waterMat, 3, false);
     if (chunk.lightKeys.length > 0) this._lightDirty = true;
@@ -4510,6 +4734,7 @@ export class World {
     if (sky) {
       const p = sky.getShaderParams();
       this.shaderUniforms.uSunDir.value.copy(p.sunDir);
+      if (p.moonDir) this.shaderUniforms.uMoonDir.value.copy(p.moonDir);
       this.shaderUniforms.uTopColor.value.copy(p.topColor);
       this.shaderUniforms.uMidColor.value.copy(p.midColor);
       this.shaderUniforms.uHorizonColor.value.copy(p.horizonColor);

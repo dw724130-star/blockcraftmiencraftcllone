@@ -210,6 +210,45 @@ export class EffectsManager {
     }
   }
 
+  // Rising glowing fire embers & soft dark smoke puffs floating off burning trees and flames!
+  spawnFireEmber(x, y, z) {
+    if (!this.enabled || this.bursts.length > 90) return;
+    // Glowing hot orange-gold ember spark
+    const ember = new THREE.Mesh(this.sparkGeo, Math.random() < 0.55 ? this.sparkMat : this.fireMat);
+    ember.position.set(
+      x + 0.15 + Math.random() * 0.7,
+      y + 0.5 + Math.random() * 0.6,
+      z + 0.15 + Math.random() * 0.7
+    );
+    ember.scale.setScalar(0.32 + Math.random() * 0.25);
+    this.burstGroup.add(ember);
+    this.bursts.push({
+      mesh: ember,
+      vx: (Math.random() - 0.5) * 0.85,
+      vy: 1.6 + Math.random() * 1.4,
+      vz: (Math.random() - 0.5) * 0.85,
+      life: 0.55 + Math.random() * 0.55,
+      noGravity: true
+    });
+    // Occasional soft dark smoke wisp
+    if (Math.random() < 0.45 && this.smokePuffs.length < 48) {
+      const mat = new THREE.MeshBasicMaterial({ color: 0x3b3838, transparent: true, opacity: 0.45, depthWrite: false });
+      const sm = new THREE.Mesh(this.smokeGeo, mat);
+      sm.position.set(x + 0.2 + Math.random() * 0.6, y + 0.95, z + 0.2 + Math.random() * 0.6);
+      sm.scale.setScalar(0.42 + Math.random() * 0.35);
+      this.burstGroup.add(sm);
+      this.smokePuffs.push({
+        mesh: sm,
+        mat,
+        vx: (Math.random() - 0.5) * 0.45,
+        vy: 1.15 + Math.random() * 0.65,
+        vz: (Math.random() - 0.5) * 0.45,
+        age: 0,
+        maxAge: 0.95 + Math.random() * 0.7
+      });
+    }
+  }
+
   // Crackling white-gold sparks & charge smoke rising from a priming Creeper!
   spawnCreeperSpark(x, y, z, intensity = 0.5) {
     if (!this.enabled || this.bursts.length > 84) return;
@@ -459,7 +498,7 @@ export class EffectsManager {
         this.bursts.splice(i, 1);
         continue;
       }
-      p.vy -= 14 * dt;
+      if (!p.noGravity) p.vy -= 14 * dt;
       p.mesh.position.x += p.vx * dt;
       p.mesh.position.y += p.vy * dt;
       p.mesh.position.z += p.vz * dt;

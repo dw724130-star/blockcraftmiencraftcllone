@@ -129,18 +129,22 @@ export class SkySystem {
         }
 
         float fbmCloud(vec2 p) {
-          float v = 0.54 * noise2D(p);
-          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
-          v += 0.28 * noise2D(p);
-          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
+          float v = 0.52 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.03 + vec2(17.1, 31.7);
+          v += 0.27 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(9.4, 21.3);
           v += 0.14 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.05 + vec2(3.7, 11.9);
+          v += 0.07 * noise2D(p);
           return v;
         }
 
         float fbmCloudFast(vec2 p) {
-          float v = 0.64 * noise2D(p);
+          float v = 0.62 * noise2D(p);
           p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
-          v += 0.32 * noise2D(p);
+          v += 0.30 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.03 + vec2(5.2, 13.7);
+          v += 0.08 * noise2D(p);
           return v;
         }
 
@@ -153,72 +157,120 @@ export class SkySystem {
           float moonDot = max(0.0, dot(dir, moonDir));
 
           // 1. Multi-stop Atmospheric Rayleigh + Mie Scattering Sky Gradient
-          vec3 skyCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.34, h));
-          skyCol = mix(skyCol, uTopColor, smoothstep(0.22, 0.92, h));
+          vec3 skyCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.32, h));
+          skyCol = mix(skyCol, uTopColor, smoothstep(0.20, 0.90, h));
 
-          // Warm horizon Mie scattering around sun (creates dreamy sunset/sunrise peach-gold haze)
-          float horizonBand = pow(1.0 - h, 3.2);
-          float sunSide = pow(sunDot, 2.2);
-          skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.28 + 0.62 * sunSide) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+          // Rich Golden-Hour Mie horizon glow around sun (dramatic peach-amber-gold sunset & sunrise!)
+          float horizonBand = pow(1.0 - h, 3.0);
+          float sunSide = pow(sunDot, 2.0);
+          skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.34 + 0.66 * sunSide) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
 
-          // Soft pink/lavender twilight band mid-sky during sunset/sunrise
-          float twilightArc = smoothstep(0.02, 0.25, h) * (1.0 - smoothstep(0.25, 0.65, h));
-          skyCol += vec3(0.26, 0.11, 0.22) * twilightArc * uSunsetFactor * (1.0 - uRainFactor * 0.8);
+          // Dreamy rose-lavender twilight arc mid-sky at sunset/sunrise
+          float twilightArc = smoothstep(0.03, 0.28, h) * (1.0 - smoothstep(0.28, 0.72, h));
+          skyCol += vec3(0.28, 0.12, 0.25) * twilightArc * uSunsetFactor * (1.0 - uRainFactor * 0.8);
 
-          // 2. Glowing Sun Disc + Soft Bloom Halo + Subtle Atmospheric Shafts
+          // 2. Deep Sapphire Night Sky: Procedural Milky Way Galactic Nebula + Twinkling Multi-Color Stars!
           float clearAmt = 1.0 - uRainFactor * 0.85;
+          float nightAmt = clamp(1.0 - uDayFactor * 1.85, 0.0, 1.0) * clearAmt;
+          if (nightAmt > 0.01 && dir.y > 0.0) {
+            // Arching diagonal Milky Way nebula ribbon across the starry zenith
+            float galCoord = dir.x * 0.62 + dir.z * 0.78 - dir.y * 0.35;
+            float galBand = exp(-galCoord * galCoord * 11.0) * smoothstep(0.04, 0.35, dir.y);
+            vec2 galUv = vec2(atan(dir.z, dir.x) * 2.2, dir.y * 4.5);
+            float neb1 = fbmCloudFast(galUv * 1.6);
+            float neb2 = noise2D(galUv * 4.2 + vec2(3.1, 7.4));
+            float dustLane = smoothstep(0.32, 0.68, neb1 * 0.72 + neb2 * 0.28);
+            vec3 milkyCol = mix(vec3(0.09, 0.22, 0.56), vec3(0.26, 0.52, 0.95), dustLane);
+            skyCol += milkyCol * galBand * dustLane * 0.62 * nightAmt;
+
+            // Crisp dense twinkling procedural starfield (warm gold, pure white & sapphire blue stars!)
+            vec2 starCell = floor(vec2(atan(dir.z, dir.x) * 62.0, asin(clamp(dir.y, 0.0, 1.0)) * 62.0));
+            float sRnd = hash21(starCell);
+            if (sRnd > 0.962) {
+              vec2 sFrac = fract(vec2(atan(dir.z, dir.x) * 62.0, asin(clamp(dir.y, 0.0, 1.0)) * 62.0)) - 0.5;
+              float sDist = length(sFrac);
+              float twinkle = 0.65 + 0.35 * sin(uTime * (2.5 + sRnd * 5.0) + sRnd * 90.0);
+              float sBright = smoothstep(0.24, 0.02, sDist) * (0.65 + (sRnd - 0.962) * 32.0) * twinkle;
+              vec3 sCol = sRnd > 0.988 ? vec3(1.1, 0.95, 0.78) : (sRnd > 0.975 ? vec3(0.75, 0.92, 1.25) : vec3(0.95, 0.98, 1.05));
+              skyCol += sCol * sBright * 1.65 * smoothstep(0.04, 0.22, dir.y) * nightAmt;
+            }
+          }
+
+          // 3. Blazing HDR Sun Disc + Multi-Ring Golden Corona + Atmospheric Sunbeams!
           float sunVisible = smoothstep(-0.12, 0.05, sunDir.y) * clearAmt;
-          float sunHaloWide = pow(sunDot, 7.0) * (0.32 + 0.58 * uSunsetFactor);
-          float sunHaloTight = pow(sunDot, 48.0) * (0.65 + 0.65 * uSunsetFactor);
-          float sunDisc = smoothstep(0.9982, 0.9994, sunDot) * 2.4;
-          skyCol += uSunColor * (sunHaloWide + sunHaloTight + sunDisc) * sunVisible;
+          float sunHaloWide = pow(sunDot, 5.5) * (0.36 + 0.72 * uSunsetFactor);
+          float sunHaloMid = pow(sunDot, 28.0) * (0.72 + 0.85 * uSunsetFactor);
+          float sunHaloTight = pow(sunDot, 160.0) * 1.45;
+          float sunDisc = smoothstep(0.9980, 0.9993, sunDot) * 3.8;
+          skyCol += uSunColor * (sunHaloWide + sunHaloMid + sunHaloTight + sunDisc) * sunVisible;
 
-          // Subtle diagonal BSL volumetric sunbeam shafts near sun & golden hour!
+          // Subtle diagonal golden sunbeam rays fanning through sky near sun
           float rayAngle = atan(dir.y - sunDir.y, dir.x - sunDir.x);
-          float rays = 0.5 + 0.5 * sin(rayAngle * 8.0 + uTime * 0.14) * cos(rayAngle * 5.0 - uTime * 0.09);
-          skyCol += uSunColor * pow(sunDot, 9.0) * rays * 0.28 * (0.45 + 0.65 * uSunsetFactor) * sunVisible;
+          float rays = 0.5 + 0.5 * sin(rayAngle * 7.0 + uTime * 0.12) * cos(rayAngle * 4.0 - uTime * 0.08);
+          skyCol += uSunColor * pow(sunDot, 7.5) * rays * 0.36 * (0.50 + 0.75 * uSunsetFactor) * sunVisible;
 
-          // 3. Soft Glowing Moon + Halo at Night
-          float moonVisible = smoothstep(-0.08, 0.1, moonDir.y) * clearAmt * (1.0 - uDayFactor * 0.85);
-          float moonDisc = smoothstep(0.9988, 0.9995, moonDot) * 1.45;
-          float moonHalo = pow(moonDot, 36.0) * 0.28;
-          skyCol += vec3(0.78, 0.88, 1.0) * (moonDisc + moonHalo) * moonVisible;
+          // 4. Razor-Crisp Glowing CRESCENT MOON + Dreamy Sapphire-Cyan Lunar Halo (Image 4!)
+          float moonVisible = smoothstep(-0.08, 0.08, moonDir.y) * clearAmt * (1.0 - uDayFactor * 0.88);
+          if (moonVisible > 0.005) {
+            vec3 mUp = normalize(vec3(0.0, 1.0, 0.0) - moonDir * moonDir.y + vec3(0.0001, 0.001, 0.0));
+            vec3 mRight = normalize(cross(mUp, moonDir));
+            float mx = dot(dir - moonDir, mRight);
+            float my = dot(dir - moonDir, mUp);
+            float mR = length(vec2(mx, my));
+            float outerDisc = smoothstep(0.045, 0.040, mR);
+            // Offset shadow disc carves an iconic luminous Crescent Moon!
+            float cutR = length(vec2(mx - 0.017, my - 0.008));
+            float shadowCut = smoothstep(0.036, 0.041, cutR);
+            float crescent = outerDisc * shadowCut;
+            float earthshine = outerDisc * (1.0 - shadowCut) * 0.14;
+            float moonGlowTight = pow(moonDot, 48.0) * 0.78;
+            float moonGlowWide = pow(moonDot, 8.0) * 0.34;
+            vec3 moonCol = vec3(0.76, 0.92, 1.15);
+            vec3 haloCol = vec3(0.28, 0.62, 1.15);
+            skyCol += moonCol * (crescent * 3.4 + earthshine) * moonVisible;
+            skyCol += haloCol * (moonGlowTight + moonGlowWide) * moonVisible;
+          }
 
-          // 4. Dual-Layer BSL Clouds: High Wispy Cirrus + Puffy Volumetric Cumulus with Silver Lining!
-          if (dir.y > 0.01 && uCloudCover > 0.01) {
-            // High-altitude wispy cirrus streaks
-            vec2 cirrusUV = (dir.xz / (dir.y + 0.24)) * 0.55 + vec2(uTime * 0.004, -uTime * 0.002);
-            float cirrus = smoothstep(0.58, 0.86, fbmCloudFast(cirrusUV * vec2(1.8, 0.65)));
-            vec3 cirrusCol = mix(uCloudLitColor, uSunColor, 0.25 + 0.5 * uSunsetFactor);
-            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.02, 0.28, dir.y) * 0.32 * (1.0 - uRainFactor * 0.7) * uCloudCover);
+          // 5. Painterly Multi-Layer Volumetric Clouds (Warm Golden Sunlit Rims + Cool Lavender-Blue Undersides!)
+          if (dir.y > 0.008 && uCloudCover > 0.01) {
+            // High-altitude sweeping painterly cirrus wisps
+            vec2 cirrusUV = (dir.xz / (dir.y + 0.22)) * 0.52 + vec2(uTime * 0.0045, -uTime * 0.0022);
+            float cirrus = smoothstep(0.54, 0.86, fbmCloudFast(cirrusUV * vec2(1.9, 0.68)));
+            vec3 cirrusCol = mix(uCloudLitColor, uSunColor * 1.18, 0.32 + 0.58 * uSunsetFactor);
+            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.015, 0.24, dir.y) * 0.40 * (1.0 - uRainFactor * 0.65) * uCloudCover);
 
-            float projY = dir.y + 0.11;
-            vec2 cloudUV = (dir.xz / projY) * 0.42;
-            vec2 drift = vec2(uTime * 0.0085, uTime * 0.0032);
+            // Mid-altitude volumetric billowy cumulus layer with 2-step directional sun self-shadowing!
+            float projY = dir.y + 0.105;
+            vec2 cloudUV = (dir.xz / projY) * 0.38;
+            vec2 drift = vec2(uTime * 0.0075, uTime * 0.0028);
 
-            float n1 = fbmCloudFast(cloudUV * 1.15 + drift);
-            float n2 = noise2D(cloudUV * 2.4 - drift * 0.65 + vec2(4.2, 9.1));
-            float rawDensity = n1 * 0.74 + n2 * 0.26;
+            float rawDensity = fbmCloud(cloudUV * 1.12 + drift);
+            float billow = noise2D(cloudUV * 3.1 - drift * 0.55 + vec2(4.2, 9.1));
+            float density = rawDensity * 0.78 + billow * 0.22;
 
-            float thresh = mix(0.48, 0.35, uRainFactor);
-            float cloudAlpha = smoothstep(thresh, thresh + 0.21, rawDensity);
+            float thresh = mix(0.45, 0.33, uRainFactor);
+            float cloudAlpha = smoothstep(thresh, thresh + 0.22, density);
 
-            // Fast directional volumetric self-shadowing + warm sunset under-glow
-            float selfLight = 0.65;
+            float selfLight = 0.62;
+            float edgeGlow = 0.0;
             if (cloudAlpha > 0.01) {
-              vec2 sunStep = normalize(sunDir.xz + vec2(0.0001)) * 0.082;
-              float nSun = noise2D((cloudUV + sunStep) * 1.15 + drift) * 0.68 + n2 * 0.32;
-              selfLight = clamp((rawDensity - nSun) * 3.4 + 0.58, 0.0, 1.0);
+              vec2 lDirXZ = normalize((uDayFactor > 0.2 ? sunDir.xz : moonDir.xz) + vec2(0.0001));
+              float dStep1 = fbmCloudFast((cloudUV + lDirXZ * 0.055) * 1.12 + drift);
+              float dStep2 = fbmCloudFast((cloudUV + lDirXZ * 0.13) * 1.12 + drift);
+              float occ = (dStep1 * 0.6 + dStep2 * 0.4);
+              selfLight = clamp((density - occ) * 4.2 + 0.54, 0.0, 1.0);
+              edgeGlow = (1.0 - cloudAlpha * 0.55) * smoothstep(0.0, 0.35, cloudAlpha);
             }
 
-            // Warm sunlit rim + glowing BSL silver lining around sun
-            float silverLining = pow(sunDot, 8.0) * (1.0 - cloudAlpha * 0.42) * sunVisible;
+            // Dramatic warm golden-apricot silver lining around sun + cool silver-cyan moonlight rim at night!
+            float sunSilver = pow(sunDot, 5.5) * (0.45 + 0.75 * edgeGlow) * sunVisible;
+            float moonSilver = pow(moonDot, 7.0) * (0.35 + 0.65 * edgeGlow) * moonVisible;
             vec3 cCol = mix(uCloudShadowColor, uCloudLitColor, selfLight);
-            cCol += uSunColor * (0.55 + 0.65 * uSunsetFactor) * silverLining * 1.05;
+            cCol += uSunColor * (0.72 + 0.95 * uSunsetFactor) * sunSilver * 1.25;
+            cCol += vec3(0.45, 0.75, 1.18) * moonSilver * 0.85;
 
-            // Fade clouds smoothly into distant atmospheric horizon haze
-            float horizonFade = smoothstep(0.012, 0.18, dir.y);
-            float finalAlpha = cloudAlpha * horizonFade * 0.94 * uCloudCover;
+            float horizonFade = smoothstep(0.008, 0.16, dir.y);
+            float finalAlpha = cloudAlpha * horizonFade * 0.95 * uCloudCover;
             skyCol = mix(skyCol, cCol, finalAlpha);
           }
 
@@ -298,10 +350,10 @@ export class SkySystem {
     this.scene.fog = this.fog;
     this.skyColor = new THREE.Color(0xbadfff);
 
-    // Scratch colors (zero per-frame GC churn)
-    this._nightTop = new THREE.Color(0x060b1c);
-    this._nightMid = new THREE.Color(0x0f1a38);
-    this._nightHor = new THREE.Color(0x19284a);
+    // Scratch colors (zero per-frame GC churn) — Rich Cobalt Sapphire Night matching Image 4!
+    this._nightTop = new THREE.Color(0x040d26);
+    this._nightMid = new THREE.Color(0x0c2154);
+    this._nightHor = new THREE.Color(0x16397a);
     this._dayTop = new THREE.Color();
     this._dayMid = new THREE.Color();
     this._dayHor = new THREE.Color();
@@ -316,6 +368,7 @@ export class SkySystem {
     this._tmp = new THREE.Color();
     this._shaderParams = {
       sunDir: this.skyUniforms.uSunDir.value,
+      moonDir: this.skyUniforms.uMoonDir.value,
       topColor: this.skyUniforms.uTopColor.value,
       midColor: this.skyUniforms.uMidColor.value,
       horizonColor: this.skyUniforms.uHorizonColor.value,
@@ -419,9 +472,9 @@ export class SkySystem {
       }
     }
 
-    this._sunsetHor.setHex(0xffb574);
-    this._sunsetMid.setHex(0xd47d9e);
-    this._sunsetTop.setHex(0x3b488c);
+    this._sunsetHor.setHex(0xffbe73);
+    this._sunsetMid.setHex(0xd984a4);
+    this._sunsetTop.setHex(0x364894);
 
     const topCol = this.skyUniforms.uTopColor.value.copy(this._nightTop).lerp(this._dayTop, dayFactor);
     const midCol = this.skyUniforms.uMidColor.value.copy(this._nightMid).lerp(this._dayMid, dayFactor);

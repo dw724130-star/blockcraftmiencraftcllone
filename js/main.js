@@ -4,6 +4,7 @@ import { TextureManager } from './textures.js';
 import { SoundManager } from './audio.js';
 import { World } from './world.js';
 import { SkySystem } from './sky.js';
+import { PostFXPipeline } from './postfx.js';
 import { EffectsManager } from './effects.js';
 import { ModManager } from './mods.js';
 import { SMELTING_RECIPES, AUTO_SMELT_ORES } from './recipes.js';
@@ -42,6 +43,9 @@ class BlockCraftGame {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.container.appendChild(this.renderer.domElement);
+
+    // Real-time Volumetric Crepuscular God-Rays, HDR Bloom & ACES Filmic Post-FX Pipeline!
+    this.postfx = new PostFXPipeline(this.renderer, this.isTouch);
 
     // Live 3D Voxel Panorama for the Main Menu!
     this.titlePanorama = new TitlePanorama(this.textures);
@@ -160,6 +164,7 @@ class BlockCraftGame {
     this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = sh === 'off' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = sh === 'ultra' ? 1.12 : (sh === 'enhanced' ? 1.08 : 1.0);
+    if (this.postfx) this.postfx.setQuality(sh);
 
     if (this.world) {
       this.world.renderDistance = this.settings.renderDistance;
@@ -1498,6 +1503,23 @@ class BlockCraftGame {
       this.world.updateFluids(dt);
       this.world.updateFire(dt, this.sky.weather === 'rain');
 
+      // Spawn rising hot orange embers & soft smoke wisps from nearby active fires!
+      if (this.effects && this.world.activeFires.size > 0) {
+        this._fireEmberTimer = (this._fireEmberTimer || 0) + dt;
+        if (this._fireEmberTimer >= 0.14) {
+          this._fireEmberTimer = 0;
+          let spawned = 0;
+          const px = this.player.pos.x, py = this.player.pos.y, pz = this.player.pos.z;
+          for (const f of this.world.activeFires.values()) {
+            const dx = f.x - px, dy = f.y - py, dz = f.z - pz;
+            if (dx * dx + dy * dy + dz * dz < 900 && Math.random() < 0.38) {
+              this.effects.spawnFireEmber(f.x, f.y, f.z);
+              if (++spawned >= 4) break;
+            }
+          }
+        }
+      }
+
       // Cache biome lookup per 4x4 block cell (eliminates 120x/sec Simplex noise!)
       const bx4 = Math.floor(this.player.pos.x) >> 2;
       const bz4 = Math.floor(this.player.pos.z) >> 2;
@@ -1578,7 +1600,11 @@ class BlockCraftGame {
         }
       }
 
-      this.renderer.render(this.scene, this.camera);
+      if (this.postfx && this.postfx.enabled) {
+        this.postfx.render(this.scene, this.camera, this.sky, now * 0.001, this.player.headInWater);
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
     } else if (this.titlePanorama && !this._loadingWorld) {
       // Silky 60 FPS Live 3D Voxel Panorama on the Main Menu!
       this.titlePanorama.update(dt);
