@@ -34,7 +34,7 @@ function px(ctx, ox, oy, x, y, color, w = 1, h = 1) {
 }
 
 function keyIsSolidCubeIcon(key, def) {
-  return Boolean(def && def.isBlock && key !== 'bed' && !def.isDoor);
+  return Boolean(def && def.isBlock && key !== 'bed' && !def.isDoor && !def.isFence && !def.isFenceGate);
 }
 
 export class TextureManager {
@@ -572,10 +572,22 @@ export class TextureManager {
       px(c, x, y, 0, 0, '#36b5ba', 16, 1);
       px(c, x, y, 0, 15, '#36b5ba', 16, 1);
     });
+    // Crisp shaded Minecraft Wooden Ladder (2 sturdy oak rails + 4 bevelled rungs matching Screenshot 1!)
     this.addTile('ladder', (c, x, y) => {
-      px(c, x, y, 2, 0, '#966c3e', 2, 16);
-      px(c, x, y, 12, 0, '#966c3e', 2, 16);
-      for (let iy of [2, 6, 10, 14]) px(c, x, y, 2, iy, '#b58852', 12, 2);
+      // Left & right vertical rails with warm highlight & shadow edges
+      px(c, x, y, 2, 0, '#6e4c26', 1, 16);
+      px(c, x, y, 3, 0, '#a67b45', 1, 16);
+      px(c, x, y, 12, 0, '#a67b45', 1, 16);
+      px(c, x, y, 13, 0, '#6e4c26', 1, 16);
+      // 4 horizontal wooden rungs with bright sunlit top & deep underside shadow!
+      for (const iy of [1, 5, 9, 13]) {
+        px(c, x, y, 1, iy, '#c99c5e', 14, 1);
+        px(c, x, y, 1, iy + 1, '#8c6334', 14, 1);
+        px(c, x, y, 2, iy + 2, '#4d3216', 12, 1);
+        // Subtle wood-grain nail dots where rungs cross side rails
+        px(c, x, y, 2, iy, '#7a5429', 1, 2);
+        px(c, x, y, 13, iy, '#7a5429', 1, 2);
+      }
     });
     // Clean, authentic Minecraft furrowed Farmland (no harsh grainy noise!)
     this.addTile('farmland_top', (c, x, y) => {
@@ -951,6 +963,58 @@ export class TextureManager {
       diamond: { O: '#092a36', D: '#128996', M: '#2ad1db', L: '#7ef3fa', H: '#e3ffff', S: '#7d5225', s: '#a6743c', d: '#4f3215' },
       leather: { O: '#291509', D: '#693a1a', M: '#9c5a2d', L: '#c47a45', H: '#de9864', S: '#7d5225', s: '#a6743c', d: '#4f3215' }
     };
+
+    if (def && (def.isFence || def.isFenceGate) && def.fenceWood) {
+      const woodPals = {
+        oak:    { O: '#3d2a12', F: '#8d6c3d', B: '#b8945f', L: '#cfa972' },
+        birch:  { O: '#574e36', F: '#bdb084', B: '#dfd2a8', L: '#f2e8c7' },
+        spruce: { O: '#24160a', F: '#50361d', B: '#6f4e2d', L: '#87623b' },
+        acacia: { O: '#4a210d', F: '#944a24', B: '#ba6337', L: '#d67b4b' },
+        jungle: { O: '#3d2415', F: '#82583a', B: '#a87754', L: '#c4916c' },
+        cherry: { O: '#633540', F: '#c78c99', B: '#e5b3bd', L: '#f7d5dc' }
+      };
+      const pal = woodPals[def.fenceWood] || woodPals.oak;
+      if (def.isFence) {
+        drawGrid([
+          '................',
+          '..OOOO....OOOO..',
+          '..OLLO....OLLO..',
+          '..OBBO....OBBO..',
+          '.OOOOOOOOOOOOOO.',
+          '.OLLLLLLLLLLLL0.'.replace('0', 'O'),
+          '.OBBBBBBBBBBBBO.',
+          '.OOOOOOOOOOOOOO.',
+          '..OBBO....OBBO..',
+          '.OOOOOOOOOOOOOO.',
+          '.OLLLLLLLLLLLL0.'.replace('0', 'O'),
+          '.OBBBBBBBBBBBBO.',
+          '.OOOOOOOOOOOOOO.',
+          '..OFFO....OFFO..',
+          '..OOOO....OOOO..',
+          '................'
+        ], pal);
+      } else {
+        drawGrid([
+          '................',
+          '................',
+          '.OOO........OOO.',
+          '.OLO........OLO.',
+          '.OBOOOOOOOOOOBO.',
+          '.OBOLLLLLLLLOBO.',
+          '.OBOBBBOOBBBOBO.',
+          '.OBOBBBOOBBBOBO.',
+          '.OBOLLLLLLLLOBO.',
+          '.OBOBBBOOBBBOBO.',
+          '.OBOOOOOOOOOOBO.',
+          '.OFO........OFO.',
+          '.OFO........OFO.',
+          '.OOO........OOO.',
+          '................',
+          '................'
+        ], pal);
+      }
+      return finish();
+    }
 
     if (def && def.isDoor && def.doorWood) {
       // Crisp 16x16 2D Wood Door item sprite (matching each wood type!)

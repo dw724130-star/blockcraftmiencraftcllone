@@ -102,7 +102,19 @@ export const BLOCK = {
   WHEAT_5: 98,
   WHEAT_6: 99,
   WHEAT_7: 100,
-  DIRT_PATH: 101
+  DIRT_PATH: 101,
+  OAK_FENCE: 102,
+  BIRCH_FENCE: 103,
+  SPRUCE_FENCE: 104,
+  ACACIA_FENCE: 105,
+  JUNGLE_FENCE: 106,
+  CHERRY_FENCE: 107,
+  OAK_FENCE_GATE: 108,
+  BIRCH_FENCE_GATE: 109,
+  SPRUCE_FENCE_GATE: 110,
+  ACACIA_FENCE_GATE: 111,
+  JUNGLE_FENCE_GATE: 112,
+  CHERRY_FENCE_GATE: 113
 };
 
 // Block numeric ID -> string item key
@@ -212,7 +224,7 @@ regBlock(BLOCK.STONE_BRICKS, 'stone_bricks', { name: 'Stone Bricks', hardness: 2
 regBlock(BLOCK.IRON_BLOCK, 'iron_block', { name: 'Block of Iron', hardness: 3.8, tool: 'pickaxe', minTier: 2, sound: 'stone', faces: { all: 'iron_block' } });
 regBlock(BLOCK.GOLD_BLOCK, 'gold_block', { name: 'Block of Gold', hardness: 3.4, tool: 'pickaxe', minTier: 3, sound: 'stone', faces: { all: 'gold_block' } });
 regBlock(BLOCK.DIAMOND_BLOCK, 'diamond_block', { name: 'Block of Diamond', hardness: 4.8, tool: 'pickaxe', minTier: 3, sound: 'stone', faces: { all: 'diamond_block' } });
-regBlock(BLOCK.LADDER, 'ladder', { name: 'Ladder', solid: false, transparent: true, cross: true, climbable: true, hardness: 0.5, tool: 'axe', sound: 'wood', faces: { all: 'ladder' } });
+regBlock(BLOCK.LADDER, 'ladder', { name: 'Ladder', solid: false, transparent: true, cross: false, climbable: true, hardness: 0.5, tool: 'axe', sound: 'wood', faces: { all: 'ladder' } });
 regBlock(BLOCK.FARMLAND, 'farmland', { name: 'Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'farmland_top', side: 'dirt', bottom: 'dirt' } });
 regBlock(BLOCK.FARMLAND_WET, 'farmland_wet', { name: 'Hydrated Farmland', hardness: 0.6, tool: 'shovel', sound: 'dirt', drop: 'dirt', hiddenFromCreative: true, faces: { top: 'farmland_wet_top', side: 'dirt', bottom: 'dirt' } });
 regBlock(BLOCK.DIRT_PATH, 'dirt_path', { name: 'Dirt Path', hardness: 0.65, tool: 'shovel', sound: 'dirt', drop: 'dirt', faces: { top: 'dirt_path_top', side: 'dirt_path_side', bottom: 'dirt' } });
@@ -280,6 +292,29 @@ for (const dw of DOOR_WOODS) {
     doorPartner: dw.bId, doorWood: dw.key, interactive: 'door',
     drop: `${dw.key}_door`, hiddenFromCreative: true,
     faces: { all: `${dw.key}_door_top`, side: `${dw.key}_door_top`, top: dw.planks, bottom: dw.planks }
+  });
+}
+
+// --- WOOD FENCES & FENCE GATES (All 6 wood types — auto-connecting fences & openable swinging gates!) ---
+export const FENCE_WOODS = [
+  { key: 'oak',    label: 'Oak',    fId: BLOCK.OAK_FENCE,    gId: BLOCK.OAK_FENCE_GATE,    planks: 'oak_planks' },
+  { key: 'birch',  label: 'Birch',  fId: BLOCK.BIRCH_FENCE,  gId: BLOCK.BIRCH_FENCE_GATE,  planks: 'birch_planks' },
+  { key: 'spruce', label: 'Spruce', fId: BLOCK.SPRUCE_FENCE, gId: BLOCK.SPRUCE_FENCE_GATE, planks: 'spruce_planks' },
+  { key: 'acacia', label: 'Acacia', fId: BLOCK.ACACIA_FENCE, gId: BLOCK.ACACIA_FENCE_GATE, planks: 'acacia_planks' },
+  { key: 'jungle', label: 'Jungle', fId: BLOCK.JUNGLE_FENCE, gId: BLOCK.JUNGLE_FENCE_GATE, planks: 'jungle_planks' },
+  { key: 'cherry', label: 'Cherry', fId: BLOCK.CHERRY_FENCE, gId: BLOCK.CHERRY_FENCE_GATE, planks: 'cherry_planks' }
+];
+for (const fw of FENCE_WOODS) {
+  regBlock(fw.fId, `${fw.key}_fence`, {
+    name: `${fw.label} Fence`, hardness: 1.8, tool: 'axe', sound: 'wood',
+    transparent: true, solid: true, isFence: true, fenceWood: fw.key,
+    faces: { all: fw.planks }
+  });
+  regBlock(fw.gId, `${fw.key}_fence_gate`, {
+    name: `${fw.label} Fence Gate`, hardness: 1.8, tool: 'axe', sound: 'wood',
+    transparent: true, solid: true, isFenceGate: true, fenceWood: fw.key,
+    interactive: 'fence_gate',
+    faces: { all: fw.planks }
   });
 }
 
@@ -498,6 +533,18 @@ export function isDoorBottom(id) {
   return isDoorBlock(id) && ((id - BLOCK.OAK_DOOR_B) & 1) === 0;
 }
 
+export function isFenceBlock(id) {
+  return id >= BLOCK.OAK_FENCE && id <= BLOCK.CHERRY_FENCE;
+}
+
+export function isFenceGateBlock(id) {
+  return id >= BLOCK.OAK_FENCE_GATE && id <= BLOCK.CHERRY_FENCE_GATE;
+}
+
+export function isFenceOrGate(id) {
+  return id >= BLOCK.OAK_FENCE && id <= BLOCK.CHERRY_FENCE_GATE;
+}
+
 export function isWheatBlock(id) {
   return id >= BLOCK.WHEAT_0 && id <= BLOCK.WHEAT_7;
 }
@@ -513,7 +560,8 @@ export function getItemCategory(def) {
   if (def.toolType || def.bucketType) return 'tools';
   if (def.food) return 'food';
   if (!def.isBlock) return 'materials';
-  if (def.isDoor) return 'utility';
+  if (def.isDoor || def.isFenceGate) return 'utility';
+  if (def.isFence) return 'building';
   const id = def.id;
   if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
     return 'utility';

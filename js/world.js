@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom, isWheatBlock, isFarmlandBlock } from './blocks.js';
+import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom, isFenceBlock, isFenceGateBlock, isFenceOrGate, isWheatBlock, isFarmlandBlock } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { LodWorkerPool } from './lod-mesher.js';
@@ -287,7 +287,9 @@ const FLAMMABLE_SET = new Set([
   BLOCK.BED, BLOCK.BED_HEAD_N, BLOCK.BED_FOOT_S, BLOCK.BED_HEAD_S, BLOCK.BED_FOOT_E, BLOCK.BED_HEAD_E, BLOCK.BED_FOOT_W, BLOCK.BED_HEAD_W,
   BLOCK.OAK_DOOR_B, BLOCK.OAK_DOOR_T, BLOCK.BIRCH_DOOR_B, BLOCK.BIRCH_DOOR_T,
   BLOCK.SPRUCE_DOOR_B, BLOCK.SPRUCE_DOOR_T, BLOCK.ACACIA_DOOR_B, BLOCK.ACACIA_DOOR_T,
-  BLOCK.JUNGLE_DOOR_B, BLOCK.JUNGLE_DOOR_T, BLOCK.CHERRY_DOOR_B, BLOCK.CHERRY_DOOR_T
+  BLOCK.JUNGLE_DOOR_B, BLOCK.JUNGLE_DOOR_T, BLOCK.CHERRY_DOOR_B, BLOCK.CHERRY_DOOR_T,
+  BLOCK.OAK_FENCE, BLOCK.BIRCH_FENCE, BLOCK.SPRUCE_FENCE, BLOCK.ACACIA_FENCE, BLOCK.JUNGLE_FENCE, BLOCK.CHERRY_FENCE,
+  BLOCK.OAK_FENCE_GATE, BLOCK.BIRCH_FENCE_GATE, BLOCK.SPRUCE_FENCE_GATE, BLOCK.ACACIA_FENCE_GATE, BLOCK.JUNGLE_FENCE_GATE, BLOCK.CHERRY_FENCE_GATE
 ]);
 const FAST_BURN_SET = new Set([
   BLOCK.OAK_LEAVES, BLOCK.BIRCH_LEAVES, BLOCK.SPRUCE_LEAVES, BLOCK.ACACIA_LEAVES, BLOCK.JUNGLE_LEAVES, BLOCK.CHERRY_LEAVES,
@@ -322,6 +324,8 @@ export class World {
     this.chests = new Map(); // "x,y,z" -> Array(27)
     this.furnaces = new Map(); // "x,y,z" -> { input, fuel, output, burnTime, burnMax, cookTime }
     this.doorStates = new Map(); // "x,y,z" (bottom block) -> { facing: 0..3, open: boolean }
+    this.gateStates = new Map(); // "x,y,z" -> { facing: 0..3, open: boolean }
+    this.ladderStates = new Map(); // "x,y,z" -> facing (0=-Z wall, 1=+X wall, 2=+Z wall, 3=-X wall)
     this.villageChunks = new Map(); // numeric chunkKey -> { x, y, z, biome, spawned: bool }
     this.persistentLeaves = new Set(); // "x,y,z" of player-placed leaves that should not decay
     this.leafDecayQueue = new Map(); // "x,y,z" -> { x, y, z, timer }
@@ -1002,7 +1006,7 @@ export class World {
         uFogFar: this.shaderUniforms.uFogFar
       },
       transparent: true,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,
       depthWrite: false,
       vertexShader: `
         varying vec3 vWorldPos;
@@ -1045,6 +1049,32 @@ export class World {
           float wA = sin(p.x * 1.75 + t * 1.65 + p.y * 0.78);
           float wB = cos(p.y * 2.05 - t * 1.35 - p.x * 0.62);
           float wC = sin((p.x - p.y) * 2.8 + t * 2.1) * 0.42;
+
+          // UNDERSIDE WATER SURFACE CEILING (visible when swimming underwater looking UP — matches Screenshot 2!)
+          if (!gl_FrontFacing) {
+            // Crisp Minecraft-style quantized pixel shimmer + overhead Snell's sky window!
+            vec2 pix = floor(p * 8.0) / 8.0;
+            float uWave1 = sin(pix.x * 2.4 + t * 2.1 + pix.y * 1.1);
+            float uWave2 = cos(pix.y * 2.7 - t * 1.8 - pix.x * 0.9);
+            float shimmer = 0.5 + 0.5 * (uWave1 * 0.55 + uWave2 * 0.45);
+            float lookUp = clamp(dot(vec3(0.0, -1.0, 0.0), V), 0.0, 1.0);
+            float snell = smoothstep(0.18, 0.85, lookUp);
+
+            vec3 deepCeil = mix(vec3(0.05, 0.14, 0.34), vec3(0.11, 0.28, 0.64), uDayFactor);
+            vec3 brightRipple = mix(vec3(0.16, 0.34, 0.62), vec3(0.32, 0.62, 0.96), uDayFactor);
+            vec3 underCol = mix(deepCeil, brightRipple, shimmer * 0.65 + snell * 0.28);
+            // Bright sunlit refraction glint right overhead so player clearly sees the water top!
+            underCol += mix(vec3(0.08, 0.16, 0.30), uSunColor * 0.28, uDayFactor) * snell * (0.45 + 0.55 * shimmer);
+            float uwFog = smoothstep(10.0, 48.0, dist);
+            vec3 uwFogCol = mix(vec3(0.04, 0.10, 0.24), vec3(0.10, 0.26, 0.54), uDayFactor);
+            underCol = mix(underCol, uwFogCol, uwFog * 0.72);
+            float underAlpha = mix(0.76, 0.90, clamp(1.0 - snell * 0.45 + uwFog * 0.3, 0.0, 1.0));
+            gl_FragColor = vec4(underCol, underAlpha);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+            return;
+          }
+
           float amp = mix(0.010, 0.068, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(35.0, 145.0, dist) * 0.62);
           vec3 N = vBaseNormal.y > 0.5
             ? normalize(vec3((wA + wC) * amp, 1.0, (wB - wC) * amp))
@@ -1159,8 +1189,8 @@ export class World {
       this._transTable[id] = isTr ? 1 : 0;
       this._litTable[id] = def.light > 0 ? 1 : 0;
       this._specialTable[id] = (
-        isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) || isWheatBlock(id) ||
-        id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE
+        isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) || isFenceOrGate(id) || isWheatBlock(id) ||
+        id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE || id === BLOCK.LADDER
       ) ? 1 : 0;
       const faceUVs = new Array(6);
       for (let fi = 0; fi < 6; fi++) {
@@ -1938,12 +1968,12 @@ export class World {
         }
         addLamp(13, 7);
       } else if (dRoll === 1) {
-        // Grand 2-Story Townhouse + Fenced Animal Pasture!
+        // Grand 2-Story Townhouse + Real Fenced Animal Pasture with Openable Gate!
         buildDetailedHouse(2, 2, 6, 6, 3, { doorSide: 'south', beds: 2, chestTier: 'house', twoStory: true });
         for (let dz = 0; dz < 5; dz++) {
           for (let dx = 0; dx < 6; dx++) {
             if (dx === 0 || dx === 5 || dz === 0 || dz === 4) {
-              if (!(dz === 0 && dx === 2)) setLocal(9 + dx, baseY + 1, 9 + dz, logBlk);
+              setLocal(9 + dx, baseY + 1, 9 + dz, (dz === 0 && dx === 2) ? BLOCK.OAK_FENCE_GATE : BLOCK.OAK_FENCE);
             }
           }
         }
@@ -3360,14 +3390,60 @@ export class World {
         if (bestV) addSeg(v, bestV);
       }
 
+      // Detect Bridge/Path Intersection Points -> Center Crossroads Outpost Hubs!
+      const hubs = [];
+      const evalSeg = (s, t) => {
+        const dx = s.bx - s.ax, dz = s.bz - s.az;
+        const nx = -dz / s.len, nz = dx / s.len;
+        const curve = Math.sin(t * Math.PI) * s.bend;
+        return { x: s.ax + dx * t + nx * curve, z: s.az + dz * t + nz * curve };
+      };
+      for (let i = 0; i < segs.length; i++) {
+        for (let j = i + 1; j < segs.length; j++) {
+          const s1 = segs[i], s2 = segs[j];
+          if (s1.maxX < s2.minX || s1.minX > s2.maxX || s1.maxZ < s2.minZ || s1.minZ > s2.maxZ) continue;
+          // Sample 10 chords per segment to accurately locate curved intersections (fast: only on overlapping AABBs!)
+          let bestD = 5.5, bestPt = null;
+          for (let a = 1; a <= 9; a++) {
+            const p1 = evalSeg(s1, a * 0.1);
+            for (let b = 1; b <= 9; b++) {
+              const p2 = evalSeg(s2, b * 0.1);
+              const d = Math.hypot(p1.x - p2.x, p1.z - p2.z);
+              if (d < bestD) {
+                bestD = d;
+                bestPt = { x: Math.round((p1.x + p2.x) * 0.5), z: Math.round((p1.z + p2.z) * 0.5) };
+              }
+            }
+          }
+          if (bestPt) {
+            // Avoid duplicates or hubs right on top of a Village/Mega endpoint
+            let nearEnd = false;
+            for (const ep of [
+              { x: s1.ax, z: s1.az }, { x: s1.bx, z: s1.bz },
+              { x: s2.ax, z: s2.az }, { x: s2.bx, z: s2.bz }
+            ]) {
+              if (Math.hypot(bestPt.x - ep.x, bestPt.z - ep.z) < 38) { nearEnd = true; break; }
+            }
+            if (!nearEnd && !hubs.some((h) => Math.hypot(h.x - bestPt.x, h.z - bestPt.z) < 22)) {
+              hubs.push(bestPt);
+            }
+          }
+        }
+      }
+
+      const bundle = { segs, hubs };
       if (this._roadRegionCache.size > 48) this._roadRegionCache.clear();
-      this._roadRegionCache.set(rKey, segs);
+      this._roadRegionCache.set(rKey, bundle);
+      return bundle;
     }
     return segs;
   }
 
   stampConnectingPaths(cx, cz, ox, oz, heights, biomes, setLocal, getLocal, noTreeMask) {
-    const segs = this._getRoadSegmentsForChunk(cx, cz);
+    const bundle = this._getRoadSegmentsForChunk(cx, cz);
+    if (!bundle) return;
+    const segs = Array.isArray(bundle) ? bundle : bundle.segs;
+    const hubs = Array.isArray(bundle) ? [] : (bundle.hubs || []);
     if (!segs || segs.length === 0) return;
 
     // Fast chunk-level AABB cull so 90%+ of chunks exit immediately!
@@ -3378,7 +3454,12 @@ export class World {
       if (cMaxX < s.minX || ox > s.maxX || cMaxZ < s.minZ || oz > s.maxZ) continue;
       hits.push(s);
     }
-    if (hits.length === 0) return;
+    const nearHubs = [];
+    for (let i = 0; i < hubs.length; i++) {
+      const h = hubs[i];
+      if (cMaxX >= h.x - 6 && ox <= h.x + 6 && cMaxZ >= h.z - 6 && oz <= h.z + 6) nearHubs.push(h);
+    }
+    if (hits.length === 0 && nearHubs.length === 0) return;
 
     for (let lz = 0; lz < 16; lz++) {
       const wz = oz + lz;
@@ -3390,6 +3471,7 @@ export class World {
 
         let minDist = 999;
         let bestAlong = 0;
+        let closeCount = 0;
         for (let hi = 0; hi < hits.length; hi++) {
           const s = hits[hi];
           const dx = s.bx - s.ax;
@@ -3403,49 +3485,157 @@ export class World {
           const px = s.ax + dx * t + nx * curve;
           const pz = s.az + dz * t + nz * curve;
           const d = Math.hypot(wx - px, wz - pz);
+          if (d <= 2.3) closeCount++;
           if (d < minDist) {
             minDist = d;
             bestAlong = t * s.len;
           }
         }
 
-        if (minDist > 3.5) continue;
+        if (minDist > 3.6) continue;
         // Clear tree exclusion buffer around roads so canopies never block highways!
         noTreeMask[idx2] = 1;
-        if (minDist > 1.75) {
-          // Occasional rustic roadside torch signpost every ~28 blocks along one road edge!
-          if (minDist >= 2.0 && minDist <= 2.7 && Math.abs((bestAlong % 28) - 14) < 0.75) {
-            const h = heights[idx2];
-            if (h > SEA_LEVEL + 1 && h < SEA_LEVEL + 52) {
-              setLocal(lx, h + 1, lz, BLOCK.OAK_LOG);
-              setLocal(lx, h + 2, lz, BLOCK.OAK_LOG);
-              setLocal(lx, h + 3, lz, BLOCK.TORCH);
-            }
-          }
-          continue;
-        }
 
         const h = heights[idx2];
         if (h > SEA_LEVEL + 64) continue;
         const isDesertRoad = biome === 'Desert' || biome === 'Badlands';
+
         if (h <= SEA_LEVEL) {
-          // Wooden Plank Bridge across rivers/lakes!
+          // Upgraded Wooden Plank Bridge across water:
+          // - Walkable deck (minDist <= 1.35)
+          // - Authentic Minecraft Oak Fence Railings (1.35 < minDist <= 2.15)
+          // - Sturdy Oak Log Support Posts reaching all the way to the riverbed/seabed every ~12 blocks!
+          // - Climbable 3D Wooden Ladder mounted on the outer side of each support post from underwater up to the deck!
           const by = SEA_LEVEL + 1;
-          const isRail = minDist > 1.15;
-          setLocal(lx, by, lz, BLOCK.OAK_PLANKS);
-          setLocal(lx, by + 1, lz, isRail ? BLOCK.OAK_LOG : BLOCK.AIR);
-          setLocal(lx, by + 2, lz, BLOCK.AIR);
-          setLocal(lx, by + 3, lz, BLOCK.AIR);
-          if (isRail && Math.floor(bestAlong) % 6 === 0) {
-            for (let py = Math.max(1, h); py < by; py++) setLocal(lx, py, lz, BLOCK.OAK_LOG);
+          const onPostPeriod = Math.abs((bestAlong % 12) - 6) < 0.72;
+          if (minDist <= 2.18) {
+            const isRail = minDist > 1.32 && closeCount < 2;
+            setLocal(lx, by, lz, isRail && onPostPeriod ? BLOCK.OAK_LOG : BLOCK.OAK_PLANKS);
+            if (isRail) {
+              // Leave opening at top of ladder post so players climb cleanly onto the bridge!
+              setLocal(lx, by + 1, lz, onPostPeriod ? BLOCK.AIR : BLOCK.OAK_FENCE);
+            } else {
+              setLocal(lx, by + 1, lz, BLOCK.AIR);
+            }
+            setLocal(lx, by + 2, lz, BLOCK.AIR);
+            setLocal(lx, by + 3, lz, BLOCK.AIR);
+            // Full-depth Oak Log support post all the way down to the bottom of the river/lake!
+            if (isRail && onPostPeriod) {
+              for (let py = Math.max(1, h - 1); py < by; py++) {
+                setLocal(lx, py, lz, BLOCK.OAK_LOG);
+              }
+              // Attach a climbable 3D Wooden Ladder column directly onto the outer water-facing side of this post!
+              const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+              let bestDir = null, bestD = minDist;
+              for (const [ddx, ddz] of dirs) {
+                const nlx = lx + ddx, nlz = lz + ddz;
+                if (nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) continue;
+                const nwx = ox + nlx, nwz = oz + nlz;
+                let ndMin = 999;
+                for (let hi = 0; hi < hits.length; hi++) {
+                  const s = hits[hi];
+                  const sdx = s.bx - s.ax, sdz = s.bz - s.az;
+                  const t2 = Math.max(0, Math.min(1, ((nwx - s.ax) * sdx + (nwz - s.az) * sdz) / (sdx * sdx + sdz * sdz)));
+                  const c2 = Math.sin(t2 * Math.PI) * s.bend;
+                  const d2 = Math.hypot(nwx - (s.ax + sdx * t2 + (-sdz / s.len) * c2), nwz - (s.az + sdz * t2 + (sdx / s.len) * c2));
+                  if (d2 < ndMin) ndMin = d2;
+                }
+                if (ndMin > bestD) { bestD = ndMin; bestDir = [nlx, nlz]; }
+              }
+              if (bestDir) {
+                const [llx, llz] = bestDir;
+                const nh = heights[llx + (llz << 4)];
+                const ladBottom = Math.max(Math.max(2, nh + 1), SEA_LEVEL - 4);
+                for (let ly = ladBottom; ly <= by; ly++) {
+                  const existing = getLocal(llx, ly, llz);
+                  if (existing === BLOCK.AIR || existing === BLOCK.WATER) {
+                    setLocal(llx, ly, llz, BLOCK.LADDER);
+                  }
+                }
+              }
+            }
           }
         } else {
+          if (minDist > 1.85) {
+            // Occasional rustic roadside torch signpost every ~28 blocks along one road edge!
+            if (minDist >= 2.05 && minDist <= 2.75 && Math.abs((bestAlong % 28) - 14) < 0.75) {
+              if (h > SEA_LEVEL + 1 && h < SEA_LEVEL + 52) {
+                setLocal(lx, h + 1, lz, BLOCK.OAK_FENCE);
+                setLocal(lx, h + 2, lz, BLOCK.OAK_FENCE);
+                setLocal(lx, h + 3, lz, BLOCK.TORCH);
+              }
+            }
+            continue;
+          }
           // Terrain-hugging authentic Minecraft Dirt Path (or Sandstone Highway in Desert!)
           const roadBlk = isDesertRoad ? BLOCK.SANDSTONE : BLOCK.DIRT_PATH;
           setLocal(lx, h, lz, roadBlk);
           setLocal(lx, h + 1, lz, BLOCK.AIR);
           setLocal(lx, h + 2, lz, BLOCK.AIR);
           setLocal(lx, h + 3, lz, BLOCK.AIR);
+        }
+      }
+    }
+
+    // Stamp Crossroads Center Outpost Pavilion wherever two bridges or paths intersect!
+    for (let hi = 0; hi < nearHubs.length; hi++) {
+      const hub = nearHubs[hi];
+      const hubRawH = this.getTerrainHeight(hub.x, hub.z);
+      const isWaterHub = hubRawH <= SEA_LEVEL;
+      const hubY = isWaterHub ? (SEA_LEVEL + 1) : Math.max(SEA_LEVEL + 1, Math.min(SEA_LEVEL + 56, hubRawH));
+      for (let lz = 0; lz < 16; lz++) {
+        const dz = (oz + lz) - hub.z;
+        if (Math.abs(dz) > 4) continue;
+        for (let lx = 0; lx < 16; lx++) {
+          const dx = (ox + lx) - hub.x;
+          if (Math.abs(dx) > 4) continue;
+          const adx = Math.abs(dx), adz = Math.abs(dz);
+          noTreeMask[lx + (lz << 4)] = 1;
+          const isCorner = adx === 4 && adz === 4;
+          const isEdge = adx === 4 || adz === 4;
+          const isDoorway = (adx <= 1 && adz === 4) || (adz <= 1 && adx === 4);
+
+          // Floor deck (cobblestone rim + oak plank plaza) & support pilings down to ground/riverbed!
+          const curH = heights[lx + (lz << 4)];
+          setLocal(lx, hubY, lz, isEdge ? BLOCK.COBBLESTONE : (((dx + dz) & 1) ? BLOCK.OAK_PLANKS : BLOCK.DIRT_PATH));
+          if (isCorner || (!isWaterHub && curH < hubY)) {
+            for (let py = Math.max(1, curH - 1); py < hubY; py++) {
+              setLocal(lx, py, lz, isCorner ? BLOCK.OAK_LOG : BLOCK.COBBLESTONE);
+            }
+          }
+          // Clear interior headroom
+          for (let py = hubY + 1; py <= hubY + 6; py++) setLocal(lx, py, lz, BLOCK.AIR);
+
+          // Corner pillars, Fence railings with 4 open gateways, pitched canopy roof & hanging Glowstone lantern!
+          if (isCorner) {
+            for (let py = 1; py <= 4; py++) setLocal(lx, hubY + py, lz, BLOCK.OAK_LOG);
+            setLocal(lx, hubY + 5, lz, BLOCK.TORCH);
+          } else if (isEdge && !isDoorway) {
+            setLocal(lx, hubY + 1, lz, BLOCK.OAK_FENCE);
+          }
+          if (adx <= 3 && adz <= 3) {
+            const roofY = hubY + 5 + (adx <= 1 && adz <= 1 ? 1 : 0);
+            setLocal(lx, roofY, lz, ((adx + adz) & 1) === 0 ? BLOCK.WOOL_RED : BLOCK.WOOL_WHITE);
+          }
+          if (dx === 0 && dz === 0) {
+            setLocal(lx, hubY + 4, lz, BLOCK.GLOWSTONE);
+          }
+          // Wayfarer Crafting Table & Supply Chest inside the Crossroads Outpost!
+          if (dx === -3 && dz === -3) setLocal(lx, hubY + 1, lz, BLOCK.CRAFTING_TABLE);
+          if (dx === 3 && dz === -3) {
+            setLocal(lx, hubY + 1, lz, BLOCK.CHEST);
+            const wKey = `${ox + lx},${hubY + 1},${oz + lz}`;
+            if (!this.chests.has(wKey)) {
+              const loot = new Array(27).fill(null);
+              loot[0] = { id: 'bread', count: 6 };
+              loot[1] = { id: 'torch', count: 16 };
+              loot[2] = { id: 'oak_fence', count: 12 };
+              loot[3] = { id: 'oak_fence_gate', count: 2 };
+              loot[4] = { id: 'ladder', count: 8 };
+              loot[5] = { id: 'emerald', count: 3 };
+              this.chests.set(wKey, loot);
+            }
+          }
         }
       }
     }
@@ -4089,6 +4279,8 @@ export class World {
       this.chests.delete(bKey);
       this.furnaces.delete(bKey);
       this.doorStates.delete(bKey);
+      this.gateStates.delete(bKey);
+      this.ladderStates.delete(bKey);
     } else if (blockId === BLOCK.CHEST && !this.chests.has(bKey)) {
       this.chests.set(bKey, new Array(27).fill(null));
     } else if (blockId === BLOCK.FURNACE && !this.furnaces.has(bKey)) {
@@ -4996,6 +5188,121 @@ export class World {
             continue;
           }
 
+          // Authentic Minecraft Auto-Connecting 3D Wood Fence Geometry (Central Post + Dynamic N/S/E/W Bars!)
+          if (isFenceBlock(id)) {
+            const skyF = calcSkyLight(lx, y, lz);
+            const uv = uvTable[id][0];
+            const sTop = 0.98 * skyF, sBot = 0.62 * skyF, sX = 0.86 * skyF, sZ = 0.78 * skyF;
+            const addBox = (x0, y0, z0, x1, y1, z1) => {
+              const bx0 = wx + x0, bx1 = wx + x1, by0 = y + y0, by1 = y + y1, bz0 = wz + z0, bz1 = wz + z1;
+              const u0 = uv.u0, u1 = uv.u1, v0 = uv.v0, v1 = uv.v1;
+              bOpaque.pushQuad(bx0,by1,bz1,u0,v0,sTop, bx1,by1,bz1,u1,v0,sTop, bx1,by1,bz0,u1,v1,sTop, bx0,by1,bz0,u0,v1,sTop, 0,1,0);
+              bOpaque.pushQuad(bx0,by0,bz0,u0,v0,sBot, bx1,by0,bz0,u1,v0,sBot, bx1,by0,bz1,u1,v1,sBot, bx0,by0,bz1,u0,v1,sBot, 0,-1,0);
+              bOpaque.pushQuad(bx1,by0,bz1,u0,v0,sX, bx1,by0,bz0,u1,v0,sX, bx1,by1,bz0,u1,v1,sX, bx1,by1,bz1,u0,v1,sX, 1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz0,u0,v0,sX, bx0,by0,bz1,u1,v0,sX, bx0,by1,bz1,u1,v1,sX, bx0,by1,bz0,u0,v1,sX, -1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz1,u0,v0,sZ, bx1,by0,bz1,u1,v0,sZ, bx1,by1,bz1,u1,v1,sZ, bx0,by1,bz1,u0,v1,sZ, 0,0,1);
+              bOpaque.pushQuad(bx1,by0,bz0,u0,v0,sZ, bx0,by0,bz0,u1,v0,sZ, bx0,by1,bz0,u1,v1,sZ, bx1,by1,bz0,u0,v1,sZ, 0,0,-1);
+            };
+            const connects = (nid) => nid !== 0 && (isFenceOrGate(nid) || (solidTable[nid] === 1 && transTable[nid] === 0));
+            // 4/16 x 16/16 x 4/16 center post
+            addBox(0.375, 0.0, 0.375, 0.625, 1.0, 0.625);
+            // Upper & lower horizontal bars connecting to adjacent Fences, Fence Gates & full solid blocks!
+            if (connects(fastGet(lx, y, lz - 1))) {
+              addBox(0.4375, 0.75, 0.0, 0.5625, 0.9375, 0.375);
+              addBox(0.4375, 0.375, 0.0, 0.5625, 0.5625, 0.375);
+            }
+            if (connects(fastGet(lx, y, lz + 1))) {
+              addBox(0.4375, 0.75, 0.625, 0.5625, 0.9375, 1.0);
+              addBox(0.4375, 0.375, 0.625, 0.5625, 0.5625, 1.0);
+            }
+            if (connects(fastGet(lx + 1, y, lz))) {
+              addBox(0.625, 0.75, 0.4375, 1.0, 0.9375, 0.5625);
+              addBox(0.625, 0.375, 0.4375, 1.0, 0.5625, 0.5625);
+            }
+            if (connects(fastGet(lx - 1, y, lz))) {
+              addBox(0.0, 0.75, 0.4375, 0.375, 0.9375, 0.5625);
+              addBox(0.0, 0.375, 0.4375, 0.375, 0.5625, 0.5625);
+            }
+            continue;
+          }
+
+          // Authentic Minecraft Openable/Closeable 3D Wood Fence Gate Geometry!
+          if (isFenceGateBlock(id)) {
+            const st = this.getFenceGateState(wx, y, wz);
+            const skyF = calcSkyLight(lx, y, lz);
+            const uv = uvTable[id][0];
+            const sTop = 0.98 * skyF, sBot = 0.62 * skyF, sX = 0.86 * skyF, sZ = 0.78 * skyF;
+            const alongX = (st.facing === 0 || st.facing === 2);
+            const addGateBox = (ax0, y0, az0, ax1, y1, az1) => {
+              // Transform local gate coordinates (ax=across gate span, az=depth) into world X/Z!
+              const x0 = alongX ? ax0 : az0, x1 = alongX ? ax1 : az1;
+              const z0 = alongX ? az0 : ax0, z1 = alongX ? az1 : ax1;
+              const bx0 = wx + x0, bx1 = wx + x1, by0 = y + y0, by1 = y + y1, bz0 = wz + z0, bz1 = wz + z1;
+              const u0 = uv.u0, u1 = uv.u1, v0 = uv.v0, v1 = uv.v1;
+              bOpaque.pushQuad(bx0,by1,bz1,u0,v0,sTop, bx1,by1,bz1,u1,v0,sTop, bx1,by1,bz0,u1,v1,sTop, bx0,by1,bz0,u0,v1,sTop, 0,1,0);
+              bOpaque.pushQuad(bx0,by0,bz0,u0,v0,sBot, bx1,by0,bz0,u1,v0,sBot, bx1,by0,bz1,u1,v1,sBot, bx0,by0,bz1,u0,v1,sBot, 0,-1,0);
+              bOpaque.pushQuad(bx1,by0,bz1,u0,v0,sX, bx1,by0,bz0,u1,v0,sX, bx1,by1,bz0,u1,v1,sX, bx1,by1,bz1,u0,v1,sX, 1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz0,u0,v0,sX, bx0,by0,bz1,u1,v0,sX, bx0,by1,bz1,u1,v1,sX, bx0,by1,bz0,u0,v1,sX, -1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz1,u0,v0,sZ, bx1,by0,bz1,u1,v0,sZ, bx1,by1,bz1,u1,v1,sZ, bx0,by1,bz1,u0,v1,sZ, 0,0,1);
+              bOpaque.pushQuad(bx1,by0,bz0,u0,v0,sZ, bx0,by0,bz0,u1,v0,sZ, bx0,by1,bz0,u1,v1,sZ, bx1,by1,bz0,u0,v1,sZ, 0,0,-1);
+            };
+            // Left & right side posts
+            addGateBox(0.0, 0.3125, 0.4375, 0.125, 1.0, 0.5625);
+            addGateBox(0.875, 0.3125, 0.4375, 1.0, 1.0, 0.5625);
+            if (!st.open) {
+              // Closed double-leaf bars + center meeting stiles
+              addGateBox(0.125, 0.75, 0.4375, 0.875, 0.9375, 0.5625);
+              addGateBox(0.125, 0.375, 0.4375, 0.875, 0.5625, 0.5625);
+              addGateBox(0.375, 0.5625, 0.4375, 0.625, 0.75, 0.5625);
+            } else {
+              // Swung open 90 degrees outward!
+              const swingPos = (st.facing === 1 || st.facing === 2);
+              const dz0 = swingPos ? 0.5625 : 0.0625;
+              const dz1 = swingPos ? 0.9375 : 0.4375;
+              // Left swung gate leaf
+              addGateBox(0.0, 0.75, dz0, 0.125, 0.9375, dz1);
+              addGateBox(0.0, 0.375, dz0, 0.125, 0.5625, dz1);
+              addGateBox(0.0, 0.5625, swingPos ? 0.8125 : 0.0625, 0.125, 0.75, swingPos ? 0.9375 : 0.1875);
+              // Right swung gate leaf
+              addGateBox(0.875, 0.75, dz0, 1.0, 0.9375, dz1);
+              addGateBox(0.875, 0.375, dz0, 1.0, 0.5625, dz1);
+              addGateBox(0.875, 0.5625, swingPos ? 0.8125 : 0.0625, 1.0, 0.75, swingPos ? 0.9375 : 0.1875);
+            }
+            continue;
+          }
+
+          // Authentic Flush 3D Wall-Mounted Minecraft Ladder Geometry (2 vertical rails + 4 3D rungs matching Screenshot 1!)
+          if (id === BLOCK.LADDER) {
+            const lf = this.getLadderFacing(wx, y, wz, fastGet, lx, lz);
+            const skyF = calcSkyLight(lx, y, lz);
+            const woodUV = this._torchWoodUV || uvTable[BLOCK.OAK_PLANKS][0];
+            const sTop = 1.02 * skyF, sBot = 0.55 * skyF, sSide = 0.84 * skyF, sFront = 0.94 * skyF;
+            const addLadBox = (u0, y0, d0, u1, y1, d1) => {
+              // u = across ladder width [0..1], d = depth off supporting wall [0..0.09]
+              let x0, x1, z0, z1;
+              if (lf === 0) { x0 = u0; x1 = u1; z0 = d0; z1 = d1; }              // Mounted on -Z (North) wall
+              else if (lf === 2) { x0 = 1 - u1; x1 = 1 - u0; z0 = 1 - d1; z1 = 1 - d0; } // Mounted on +Z (South) wall
+              else if (lf === 1) { x0 = 1 - d1; x1 = 1 - d0; z0 = u0; z1 = u1; }         // Mounted on +X (East) wall
+              else { x0 = d0; x1 = d1; z0 = 1 - u1; z1 = 1 - u0; }                       // Mounted on -X (West) wall
+              const bx0 = wx + x0, bx1 = wx + x1, by0 = y + y0, by1 = y + y1, bz0 = wz + z0, bz1 = wz + z1;
+              const tu0 = woodUV.u0, tu1 = woodUV.u1, tv0 = woodUV.v0, tv1 = woodUV.v1;
+              bOpaque.pushQuad(bx0,by1,bz1,tu0,tv0,sTop, bx1,by1,bz1,tu1,tv0,sTop, bx1,by1,bz0,tu1,tv1,sTop, bx0,by1,bz0,tu0,tv1,sTop, 0,1,0);
+              bOpaque.pushQuad(bx0,by0,bz0,tu0,tv0,sBot, bx1,by0,bz0,tu1,tv0,sBot, bx1,by0,bz1,tu1,tv1,sBot, bx0,by0,bz1,tu0,tv1,sBot, 0,-1,0);
+              bOpaque.pushQuad(bx1,by0,bz1,tu0,tv0,sSide, bx1,by0,bz0,tu1,tv0,sSide, bx1,by1,bz0,tu1,tv1,sSide, bx1,by1,bz1,tu0,tv1,sSide, 1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz0,tu0,tv0,sSide, bx0,by0,bz1,tu1,tv0,sSide, bx0,by1,bz1,tu1,tv1,sSide, bx0,by1,bz0,tu0,tv1,sSide, -1,0,0);
+              bOpaque.pushQuad(bx0,by0,bz1,tu0,tv0,sFront, bx1,by0,bz1,tu1,tv0,sFront, bx1,by1,bz1,tu1,tv1,sFront, bx0,by1,bz1,tu0,tv1,sFront, 0,0,1);
+              bOpaque.pushQuad(bx1,by0,bz0,tu0,tv0,sFront, bx0,by0,bz0,tu1,tv0,sFront, bx0,by1,bz0,tu1,tv1,sFront, bx1,by1,bz0,tu0,tv1,sFront, 0,0,-1);
+            };
+            // Left & right vertical oak rails clinging flush to wall
+            addLadBox(0.125, 0.0, 0.0, 0.25, 1.0, 0.07);
+            addLadBox(0.75,  0.0, 0.0, 0.875, 1.0, 0.07);
+            // 4 proud 3D wooden horizontal rungs (slightly deeper than side rails for crisp 3D relief like Screenshot 1!)
+            for (const ry of [0.09, 0.34, 0.59, 0.84]) {
+              addLadBox(0.06, ry, 0.015, 0.94, ry + 0.11, 0.095);
+            }
+            continue;
+          }
+
           // Sculpted 3D Voxel Torch Model (wooden shaft + charred ember collar + blazing emissive flame tip + auto wall-mount tilt!)
           if (id === BLOCK.TORCH) {
             const hasFloor = solidTable[fastGet(lx, y - 1, lz)] === 1;
@@ -5173,7 +5480,8 @@ export class World {
 
             if (isWater || isLava) {
               if (fi === 0) {
-                if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
+                // Keep water/lava top face visible even when a solid block sits directly above (water top is at y+0.88, zero Z-fighting!)
+                if (neighbor === id) continue;
               } else {
                 if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
               }
@@ -5549,7 +5857,8 @@ export class World {
           for (let lx = 0; lx < 16; lx++) {
             if (data[lx + zOff + yOff] !== BLOCK.WATER) continue;
             const above = fastGet(lx, y + 1, lz);
-            if (above === BLOCK.WATER || (above !== 0 && transTable[above] === 0)) continue;
+            // NEVER cull water surface when a block sits above it — water surface sits at y+0.88 so it flows seamlessly under blocks & bridges!
+            if (above === BLOCK.WATER) continue;
             // Skip sloped flowing water (already rendered with exact 4-corner slopes in PASS 1!)
             if (this.fluidLevels.size > 0) {
               const wxW = ox + lx, wzW = oz + lz;
@@ -6443,6 +6752,85 @@ export class World {
     return st.open;
   }
 
+  // --- FENCE GATE & WALL-MOUNTED LADDER HELPERS ---
+  getFenceGateState(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const st = this.gateStates.get(`${x},${y},${z}`);
+    if (st) return st;
+    // Auto-orient world-generated fence gates to align cleanly with adjacent fences!
+    const fE = isFenceOrGate(this.getBlock(x + 1, y, z));
+    const fW = isFenceOrGate(this.getBlock(x - 1, y, z));
+    const fN = isFenceOrGate(this.getBlock(x, y, z - 1));
+    const fS = isFenceOrGate(this.getBlock(x, y, z + 1));
+    return { facing: (fN || fS) && !(fE || fW) ? 1 : 0, open: false };
+  }
+
+  isFenceGateOpenAt(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const st = this.gateStates.get(`${x},${y},${z}`);
+    return !!(st && st.open);
+  }
+
+  placeFenceGate(wx, wy, wz, blockId, facing = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    this.gateStates.set(`${x},${y},${z}`, { facing: facing & 3, open: false });
+    this.setBlock(x, y, z, blockId, true);
+  }
+
+  toggleFenceGate(wx, wy, wz, playerYaw = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const id = this.getBlock(x, y, z);
+    if (!isFenceGateBlock(id)) return false;
+    const key = `${x},${y},${z}`;
+    let st = this.gateStates.get(key);
+    if (!st) {
+      st = this.getFenceGateState(x, y, z);
+      this.gateStates.set(key, st);
+    }
+    st.open = !st.open;
+    // Swing open AWAY from the player just like real Minecraft!
+    if (st.open) {
+      const fx = -Math.sin(playerYaw);
+      const fz = -Math.cos(playerYaw);
+      if (st.facing === 0 || st.facing === 2) st.facing = fz >= 0 ? 2 : 0;
+      else st.facing = fx >= 0 ? 1 : 3;
+    }
+    const cx = x >> 4, cz = z >> 4;
+    this.markDirty(cx, cz);
+    const lx = x & 15, lz = z & 15;
+    if (lx === 0) this.markDirty(cx - 1, cz);
+    if (lx === 15) this.markDirty(cx + 1, cz);
+    if (lz === 0) this.markDirty(cx, cz - 1);
+    if (lz === 15) this.markDirty(cx, cz + 1);
+    return st.open;
+  }
+
+  placeLadder(wx, wy, wz, nx = 0, ny = 0, nz = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    // Attach to the exact solid wall face clicked (0=-Z wall, 1=+X wall, 2=+Z wall, 3=-X wall)
+    let facing = -1;
+    if (nz === 1) facing = 0;       // clicked +Z face of wall at z-1 -> mounts to -Z wall
+    else if (nx === -1) facing = 1; // clicked -X face of wall at x+1 -> mounts to +X wall
+    else if (nz === -1) facing = 2; // clicked -Z face of wall at z+1 -> mounts to +Z wall
+    else if (nx === 1) facing = 3;  // clicked +X face of wall at x-1 -> mounts to -X wall
+    if (facing < 0) facing = this.getLadderFacing(x, y, z);
+    this.ladderStates.set(`${x},${y},${z}`, facing);
+    this.setBlock(x, y, z, BLOCK.LADDER, true);
+  }
+
+  getLadderFacing(wx, wy, wz, fastGet = null, lx = 0, lz = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const saved = this.ladderStates.get(`${x},${y},${z}`);
+    if (saved !== undefined) return saved;
+    const isWall = (bid) => bid !== 0 && bid !== BLOCK.LADDER && this._solidTable[bid] === 1 && !isFenceOrGate(bid);
+    const getB = (dx, dz) => fastGet ? fastGet(lx + dx, y, lz + dz) : this.getBlock(x + dx, y, z + dz);
+    if (isWall(getB(0, -1))) return 0; // -Z North wall
+    if (isWall(getB(1, 0))) return 1;  // +X East wall
+    if (isWall(getB(0, 1))) return 2;  // +Z South wall
+    if (isWall(getB(-1, 0))) return 3; // -X West wall
+    return 0;
+  }
+
   dispose() {
     for (const chunk of this.chunks.values()) {
       for (const m of chunk.meshes) {
@@ -6477,6 +6865,8 @@ export class World {
     this._megaChunkCache.clear();
     this._villageChunkCache.clear();
     this.doorStates.clear();
+    this.gateStates.clear();
+    this.ladderStates.clear();
     this.megaStructures.clear();
     this.scene.remove(this.group);
     this.scene.remove(this.lodGroup);

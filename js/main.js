@@ -105,8 +105,27 @@ class BlockCraftGame {
     };
 
     this.bindControlActions();
+    this._lastViewW = 0;
+    this._lastViewH = 0;
+    this._lastDpr = 0;
+    this._resumeResizeTimers = [];
+    const scheduleResumeResize = () => {
+      this.onResize();
+      for (const tid of this._resumeResizeTimers) clearTimeout(tid);
+      this._resumeResizeTimers = [
+        setTimeout(() => this.onResize(), 120),
+        setTimeout(() => this.onResize(), 320),
+        setTimeout(() => this.onResize(), 650)
+      ];
+    };
     window.addEventListener('resize', () => this.onResize());
-    // Ensure settings & world changes are NEVER lost on reload or tab close!
+    window.addEventListener('orientationchange', scheduleResumeResize);
+    window.addEventListener('pageshow', scheduleResumeResize);
+    window.addEventListener('focus', scheduleResumeResize);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => this.onResize());
+    }
+    // Ensure settings & world changes are NEVER lost on reload or tab close, and fix iPad PWA resume aspect ratio!
     window.addEventListener('pagehide', () => {
       saveSettings(this.settings);
       if (this.running) this.saveCurrentWorld(false);
@@ -115,8 +134,11 @@ class BlockCraftGame {
       if (document.visibilityState === 'hidden') {
         saveSettings(this.settings);
         if (this.running) this.saveCurrentWorld(false);
+      } else if (document.visibilityState === 'visible') {
+        scheduleResumeResize();
       }
     });
+    this.onResize();
 
     // Register Service Worker for iPad PWA
     if ('serviceWorker' in navigator) {
@@ -128,11 +150,36 @@ class BlockCraftGame {
   }
 
   onResize() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    const vv = window.visualViewport;
+    const w = Math.max(1, Math.round(
+      (this.container && this.container.clientWidth) || (vv && vv.width) || window.innerWidth
+    ));
+    const h = Math.max(1, Math.round(
+      (this.container && this.container.clientHeight) || (vv && vv.height) || window.innerHeight
+    ));
+    const rawDpr = window.devicePixelRatio || 1;
+    const maxDpr = this.isTouch
+      ? (this.settings.renderDistance > 256 ? 1.1 : 1.25)
+      : 1.5;
+    const dpr = Math.min(rawDpr, maxDpr);
+
+    this._lastViewW = w;
+    this._lastViewH = h;
+    this._lastDpr = dpr;
+
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(w, h);
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(w, h, false);
+    if (this.renderer.domElement) {
+      this.renderer.domElement.style.width = `${w}px`;
+      this.renderer.domElement.style.height = `${h}px`;
+    }
+    if (this.postfx) {
+      const db = new THREE.Vector2();
+      this.renderer.getDrawingBufferSize(db);
+      if (db.x > 0 && db.y > 0) this.postfx.resize(db.x, db.y);
+    }
     if (this.titlePanorama) this.titlePanorama.resize(w, h);
   }
 
@@ -493,6 +540,12 @@ class BlockCraftGame {
         if (Array.isArray(saved.doorStates)) {
           for (const [k, v] of saved.doorStates) this.world.doorStates.set(k, v);
         }
+        if (Array.isArray(saved.gateStates)) {
+          for (const [k, v] of saved.gateStates) this.world.gateStates.set(k, v);
+        }
+        if (Array.isArray(saved.ladderStates)) {
+          for (const [k, v] of saved.ladderStates) this.world.ladderStates.set(k, v);
+        }
       }
 
       this.sky = new SkySystem(this.scene);
@@ -692,7 +745,9 @@ class BlockCraftGame {
       modifiedBlocks: Array.from(this.world.modifiedBlocks.entries()),
       chests: Array.from(this.world.chests.entries()),
       furnaces: Array.from(this.world.furnaces.entries()),
-      doorStates: Array.from(this.world.doorStates.entries())
+      doorStates: Array.from(this.world.doorStates.entries()),
+      gateStates: Array.from(this.world.gateStates.entries()),
+      ladderStates: Array.from(this.world.ladderStates.entries())
     };
     await saveWorld(record);
     if (showToast) this.ui.toast('World Saved!');
@@ -841,6 +896,11 @@ class BlockCraftGame {
           }
           if (bdef.interactive === 'door') {
             const opened = this.world.toggleDoor(x, y, z);
+            if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
+            return;
+          }
+          if (bdef.interactive === 'fence_gate') {
+            const opened = this.world.toggleFenceGate(x, y, z, this.player.yaw);
             if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
             return;
           }
@@ -1047,6 +1107,34 @@ class BlockCraftGame {
           }
           this.world.setBlock(px, py, pz, pair.foot, true);
           this.world.setBlock(hx, py, hz, pair.head, true);
+          this.sound.playBlock(heldDef.sound, true);
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+
+        if (heldDef.isFenceGate) {
+          if (isRepeat) return;
+          if (insidePlayer(px, py, pz)) return;
+          const fx = -Math.sin(this.player.yaw);
+          const fz = -Math.cos(this.player.yaw);
+          let facing = 0;
+          if (Math.abs(fx) > Math.abs(fz)) facing = fx > 0 ? 1 : 3;
+          else facing = fz > 0 ? 2 : 0;
+          this.world.placeFenceGate(px, py, pz, heldDef.blockId, facing);
+          this.sound.playBlock(heldDef.sound, true);
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+
+        if (heldDef.blockId === BLOCK.LADDER) {
+          if (isRepeat) return;
+          this.world.placeLadder(px, py, pz, this.currentTarget.nx, this.currentTarget.ny, this.currentTarget.nz);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1540,6 +1628,12 @@ class BlockCraftGame {
 
   loop(now) {
     requestAnimationFrame((t) => this.loop(t));
+    // Self-healing iPad PWA / Safari orientation & app-resume aspect guard (impossible to stay stretched!)
+    const curW = Math.max(1, Math.round((this.container && this.container.clientWidth) || window.innerWidth));
+    const curH = Math.max(1, Math.round((this.container && this.container.clientHeight) || window.innerHeight));
+    if (curW !== this._lastViewW || curH !== this._lastViewH) {
+      this.onResize();
+    }
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
     this.lastTime = now;
 

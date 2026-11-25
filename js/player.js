@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock } from './blocks.js';
+import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate } from './blocks.js';
 
 const PLAYER_RADIUS = 0.3;
 const PLAYER_HEIGHT = 1.75;
@@ -525,7 +525,18 @@ export class Player {
       for (let z = minZ; z <= maxZ; z++) {
         for (let x = minX; x <= maxX; x++) {
           const bid = this.world.getBlock(x, y, z);
-          if (isBlockSolid(bid) && !(isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z))) return true;
+          if (isBlockSolid(bid)) {
+            if (isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z)) continue;
+            if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(x, y, z)) continue;
+            return true;
+          }
+          // Authentic Minecraft 1.5-block tall Fence & Closed Fence Gate collision (cannot jump over fences!)
+          if (y === minY) {
+            const below = this.world.getBlock(x, y - 1, z);
+            if (isFenceOrGate(below) && !(isFenceGateBlock(below) && this.world.isFenceGateOpenAt(x, y - 1, z))) {
+              if (py < y + 0.48) return true;
+            }
+          }
         }
       }
     }
@@ -571,7 +582,7 @@ export class Player {
     this.inLava = nowInLava;
     this.inFire = nowInFire;
     if (nowInWater) this.burnTimer = 0;
-    const onLadder = feetBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
+    const onLadder = feetBlock === BLOCK.LADDER || waistBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
 
     this.sneaking = input.sneak && !this.flying;
     this.sprinting = input.sprint && input.moveForward > 0.4 && !this.sneaking && !this.isEating && (this.mode === 'creative' || this.hunger > 4);
@@ -609,7 +620,11 @@ export class Player {
       this.vel.y = THREE.MathUtils.lerp(this.vel.y, vy, Math.min(1, dt * 10));
       this.fallStartY = null;
     } else if (onLadder) {
-      this.vel.y = input.jump || input.moveForward > 0.2 ? 3.8 : (input.sneak ? 0 : -2.5);
+      // Smooth Minecraft ladder climbing (works seamlessly climbing straight out of water onto bridges!)
+      if (input.jump || input.moveForward > 0.15) this.vel.y = 4.4;
+      else if (input.sneak) this.vel.y = 0;
+      else if (input.moveForward < -0.15) this.vel.y = -3.4;
+      else this.vel.y = -1.6;
       this.fallStartY = null;
     } else if (this.inWater || this.inLava) {
       this.vel.y -= (this.inLava ? 6.5 : 9.5) * dt;

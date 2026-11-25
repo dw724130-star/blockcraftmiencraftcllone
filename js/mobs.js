@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid, isDoorBlock } from './blocks.js';
+import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate } from './blocks.js';
 import { SEA_LEVEL } from './world.js';
 
 // Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
@@ -1367,7 +1367,18 @@ export class EntityManager {
       for (let bz = minZ; bz <= maxZ; bz++) {
         for (let bx = minX; bx <= maxX; bx++) {
           const bid = this.world.getBlock(bx, by, bz);
-          if (isBlockSolid(bid) && !(isDoorBlock(bid) && this.world.isDoorOpenAt(bx, by, bz))) return true;
+          if (isBlockSolid(bid)) {
+            if (isDoorBlock(bid) && this.world.isDoorOpenAt(bx, by, bz)) continue;
+            if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(bx, by, bz)) continue;
+            return true;
+          }
+          // Authentic 1.5-block tall Fence & Closed Fence Gate barrier keeps animals safely penned!
+          if (by === minY) {
+            const below = this.world.getBlock(bx, by - 1, bz);
+            if (isFenceOrGate(below) && !(isFenceGateBlock(below) && this.world.isFenceGateOpenAt(bx, by - 1, bz))) {
+              if (y < by + 0.48) return true;
+            }
+          }
         }
       }
     }
