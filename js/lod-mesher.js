@@ -9,7 +9,7 @@
 // 255 (1.00) = Exposed Rock / Cliff / Stone Watchtower (horizontal sedimentary strata banding)
 
 // Self-contained kernel factory — stringified verbatim into inline Blob Web Workers AND used directly on main thread!
-export function createLodKernel(seed, worldType) {
+export function createLodKernel(seed, worldType, hooks = null) {
   const SEA_LEVEL = 64;
   const CHUNK_HEIGHT = 512;
   const CHUNK_SIZE = 16;
@@ -330,6 +330,413 @@ export function createLodKernel(seed, worldType) {
   // AO brightness table for 0..3 occluders (crisp Minecraft corner shadows!)
   const AO_MUL = [1.0, 0.89, 0.79, 0.71];
 
+  // ---------------------------------------------------------------------------------------------
+  // REAL-WORLD HOOKS (module-worker only): when a headless World is supplied, LOD tiles are built
+  // from real generated chunks (exact terrain, trees, castles, villages, roads) and real block colors.
+  // The inline-Blob fallback worker has no hooks and keeps the procedural approximation below.
+  // ---------------------------------------------------------------------------------------------
+  const H = hooks && hooks.world ? hooks : null;
+  const HW = H ? H.world : null;
+  const B = H ? H.blocks.BLOCK : null;
+  const PAL_TOP = H && H.palTop ? H.palTop : null;
+  const PAL_SIDE = H && H.palSide ? H.palSide : null;
+  const structuresOn = hooks ? hooks.generateStructures !== false : true;
+
+  // Per-block lookup tables
+  const SKIP_ID = new Uint8Array(256); // thin/decorative blocks ignored when finding a column's visible top
+  const CLASS_ID = new Uint8Array(256); // MAT_* flag for a block's top face
+  const NATURAL_ID = new Uint8Array(256); // natural terrain surface (eligible for stone-cliff side heuristic)
+  if (H) {
+    const bl = H.blocks;
+    const names = Object.keys(B);
+    for (let n = 0; n < names.length; n++) {
+      const name = names[n];
+      const id = B[name];
+      if (typeof id !== 'number' || id <= 0 || id > 255) continue;
+      let cls = MAT_TERRAIN;
+      if (name.indexOf('LEAVES') >= 0) cls = MAT_FOLIAGE;
+      else if (name === 'WATER') cls = MAT_WATER;
+      else if (name.indexOf('SNOW') >= 0 || name.indexOf('ICE') >= 0) cls = MAT_SNOW;
+      else if (/STONE|COBBLE|GRAVEL|DEEPSLATE|GRANITE|ANDESITE|DIORITE|BASALT|TUFF|BRICK|BEDROCK|OBSIDIAN|ORE/.test(name)) cls = MAT_ROCK;
+      CLASS_ID[id] = cls;
+      if (bl.isBlockCross(id) || name === 'TORCH' || name === 'FIRE' || name === 'LADDER' || name.indexOf('WHEAT') === 0 ||
+          bl.isFenceOrGate(id) || name.indexOf('DOOR') >= 0) {
+        SKIP_ID[id] = 1;
+      }
+      if (/^(GRASS|DIRT|SAND|RED_SAND|SNOW|STONE|GRAVEL|SAVANNA_GRASS|JUNGLE_GRASS|SWAMP_GRASS|MUD|PACKED_ICE|TERRACOTTA.*|SANDSTONE|DEEPSLATE|GRANITE|ANDESITE|DIORITE|TUFF|BASALT|COARSE_DIRT|PODZOL)$/.test(name)) {
+        NATURAL_ID[id] = 1;
+      }
+    }
+  }
+
+  function palTop(id, fallback) {
+    if (!PAL_TOP || !id) return fallback;
+    const v = PAL_TOP[id];
+    return v ? v : fallback;
+  }
+  function palSide(id, fallback) {
+    if (!PAL_SIDE || !id) return fallback;
+    const v = PAL_SIDE[id];
+    return v ? v : fallback;
+  }
+  function toneRGB(rgb, f) {
+    if (f === 1) return rgb;
+    return packRGB(((rgb >>> 16) & 255) * f, ((rgb >>> 8) & 255) * f, (rgb & 255) * f);
+  }
+
+  // Column summaries of real chunks: visible top Y + top block per column (768 bytes / chunk), LRU-capped.
+  const SUM_MAX = 4096;
+  const sumCache = new Map();
+  function sumKey(cx, cz) {
+    return (cx + 32768) * 65536 + (cz + 32768);
+  }
+  function summarize(data, maxY) {
+    const topY = new Int16Array(256);
+    const topId = new Uint8Array(256);
+    const yStart = Math.min(CHUNK_HEIGHT - 1, Math.max(1, maxY));
+    for (let c = 0; c < 256; c++) {
+      let y = yStart;
+      let id = 0;
+      for (; y > 0; y--) {
+        id = data[c + (y << 8)];
+        if (id !== 0 && SKIP_ID[id] === 0) break;
+      }
+      topY[c] = y;
+      topId[c] = id;
+    }
+    return { topY, topId };
+  }
+  function putSummary(cx, cz, topY, topId) {
+    const k = sumKey(cx, cz);
+    if (sumCache.has(k)) sumCache.delete(k);
+    sumCache.set(k, { topY, topId });
+    if (sumCache.size > SUM_MAX) {
+      const first = sumCache.keys().next().value;
+      sumCache.delete(first);
+    }
+  }
+  function rememberChunk(cx, cz, data, maxY) {
+    if (!H) return;
+    const s = summarize(data, maxY);
+    putSummary(cx, cz, s.topY, s.topId);
+  }
+  function getSummary(cx, cz, generate) {
+    const k = sumKey(cx, cz);
+    const s = sumCache.get(k);
+    if (s) {
+      // refresh LRU position
+      sumCache.delete(k);
+      sumCache.set(k, s);
+      return s;
+    }
+    if (!generate || !HW) return null;
+    const raw = HW._genChunkRaw(cx, cz);
+    const ns = summarize(raw.data, raw.maxY);
+    putSummary(cx, cz, ns.topY, ns.topId);
+    return ns;
+  }
+
+  function isStructureChunk(cx, cz) {
+    if (!HW || !structuresOn) return false;
+    return !!(HW.getMegaStructureForChunk(cx, cz) || HW.getVillageForChunk(cx, cz) || HW.getStructureTypeForChunk(cx, cz));
+  }
+
+  // Enumerate only the grid-candidate chunks that could hold a structure (megas 68-grid, villages 32-grid,
+  // landmarks 20-grid) instead of testing every chunk of a 1024-chunk tile.
+  function collectStructureChunks(cx0, cz0, cx1, cz1, out) {
+    if (!HW || !structuresOn || isFlat) return;
+    const seen = new Set();
+    const add = (cx, cz) => {
+      if (cx < cx0 || cx > cx1 || cz < cz0 || cz > cz1) return;
+      const k = sumKey(cx, cz);
+      if (seen.has(k)) return;
+      seen.add(k);
+      if (isStructureChunk(cx, cz)) out.push(cx, cz);
+    };
+    // Starter landmarks
+    for (let cz = -15; cz <= 8; cz++) {
+      for (let cx = -16; cx <= 20; cx++) {
+        if (cx < cx0 || cx > cx1 || cz < cz0 || cz > cz1) continue;
+        if ((cx >= -15 && cx <= -12 && cz >= -13 && cz <= -10) || (cx >= 16 && cx <= 19 && cz >= -14 && cz <= -11) ||
+            (cx >= 3 && cx <= 7 && cz >= 2 && cz <= 6)) add(cx, cz);
+      }
+    }
+    // Mega structures (4x4 chunks somewhere in each 68x68 cell)
+    const GRID = 68;
+    const HALF = 34;
+    const gx0 = Math.floor((cx0 + HALF) / GRID) - 1;
+    const gx1 = Math.floor((cx1 + HALF) / GRID) + 1;
+    const gz0 = Math.floor((cz0 + HALF) / GRID) - 1;
+    const gz1 = Math.floor((cz1 + HALF) / GRID) + 1;
+    for (let gz = gz0; gz <= gz1; gz++) {
+      for (let gx = gx0; gx <= gx1; gx++) {
+        if (gx === 0 && gz === 0) continue;
+        const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, HW.seed + 1913) * (GRID - 18));
+        const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, HW.seed + 1931) * (GRID - 18));
+        const ocx = gx * GRID - HALF + offX;
+        const ocz = gz * GRID - HALF + offZ;
+        if (ocx + 3 < cx0 || ocx > cx1 || ocz + 3 < cz0 || ocz > cz1) continue;
+        for (let dz = 0; dz < 4; dz++) for (let dx = 0; dx < 4; dx++) add(ocx + dx, ocz + dz);
+      }
+    }
+    // Villages (radius up to 2 around a 32-grid center)
+    const vgx0 = Math.floor((cx0 - 13) / 32);
+    const vgx1 = Math.floor((cx1 + 13) / 32);
+    const vgz0 = Math.floor((cz0 - 13) / 32);
+    const vgz1 = Math.floor((cz1 + 13) / 32);
+    for (let gz = vgz0; gz <= vgz1; gz++) {
+      for (let gx = vgx0; gx <= vgx1; gx++) {
+        const vcx = gx * 32 + 11;
+        const vcz = gz * 32 + 11;
+        if (vcx + 2 < cx0 || vcx - 2 > cx1 || vcz + 2 < cz0 || vcz - 2 > cz1) continue;
+        if (!HW.isVillageCenter(vcx, vcz)) continue;
+        for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) add(vcx + dx, vcz + dz);
+      }
+    }
+    // Landmarks: exactly one candidate chunk per 20x20 cell
+    const sgx0 = Math.floor(cx0 / 20);
+    const sgx1 = Math.floor(cx1 / 20);
+    const sgz0 = Math.floor(cz0 / 20);
+    const sgz1 = Math.floor(cz1 / 20);
+    for (let gz = sgz0; gz <= sgz1; gz++) {
+      for (let gx = sgx0; gx <= sgx1; gx++) {
+        const sx = gx * 20 + Math.floor(coordHash(gx * 43, gz * 67, HW.seed + 811) * 14) + 3;
+        const sz = gz * 20 + Math.floor(coordHash(gx * 71, gz * 29, HW.seed + 823) * 14) + 3;
+        add(sx, sz);
+      }
+    }
+  }
+
+  // Write a real column (top block of the highest of up to 4x4 sampled columns inside the cell) into the grid.
+  function applyRealCell(idx, s, lx0, lz0, span) {
+    let bestY = -1;
+    let bestId = 0;
+    const stride = span <= 4 ? 1 : (span >> 2);
+    for (let dz = 0; dz < span; dz += stride) {
+      const row = (lz0 + dz) << 4;
+      for (let dx = 0; dx < span; dx += stride) {
+        const c = row + lx0 + dx;
+        const y = s.topY[c];
+        if (y > bestY) {
+          bestY = y;
+          bestId = s.topId[c];
+        }
+      }
+    }
+    if (bestY < 0) return;
+    let cls = CLASS_ID[bestId];
+    let topRGB;
+    let sideRGB;
+    if (cls === MAT_WATER) {
+      const depth = SEA_LEVEL - colBaseH[idx];
+      const band = depth <= 2 ? 0 : (depth <= 5 ? 1 : (depth <= 9 ? 2 : (depth <= 14 ? 3 : 4)));
+      topRGB = packRGB(38 - band * 6, 142 - band * 17, 198 - band * 14);
+      sideRGB = packRGB((38 - band * 6) * 0.82, (142 - band * 17) * 0.84, (198 - band * 14) * 0.9);
+    } else {
+      topRGB = palTop(bestId, 0x7f7f7f);
+      sideRGB = palSide(bestId, topRGB);
+    }
+    colTopY[idx] = bestY;
+    colTopRGB[idx] = topRGB;
+    colSideRGB[idx] = sideRGB;
+    colMat[idx] = cls;
+    colSideMat[idx] = cls === MAT_WATER ? MAT_WATER : (cls === MAT_FOLIAGE ? MAT_FOLIAGE : (cls === MAT_ROCK ? MAT_ROCK : MAT_TERRAIN));
+    if (NATURAL_ID[bestId] || cls === MAT_WATER) {
+      colBaseH[idx] = bestY;
+      colVillage[idx] = 10; // real natural column (stone-cliff heuristic still allowed, see isRealNatural)
+    } else {
+      colVillage[idx] = 11; // real structure / tree column
+    }
+  }
+
+  function stampRealRegion(ox, oz, step, tier) {
+    if (!H) return;
+    const halfStep = step >> 1;
+    const span = Math.max(1, step);
+    const generateAll = tier === 0;
+    const cx0 = Math.floor((ox - step) / CHUNK_SIZE);
+    const cz0 = Math.floor((oz - step) / CHUNK_SIZE);
+    const cx1 = Math.floor((ox + CELLS * step + step) / CHUNK_SIZE);
+    const cz1 = Math.floor((oz + CELLS * step + step) / CHUNK_SIZE);
+
+    // Which chunks get real data: every chunk on tier 0, cached/visited chunks on tiers 1-2,
+    // plus every structure chunk (castles, pyramids, villages, landmarks) on tiers 0-3.
+    const realMark = new Map();
+    if (tier <= 2) {
+      for (let cz = cz0; cz <= cz1; cz++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const interior = cx * CHUNK_SIZE >= ox && (cx + 1) * CHUNK_SIZE <= ox + CELLS * step &&
+                           cz * CHUNK_SIZE >= oz && (cz + 1) * CHUNK_SIZE <= oz + CELLS * step;
+          const s = getSummary(cx, cz, generateAll && interior);
+          if (s) realMark.set(sumKey(cx, cz), s);
+        }
+      }
+    }
+    if (tier <= 3) {
+      const list = [];
+      collectStructureChunks(cx0, cz0, cx1, cz1, list);
+      for (let i = 0; i < list.length; i += 2) {
+        const k = sumKey(list[i], list[i + 1]);
+        if (!realMark.has(k)) {
+          const s = getSummary(list[i], list[i + 1], true);
+          if (s) realMark.set(k, s);
+        }
+      }
+    }
+    if (realMark.size === 0) return;
+
+    for (let pz = 0; pz < PAD; pz++) {
+      const wz0 = oz + (pz - 1) * step;
+      const wzc = wz0 + halfStep;
+      const czc = Math.floor(wzc / CHUNK_SIZE);
+      const row = pz * PAD;
+      for (let px = 0; px < PAD; px++) {
+        const wx0 = ox + (px - 1) * step;
+        const wxc = wx0 + halfStep;
+        const cxc = Math.floor(wxc / CHUNK_SIZE);
+        const s = realMark.get(sumKey(cxc, czc));
+        if (!s) continue;
+        // Cell footprint clipped to this chunk (cells never straddle chunks for step <= 16)
+        const lx0 = span >= CHUNK_SIZE ? 0 : (wx0 - cxc * CHUNK_SIZE);
+        const lz0 = span >= CHUNK_SIZE ? 0 : (wz0 - czc * CHUNK_SIZE);
+        applyRealCell(row + px, s, lx0 & 15, lz0 & 15, Math.min(span, CHUNK_SIZE));
+      }
+    }
+  }
+
+  // Real road network (same segments & elevation profiles the chunk generator stamps) for tiers 1-3.
+  function stampRoads(ox, oz, step, tier) {
+    if (!HW || !structuresOn || isFlat || tier < 1 || tier > 3) return;
+    const halfStep = step >> 1;
+    const minX = ox - step;
+    const minZ = oz - step;
+    const maxX = ox + (CELLS + 1) * step;
+    const maxZ = oz + (CELLS + 1) * step;
+    const rgx0 = Math.floor(Math.floor(minX / CHUNK_SIZE) / 32);
+    const rgx1 = Math.floor(Math.floor(maxX / CHUNK_SIZE) / 32);
+    const rgz0 = Math.floor(Math.floor(minZ / CHUNK_SIZE) / 32);
+    const rgz1 = Math.floor(Math.floor(maxZ / CHUNK_SIZE) / 32);
+    const segs = [];
+    const hubs = [];
+    const seenSeg = new Set();
+    for (let rgz = rgz0; rgz <= rgz1; rgz++) {
+      for (let rgx = rgx0; rgx <= rgx1; rgx++) {
+        const bundle = HW._getRoadSegmentsForChunk(rgx * 32, rgz * 32);
+        if (!bundle) continue;
+        const bs = Array.isArray(bundle) ? bundle : bundle.segs;
+        for (let i = 0; bs && i < bs.length; i++) {
+          const sg = bs[i];
+          if (seenSeg.has(sg)) continue;
+          seenSeg.add(sg);
+          if (sg.maxX < minX || sg.minX > maxX || sg.maxZ < minZ || sg.minZ > maxZ) continue;
+          segs.push(sg);
+        }
+        const bh = Array.isArray(bundle) ? null : bundle.hubs;
+        for (let i = 0; bh && i < bh.length; i++) {
+          const hb = bh[i];
+          if (seenSeg.has(hb)) continue;
+          seenSeg.add(hb);
+          if (hb.x < minX - 6 || hb.x > maxX + 6 || hb.z < minZ - 6 || hb.z > maxZ + 6) continue;
+          hubs.push(hb);
+        }
+      }
+    }
+    if (segs.length === 0 && hubs.length === 0) return;
+
+    const roadHalf = Math.max(2.1, step * 0.55);
+    const pathRGB = palTop(B.DIRT_PATH, packRGB(150, 122, 72));
+    const pathSide = palSide(B.DIRT_PATH, packRGB(122, 90, 58));
+    const sandRGB = palTop(B.SANDSTONE, packRGB(214, 196, 136));
+    const plankRGB = palTop(B.OAK_PLANKS, packRGB(162, 130, 78));
+    const brickRGB = palTop(B.STONE_BRICKS, packRGB(122, 122, 122));
+    const cobbleRGB = palTop(B.COBBLESTONE, packRGB(118, 118, 118));
+
+    for (let pz = 0; pz < PAD; pz++) {
+      const wz = oz + (pz - 1) * step + halfStep;
+      const row = pz * PAD;
+      for (let px = 0; px < PAD; px++) {
+        const idx = row + px;
+        if (colVillage[idx] >= 10) continue; // real chunk data already has the exact road
+        const wx = ox + (px - 1) * step + halfStep;
+        let minD = 1e9;
+        let bestSeg = null;
+        let bestT = 0;
+        for (let i = 0; i < segs.length; i++) {
+          const sg = segs[i];
+          if (wx < sg.minX || wx > sg.maxX || wz < sg.minZ || wz > sg.maxZ) continue;
+          const dx = sg.bx - sg.ax;
+          const dz = sg.bz - sg.az;
+          const inv = 1 / (dx * dx + dz * dz);
+          let t = ((wx - sg.ax) * dx + (wz - sg.az) * dz) * inv;
+          t = t < 0 ? 0 : (t > 1 ? 1 : t);
+          const nx = -dz / sg.len;
+          const nz = dx / sg.len;
+          const curve = Math.sin(t * Math.PI) * sg.bend;
+          const ppx = sg.ax + dx * t + nx * curve;
+          const ppz = sg.az + dz * t + nz * curve;
+          const ddx = wx - ppx;
+          const ddz = wz - ppz;
+          const d = Math.sqrt(ddx * ddx + ddz * ddz);
+          if (d < minD) {
+            minD = d;
+            bestSeg = sg;
+            bestT = t;
+          }
+        }
+        let hubHit = null;
+        for (let i = 0; i < hubs.length; i++) {
+          const hb = hubs[i];
+          if (Math.abs(wx - hb.x) <= 5 + halfStep && Math.abs(wz - hb.z) <= 5 + halfStep) {
+            hubHit = hb;
+            break;
+          }
+        }
+        if (minD > roadHalf && !hubHit) continue;
+
+        const h = colBaseH[idx];
+        let roadY;
+        if (hubHit) {
+          roadY = hubHit.y;
+        } else {
+          const prof = bestSeg.profileY;
+          const fIdx = bestT * (prof.length - 1);
+          const i0 = Math.floor(fIdx);
+          const i1 = Math.min(prof.length - 1, i0 + 1);
+          roadY = Math.round(prof[i0] + (prof[i1] - prof[i0]) * (fIdx - i0));
+          if (roadY < SEA_LEVEL + 1) roadY = SEA_LEVEL + 1;
+        }
+        const isWater = h <= SEA_LEVEL;
+        const isViaduct = !isWater && roadY >= h + 3;
+        if (!isWater && h - roadY > 8) continue; // tunnel through a mountain: surface unchanged
+        let rgb;
+        let sRgb;
+        let mat = MAT_TERRAIN;
+        if (hubHit) {
+          rgb = plankRGB;
+          sRgb = cobbleRGB;
+        } else if (isWater) {
+          rgb = plankRGB;
+          sRgb = plankRGB;
+        } else if (isViaduct) {
+          rgb = brickRGB;
+          sRgb = brickRGB;
+          mat = MAT_ROCK;
+        } else {
+          const desert = colBiome[idx] === 2 || colBiome[idx] === 8;
+          rgb = desert ? sandRGB : pathRGB;
+          sRgb = desert ? sandRGB : pathSide;
+          colBaseH[idx] = roadY;
+        }
+        colTopY[idx] = roadY;
+        colTopRGB[idx] = rgb;
+        colSideRGB[idx] = sRgb;
+        colMat[idx] = mat;
+        colSideMat[idx] = mat;
+        colVillage[idx] = 12; // road
+      }
+    }
+  }
+
   function buildRegion(rx, rz, tier) {
     // 7-Tier Ultra-Detail Quadtree steps (with CELLS=64):
     // T0=1m (64m/4ch FULL VOXEL!), T1=2m (128m/8ch), T2=4m (256m/16ch), T3=8m (512m/32ch),
@@ -363,7 +770,7 @@ export function createLodKernel(seed, worldType) {
     }
 
     // Pass 1B-Mega: Render Great Pyramids & Grand Citadels on the horizon (Tiers 0..3)!
-    if (!isFlat && tier <= 3) {
+    if (!H && structuresOn && !isFlat && tier <= 3) {
       const GRID = 68;
       const HALF_GRID = 34;
       const minCxM = Math.floor((ox - step) / CHUNK_SIZE) - 4;
@@ -458,7 +865,7 @@ export function createLodKernel(seed, worldType) {
     }
 
     // Pass 1B: Deterministic Distant Villages & Hilltop Watchtowers on Tier 0 & Tier 1!
-    if (!isFlat && tier <= 1) {
+    if (!H && structuresOn && !isFlat && tier <= 1) {
       const minCx = Math.floor((ox - step) / CHUNK_SIZE) - 1;
       const maxCx = Math.floor((ox + regionBlocks + step) / CHUNK_SIZE) + 1;
       const minCz = Math.floor((oz - step) / CHUNK_SIZE) - 1;
@@ -549,9 +956,17 @@ export function createLodKernel(seed, worldType) {
       }
     }
 
+    // Pass 1R: Real chunk data (exact terrain/trees/structures) + real road network (module-worker only)
+    if (H) {
+      stampRealRegion(ox, oz, step, tier);
+      stampRoads(ox, oz, step, tier);
+    }
+
     // Pass 1C: Slope-aware Material Classification, Stratified Rock, Organic Clustered Canopies & Mega-Landmarks
+    // Colors come from the real block textures (palette) when available so LODs match full-detail chunks.
     const slopeScale = step <= 1 ? 1.0 : (step === 2 ? 0.65 : (step === 4 ? 0.38 : (step === 8 ? 0.22 : (step === 16 ? 0.14 : 0.10))));
     const canopyDetail = tier <= 1 ? 2 : (tier === 2 ? 1 : 0); // 2=rounded multi-block domes, 1=soft rolling forest canopy, 0=velvety horizon carpet!
+    const P = PAL_TOP ? B : null; // block ids for palette lookups (null -> legacy hand-tuned colors)
 
     for (let pz = 0; pz < PAD; pz++) {
       const wz = oz + (pz - 1) * step + halfStep;
@@ -561,12 +976,14 @@ export function createLodKernel(seed, worldType) {
       const pzD = pz < PAD - 1 ? pz + 1 : PAD - 1;
 
       for (let px = 0; px < PAD; px++) {
+        const idx = row + px;
+        const vTag = colVillage[idx];
+        if (vTag >= 10) continue; // real column / road already fully classified
+
         const wx = ox + (px - 1) * step + halfStep;
         const cellX = Math.floor(wx / step);
-        const idx = row + px;
         const h = colBaseH[idx];
         const biome = colBiome[idx];
-        const vTag = colVillage[idx];
 
         const pxL = px > 0 ? px - 1 : 0;
         const pxR = px < PAD - 1 ? px + 1 : PAD - 1;
@@ -585,60 +1002,52 @@ export function createLodKernel(seed, worldType) {
         let sideRGB = 0x7a593b;
         let mat = MAT_TERRAIN;
         let sMat = MAT_TERRAIN;
+        let tB = 0; // top block id (palette)
+        let sB = 0; // side block id (palette)
+        let tone = 1.0;
 
-        // Landmark overrides (Great Pyramid, Grand Citadel, Villages & Watchtowers!)
+        // Landmark overrides (Great Pyramid, Grand Citadel, Villages & Watchtowers!) — procedural fallback only
         if (vTag !== 0) {
           if (vTag === 6) {
-            // Great Pyramid Shimmering Gold Capstone & Royal Corner Ribs!
             yTop = h + colStructH[idx];
             topRGB = packRGB(246, 206, 62);
             sideRGB = packRGB(218, 174, 42);
             mat = MAT_SNOW;
             sMat = MAT_ROCK;
           } else if (vTag === 7) {
-            // Great Pyramid Terracotta Royal Trim Band
             yTop = h + colStructH[idx];
             topRGB = packRGB(196, 102, 44);
             sideRGB = packRGB(170, 84, 36);
             mat = MAT_ROCK;
             sMat = MAT_ROCK;
           } else if (vTag === 5) {
-            // Great Pyramid Monumental Sandstone Step
             yTop = h + colStructH[idx];
             topRGB = packRGB(222, 204, 146);
             sideRGB = packRGB(202, 184, 128);
             mat = MAT_TERRAIN;
             sMat = MAT_ROCK;
           } else if (vTag === 8) {
-            // Grand Citadel Stone-Brick Walls & Watchtowers!
             yTop = h + colStructH[idx];
             topRGB = packRGB(132, 138, 146);
             sideRGB = packRGB(112, 118, 126);
             mat = MAT_ROCK;
             sMat = MAT_ROCK;
           } else if (vTag === 9) {
-            // Grand Citadel Brick Guild Roofs
             yTop = h + colStructH[idx];
             topRGB = packRGB(166, 78, 58);
             sideRGB = packRGB(176, 144, 100);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
           } else if (vTag === 4) {
-            // Stone-brick Watchtower Keep!
             yTop = h + 10;
             topRGB = packRGB(134, 138, 144);
             sideRGB = packRGB(116, 120, 126);
             mat = MAT_ROCK;
             sMat = MAT_ROCK;
           } else if (vTag === 3) {
-            // Village Belltower Spire!
             yTop = h + 12;
             topRGB = biome === 2 ? packRGB(218, 198, 138) : (biome === 3 ? packRGB(112, 82, 54) : packRGB(178, 88, 66));
             sideRGB = biome === 2 ? packRGB(204, 184, 126) : packRGB(152, 134, 108);
-            mat = MAT_TERRAIN;
             sMat = MAT_ROCK;
           } else if (vTag === 2) {
-            // Village House Pitched Roof!
             yTop = h + 5;
             if (biome === 2) {
               topRGB = packRGB(218, 198, 140);
@@ -647,27 +1056,23 @@ export function createLodKernel(seed, worldType) {
               topRGB = packRGB(108, 78, 52);
               sideRGB = packRGB(128, 98, 68);
             } else {
-              topRGB = packRGB(168, 82, 62); // Warm terracotta brick roof!
-              sideRGB = packRGB(178, 146, 102); // Oak plank walls!
+              topRGB = packRGB(168, 82, 62);
+              sideRGB = packRGB(178, 146, 102);
             }
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
           } else {
-            // Village Avenue / Courtyard
             topRGB = biome === 2 ? packRGB(214, 196, 136) : packRGB(154, 152, 144);
             sideRGB = packRGB(128, 124, 118);
-            mat = MAT_TERRAIN;
             sMat = MAT_ROCK;
           }
         } else if (!isFlat && h < SEA_LEVEL) {
           // Ocean, Lake, or River Water!
           yTop = SEA_LEVEL;
           if (biome === 3) {
-            // Frozen Snowy Taiga Ice
             topRGB = packRGB(176, 220, 250);
             sideRGB = packRGB(142, 188, 224);
             mat = MAT_SNOW;
             sMat = MAT_SNOW;
+            if (P) { tB = P.ICE; sB = P.ICE; }
           } else {
             // Quantized 5-band water depth -> smooth tropical shallows to deep sapphire + ultra-greedy merging!
             const depth = SEA_LEVEL - h;
@@ -685,13 +1090,15 @@ export function createLodKernel(seed, worldType) {
           if (h <= SEA_LEVEL + 6) {
             topRGB = packRGB(204, 102, 52);
             sideRGB = packRGB(178, 86, 42);
+            if (P) { tB = P.RED_SAND; sB = P.TERRACOTTA_ORANGE; }
           } else {
             const band = h & 7;
-            if (band === 1 || band === 6) topRGB = packRGB(190, 96, 44);
-            else if (band === 3 || band === 7) topRGB = packRGB(156, 62, 48);
-            else if (band === 4) topRGB = packRGB(202, 146, 44);
-            else topRGB = packRGB(160, 102, 74);
+            if (band === 1 || band === 6) { topRGB = packRGB(190, 96, 44); if (P) tB = P.TERRACOTTA_ORANGE; }
+            else if (band === 3 || band === 7) { topRGB = packRGB(156, 62, 48); if (P) tB = P.TERRACOTTA_RED; }
+            else if (band === 4) { topRGB = packRGB(202, 146, 44); if (P) tB = P.TERRACOTTA_YELLOW; }
+            else { topRGB = packRGB(160, 102, 74); if (P) tB = P.TERRACOTTA; }
             sideRGB = packRGB(152, 82, 54);
+            if (P) sB = P.TERRACOTTA;
           }
           mat = MAT_ROCK;
           sMat = MAT_ROCK;
@@ -705,29 +1112,27 @@ export function createLodKernel(seed, worldType) {
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
           } else {
-            const dune = (h & 3) === 0 ? 1.0 : 0.97;
-            topRGB = packRGB(220 * dune, 202 * dune, 142 * dune);
+            tone = (h & 3) === 0 ? 1.0 : 0.97;
+            topRGB = packRGB(220 * tone, 202 * tone, 142 * tone);
             sideRGB = packRGB(198, 180, 124);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.SAND; sB = P.SANDSTONE; }
           }
         } else if (!isFlat && h <= SEA_LEVEL + 1) {
           // Shoreline: mud in swamp, gravel in mountains, warm sand beach elsewhere
           if (biome === 9) {
             topRGB = packRGB(68, 64, 68);
             sideRGB = packRGB(54, 50, 54);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.MUD; sB = P.MUD; }
           } else if (biome === 1 && normSlope >= 1.2) {
             topRGB = packRGB(144, 146, 152);
             sideRGB = packRGB(122, 124, 130);
             mat = MAT_ROCK;
             sMat = MAT_ROCK;
+            if (P) { tB = P.GRAVEL; sB = P.GRAVEL; }
           } else {
             topRGB = packRGB(216, 200, 144);
             sideRGB = packRGB(192, 176, 126);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.SAND; sB = P.SAND; }
           }
         } else if (!isFlat && h >= SNOW_LINE + 26 && normSlope >= 1.5) {
           // Glacial Packed-Ice Alpine Ridges!
@@ -735,13 +1140,15 @@ export function createLodKernel(seed, worldType) {
           sideRGB = packRGB(124, 174, 216);
           mat = MAT_SNOW;
           sMat = MAT_SNOW;
+          if (P) { tB = P.PACKED_ICE; sB = P.PACKED_ICE; }
         } else if (!isFlat && ((normSlope >= 2.2 && h > SEA_LEVEL + 6) || (h >= ROCK_LINE && h < SNOW_LINE && normSlope >= 1.35))) {
           // Steep Exposed Granite & Gravel Alpine Cliffs
-          const rockVar = h >= ROCK_LINE + 8 ? 1.05 : 0.98;
-          topRGB = packRGB(132 * rockVar, 136 * rockVar, 144 * rockVar);
-          sideRGB = packRGB(116 * rockVar, 120 * rockVar, 128 * rockVar);
+          tone = h >= ROCK_LINE + 8 ? 1.05 : 0.98;
+          topRGB = packRGB(132 * tone, 136 * tone, 144 * tone);
+          sideRGB = packRGB(116 * tone, 120 * tone, 128 * tone);
           mat = MAT_ROCK;
           sMat = MAT_ROCK;
+          if (P) { tB = P.STONE; sB = P.STONE; }
         } else if (h >= SNOW_LINE || (biome === 3 && h >= SEA_LEVEL + 2)) {
           // Alpine Snow Peaks & Organic Clustered Snowy Taiga Conifers!
           if (biome === 3 && h < SNOW_LINE - 2 && normSlope < 1.9 && canopyDetail > 0) {
@@ -754,11 +1161,13 @@ export function createLodKernel(seed, worldType) {
               sideRGB = packRGB(32, 68, 44);
               mat = snowTip ? MAT_SNOW : MAT_FOLIAGE;
               sMat = MAT_FOLIAGE;
+              if (P) { tB = snowTip ? P.SNOW : P.SPRUCE_LEAVES; sB = P.SPRUCE_LEAVES; }
             } else {
               topRGB = packRGB(238, 244, 252);
               sideRGB = packRGB(132, 138, 146);
               mat = MAT_SNOW;
               sMat = MAT_ROCK;
+              if (P) { tB = P.SNOW; sB = P.STONE; }
             }
           } else if (biome === 3 && h < SNOW_LINE - 4) {
             const cFar = noise2D(permM, wx * 0.045, wz * 0.045);
@@ -766,17 +1175,20 @@ export function createLodKernel(seed, worldType) {
             sideRGB = packRGB(96, 114, 118);
             mat = cFar > 0.05 ? MAT_FOLIAGE : MAT_SNOW;
             sMat = MAT_ROCK;
+            if (P) { tB = cFar > 0.05 ? P.SPRUCE_LEAVES : P.SNOW; sB = P.STONE; }
           } else {
             topRGB = packRGB(240, 246, 255);
             sideRGB = packRGB(134, 139, 148);
             mat = MAT_SNOW;
             sMat = MAT_ROCK;
+            if (P) { tB = P.SNOW; sB = P.STONE; }
           }
         } else if (h >= ROCK_LINE) {
           topRGB = packRGB(136, 140, 148);
           sideRGB = packRGB(118, 122, 130);
           mat = MAT_ROCK;
           sMat = MAT_ROCK;
+          if (P) { tB = P.STONE; sB = P.STONE; }
         } else if (biome === 6) {
           // Warm Golden-Olive Savanna with organic flat-topped Acacia clusters!
           const cVal = canopyDetail > 0 ? (noise2D(permM, wx * 0.125, wz * 0.125) + (canopyDetail === 2 ? noise2D(permB, wx * 0.28, wz * 0.28) * 0.42 : 0)) : -1;
@@ -786,12 +1198,12 @@ export function createLodKernel(seed, worldType) {
             sideRGB = packRGB(96, 114, 36);
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
+            if (P) { tB = P.ACACIA_LEAVES; sB = P.ACACIA_LEAVES; }
           } else {
-            const tone = noise2D(permB, wx * 0.022, wz * 0.022) > 0.08 ? 1.03 : 0.97;
+            tone = noise2D(permB, wx * 0.022, wz * 0.022) > 0.08 ? 1.03 : 0.97;
             topRGB = packRGB(154 * tone, 158 * tone, 66 * tone);
             sideRGB = packRGB(126, 94, 58);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.SAVANNA_GRASS; sB = P.SAVANNA_GRASS; }
           }
         } else if (biome === 7) {
           // Deep Lush Emerald Jungle with multi-layered rolling rainforest canopy!
@@ -799,15 +1211,17 @@ export function createLodKernel(seed, worldType) {
           if (canopyDetail > 0 && normSlope < 2.2 && cVal > -0.02) {
             const crownH = canopyDetail === 2 ? (4 + Math.min(5, ((cVal + 0.02) * 14) | 0)) : (2 + Math.min(3, ((cVal + 0.02) * 7) | 0));
             yTop = h + crownH;
+            tone = cVal > 0.24 ? 1.08 : 1.0;
             topRGB = cVal > 0.24 ? packRGB(52, 162, 48) : packRGB(38, 138, 40);
             sideRGB = packRGB(28, 108, 30);
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
+            if (P) { tB = P.JUNGLE_LEAVES; sB = P.JUNGLE_LEAVES; }
           } else {
             topRGB = packRGB(46, 150, 48);
             sideRGB = packRGB(96, 76, 48);
             mat = canopyDetail === 0 ? MAT_FOLIAGE : MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = canopyDetail === 0 ? P.JUNGLE_LEAVES : P.JUNGLE_GRASS; sB = P.JUNGLE_GRASS; }
           }
         } else if (biome === 9) {
           // Murky Wetland Swamp with organic drooping mossy canopies!
@@ -818,11 +1232,11 @@ export function createLodKernel(seed, worldType) {
             sideRGB = packRGB(48, 72, 34);
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
+            if (P) { tB = P.OAK_LEAVES; sB = P.OAK_LEAVES; tone = 0.86; }
           } else {
             topRGB = packRGB(84, 108, 62);
             sideRGB = packRGB(66, 62, 64);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.SWAMP_GRASS; sB = P.SWAMP_GRASS; }
           }
         } else if (biome === 10) {
           // Cherry Grove with lush rounded pink sakura blossom canopies!
@@ -830,31 +1244,33 @@ export function createLodKernel(seed, worldType) {
           if (canopyDetail > 0 && normSlope < 2.0 && cVal > 0.11) {
             const crownH = canopyDetail === 2 ? (3 + Math.min(3, ((cVal - 0.11) * 12) | 0)) : 2;
             yTop = h + crownH;
+            tone = cVal > 0.28 ? 1.05 : 1.0;
             topRGB = cVal > 0.28 ? packRGB(252, 184, 212) : packRGB(238, 154, 188);
             sideRGB = packRGB(214, 122, 160);
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
+            if (P) { tB = P.CHERRY_LEAVES; sB = P.CHERRY_LEAVES; }
           } else if (canopyDetail === 0) {
             const blossom = noise2D(permM, wx * 0.04, wz * 0.04) > 0.04;
             topRGB = blossom ? packRGB(236, 158, 190) : packRGB(112, 174, 74);
             sideRGB = packRGB(122, 92, 62);
             mat = blossom ? MAT_FOLIAGE : MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = blossom ? P.CHERRY_LEAVES : P.GRASS; sB = P.GRASS; }
           } else {
             topRGB = packRGB(108, 174, 72);
             sideRGB = packRGB(122, 92, 62);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.GRASS; sB = P.GRASS; }
           }
         } else if (biome === 4) {
           // Lush Oak Forest with organic rounded tree crowns & subtle birch clusters!
           if (canopyDetail === 0) {
             const cFar = noise2D(permM, wx * 0.04, wz * 0.04);
             if (tier === 3 && cFar > 0.06 && normSlope < 1.8) yTop = h + 1;
+            tone = cFar > 0.10 ? 0.92 : 1.0;
             topRGB = cFar > 0.10 ? packRGB(52, 124, 40) : packRGB(68, 138, 48);
             sideRGB = packRGB(76, 94, 52);
             mat = MAT_FOLIAGE;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.OAK_LEAVES; sB = P.GRASS; }
           } else {
             const cVal = noise2D(permM, wx * 0.14, wz * 0.14) + (canopyDetail === 2 ? noise2D(permB, wx * 0.29, wz * 0.29) * 0.45 : 0);
             if (normSlope < 2.0 && cVal > 0.06) {
@@ -864,17 +1280,19 @@ export function createLodKernel(seed, worldType) {
               if (isBirch) {
                 topRGB = packRGB(86, 152, 58);
                 sideRGB = packRGB(68, 124, 46);
+                if (P) { tB = P.BIRCH_LEAVES; sB = P.BIRCH_LEAVES; }
               } else {
+                tone = cVal > 0.26 ? 0.92 : 1.0;
                 topRGB = cVal > 0.26 ? packRGB(46, 118, 36) : packRGB(58, 134, 44);
                 sideRGB = packRGB(40, 98, 32);
+                if (P) { tB = P.OAK_LEAVES; sB = P.OAK_LEAVES; }
               }
               mat = MAT_FOLIAGE;
               sMat = MAT_FOLIAGE;
             } else {
               topRGB = packRGB(84, 148, 56);
               sideRGB = packRGB(118, 86, 58);
-              mat = MAT_TERRAIN;
-              sMat = MAT_TERRAIN;
+              if (P) { tB = P.GRASS; sB = P.GRASS; }
             }
           }
         } else if (biome === 5) {
@@ -885,21 +1303,22 @@ export function createLodKernel(seed, worldType) {
             topRGB = cFar > 0.08 ? packRGB(88, 154, 60) : packRGB(98, 160, 66);
             sideRGB = packRGB(96, 108, 60);
             mat = MAT_FOLIAGE;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.BIRCH_LEAVES; sB = P.GRASS; tone = cFar > 0.08 ? 0.95 : 1.0; }
           } else {
             const cVal = noise2D(permM, wx * 0.14, wz * 0.14) + (canopyDetail === 2 ? noise2D(permB, wx * 0.29, wz * 0.29) * 0.45 : 0);
             if (normSlope < 2.0 && cVal > 0.10) {
               const crownH = canopyDetail === 2 ? (3 + Math.min(3, ((cVal - 0.10) * 11) | 0)) : 2;
               yTop = h + crownH;
+              tone = cVal > 0.28 ? 1.05 : 1.0;
               topRGB = cVal > 0.28 ? packRGB(96, 162, 64) : packRGB(84, 148, 56);
               sideRGB = packRGB(70, 124, 46);
               mat = MAT_FOLIAGE;
               sMat = MAT_FOLIAGE;
+              if (P) { tB = P.BIRCH_LEAVES; sB = P.BIRCH_LEAVES; }
             } else {
               topRGB = packRGB(98, 158, 66);
               sideRGB = packRGB(122, 90, 60);
-              mat = MAT_TERRAIN;
-              sMat = MAT_TERRAIN;
+              if (P) { tB = P.GRASS; sB = P.GRASS; }
             }
           }
         } else {
@@ -911,14 +1330,20 @@ export function createLodKernel(seed, worldType) {
             sideRGB = packRGB(44, 102, 34);
             mat = MAT_FOLIAGE;
             sMat = MAT_FOLIAGE;
+            if (P) { tB = P.OAK_LEAVES; sB = P.OAK_LEAVES; }
           } else {
             // Subtle 3-band sunlit meadow grass warmth (preserves greedy meshing!)
             const mN = noise2D(permB, wx * 0.018, wz * 0.018);
+            tone = mN > 0.12 ? 1.04 : (mN < -0.12 ? 0.95 : 1.0);
             topRGB = mN > 0.12 ? packRGB(108, 172, 64) : (mN < -0.12 ? packRGB(94, 156, 58) : packRGB(102, 166, 62));
             sideRGB = packRGB(122, 90, 58);
-            mat = MAT_TERRAIN;
-            sMat = MAT_TERRAIN;
+            if (P) { tB = P.GRASS; sB = P.GRASS; }
           }
+        }
+
+        if (P) {
+          if (tB) topRGB = toneRGB(palTop(tB, topRGB), tier >= 2 ? 1 : tone);
+          if (sB) sideRGB = palSide(sB, sideRGB);
         }
 
         colTopY[idx] = yTop;
@@ -930,7 +1355,7 @@ export function createLodKernel(seed, worldType) {
     }
 
     // Pass 1D: Precompute per-cell 4-corner Voxel Ambient Occlusion (Tiers 0-2 only; skipping sub-pixel AO on T3-T5 triples greedy merging!)
-    if (tier >= 3) {
+    if (tier >= 2) {
       topAO.fill(0);
     } else {
       for (let gz = 0; gz < CELLS; gz++) {
@@ -1118,7 +1543,7 @@ export function createLodKernel(seed, worldType) {
         if (yTop <= yNeigh) { gz++; continue; }
 
         const drop = yTop - yNeigh;
-        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && colVillage[ci] === 0 && colBiome[ci] !== 2;
+        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && (colVillage[ci] === 0 || colVillage[ci] === 10) && colBiome[ci] !== 2;
         const sRgb = isStoneCliff ? STONE_RGB : colSideRGB[ci];
         const sMat = isStoneCliff ? MAT_ROCK : colSideMat[ci];
 
@@ -1132,7 +1557,7 @@ export function createLodKernel(seed, worldType) {
           }
           if (nyTop !== yTop || nyNeigh !== yNeigh) break;
           const nDrop = nyTop - nyNeigh;
-          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && colVillage[nci] === 0 && colBiome[nci] !== 2;
+          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && (colVillage[nci] === 0 || colVillage[nci] === 10) && colBiome[nci] !== 2;
           const nRgb = nStone ? STONE_RGB : colSideRGB[nci];
           const nMat = nStone ? MAT_ROCK : colSideMat[nci];
           if (nRgb !== sRgb || nMat !== sMat) break;
@@ -1169,7 +1594,7 @@ export function createLodKernel(seed, worldType) {
         if (yTop <= yNeigh) { gz++; continue; }
 
         const drop = yTop - yNeigh;
-        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && colVillage[ci] === 0 && colBiome[ci] !== 2;
+        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && (colVillage[ci] === 0 || colVillage[ci] === 10) && colBiome[ci] !== 2;
         const sRgb = isStoneCliff ? STONE_RGB : colSideRGB[ci];
         const sMat = isStoneCliff ? MAT_ROCK : colSideMat[ci];
 
@@ -1183,7 +1608,7 @@ export function createLodKernel(seed, worldType) {
           }
           if (nyTop !== yTop || nyNeigh !== yNeigh) break;
           const nDrop = nyTop - nyNeigh;
-          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && colVillage[nci] === 0 && colBiome[nci] !== 2;
+          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && (colVillage[nci] === 0 || colVillage[nci] === 10) && colBiome[nci] !== 2;
           const nRgb = nStone ? STONE_RGB : colSideRGB[nci];
           const nMat = nStone ? MAT_ROCK : colSideMat[nci];
           if (nRgb !== sRgb || nMat !== sMat) break;
@@ -1229,7 +1654,7 @@ export function createLodKernel(seed, worldType) {
         if (yTop <= yNeigh) { gx++; continue; }
 
         const drop = yTop - yNeigh;
-        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && colVillage[ci] === 0 && colBiome[ci] !== 2;
+        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && (colVillage[ci] === 0 || colVillage[ci] === 10) && colBiome[ci] !== 2;
         const sRgb = isStoneCliff ? STONE_RGB : colSideRGB[ci];
         const sMat = isStoneCliff ? MAT_ROCK : colSideMat[ci];
 
@@ -1243,7 +1668,7 @@ export function createLodKernel(seed, worldType) {
           }
           if (nyTop !== yTop || nyNeigh !== yNeigh) break;
           const nDrop = nyTop - nyNeigh;
-          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && colVillage[nci] === 0 && colBiome[nci] !== 2;
+          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && (colVillage[nci] === 0 || colVillage[nci] === 10) && colBiome[nci] !== 2;
           const nRgb = nStone ? STONE_RGB : colSideRGB[nci];
           const nMat = nStone ? MAT_ROCK : colSideMat[nci];
           if (nRgb !== sRgb || nMat !== sMat) break;
@@ -1279,7 +1704,7 @@ export function createLodKernel(seed, worldType) {
         if (yTop <= yNeigh) { gx++; continue; }
 
         const drop = yTop - yNeigh;
-        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && colVillage[ci] === 0 && colBiome[ci] !== 2;
+        const isStoneCliff = drop >= 4 && colBaseH[ci] > SEA_LEVEL + 3 && yTop === colBaseH[ci] && (colVillage[ci] === 0 || colVillage[ci] === 10) && colBiome[ci] !== 2;
         const sRgb = isStoneCliff ? STONE_RGB : colSideRGB[ci];
         const sMat = isStoneCliff ? MAT_ROCK : colSideMat[ci];
 
@@ -1293,7 +1718,7 @@ export function createLodKernel(seed, worldType) {
           }
           if (nyTop !== yTop || nyNeigh !== yNeigh) break;
           const nDrop = nyTop - nyNeigh;
-          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && colVillage[nci] === 0 && colBiome[nci] !== 2;
+          const nStone = nDrop >= 4 && colBaseH[nci] > SEA_LEVEL + 3 && nyTop === colBaseH[nci] && (colVillage[nci] === 0 || colVillage[nci] === 10) && colBiome[nci] !== 2;
           const nRgb = nStone ? STONE_RGB : colSideRGB[nci];
           const nMat = nStone ? MAT_ROCK : colSideMat[nci];
           if (nRgb !== sRgb || nMat !== sMat) break;
@@ -1330,14 +1755,15 @@ export function createLodKernel(seed, worldType) {
     return { pos, norm, col, mat, idx, vCount, iCount };
   }
 
-  return { buildRegion };
+  return { buildRegion, rememberChunk, putSummary };
 }
 
 // Multi-threaded inline-Blob Web Worker Pool for zero-stutter off-thread LOD generation!
 export class LodWorkerPool {
-  constructor(seed, worldType, maxWorkers = 3) {
+  constructor(seed, worldType, maxWorkers = 3, generateStructures = true) {
     this.seed = seed;
     this.worldType = worldType;
+    this.generateStructures = generateStructures !== false;
     this.workers = [];
     this.idleWorkers = [];
     this.pending = []; // queued jobs when all workers busy
@@ -1353,7 +1779,7 @@ export class LodWorkerPool {
 
   _initWorkers(maxWorkers) {
     if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
-      this._fallbackKernel = createLodKernel(this.seed, this.worldType);
+      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures });
       return;
     }
 
@@ -1364,7 +1790,7 @@ export class LodWorkerPool {
         self.onmessage = function(e) {
           const msg = e.data;
           if (msg.type === 'init') {
-            kernel = createLodKernel(msg.seed, msg.worldType);
+            kernel = createLodKernel(msg.seed, msg.worldType, { generateStructures: msg.generateStructures !== false });
             return;
           }
           if (msg.type === 'build' && kernel) {
@@ -1394,7 +1820,7 @@ export class LodWorkerPool {
 
       for (let i = 0; i < count; i++) {
         const w = new Worker(this._blobUrl);
-        w.postMessage({ type: 'init', seed: this.seed, worldType: this.worldType });
+        w.postMessage({ type: 'init', seed: this.seed, worldType: this.worldType, generateStructures: this.generateStructures });
         w.onmessage = (e) => {
           if (this.disposed) return;
           const data = e.data;
@@ -1417,7 +1843,7 @@ export class LodWorkerPool {
       }
       this.useWorkers = true;
     } catch {
-      this._fallbackKernel = createLodKernel(this.seed, this.worldType);
+      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures });
       this.useWorkers = false;
     }
   }
@@ -1430,7 +1856,7 @@ export class LodWorkerPool {
       this._pump();
     } else {
       // Synchronous fallback (still runs the exact same fast greedy mesher!)
-      if (!this._fallbackKernel) this._fallbackKernel = createLodKernel(this.seed, this.worldType);
+      if (!this._fallbackKernel) this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures });
       const res = this._fallbackKernel.buildRegion(job.rx, job.rz, job.tier);
       this.readyResults.push({
         key: job.key,

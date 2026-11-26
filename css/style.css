@@ -1343,6 +1343,11 @@ body.large-ui .hud-px-icon {
   backdrop-filter: blur(4px);
 }
 
+/* Spawn area is streaming in behind the death screen: keep the world fully hidden */
+.death-overlay.death-far {
+  background: linear-gradient(180deg, rgba(96, 10, 10, 0.98), rgba(40, 4, 6, 0.99));
+}
+
 .death-box {
   text-align: center;
   background: rgba(20, 14, 18, 0.9);

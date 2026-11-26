@@ -1,8 +1,11 @@
-import * as THREE from 'three';
-import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom, isFenceBlock, isFenceGateBlock, isFenceOrGate, isStairBlock, isNaturalStoneBlock, isWheatBlock, isFarmlandBlock } from './blocks.js';
+// Full URL (identical to the index.html import map target) so this module also loads inside module Web Workers,
+// which don't support import maps. Same URL => same module instance on the main thread.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js';
+import { BLOCK, BLOCK_TO_KEY, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, isBlockSolid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isDoorBottom, isFenceBlock, isFenceGateBlock, isFenceOrGate, isStairBlock, isNaturalStoneBlock, isWheatBlock, isFarmlandBlock } from './blocks.js';
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { LodWorkerPool } from './lod-mesher.js';
+import { WorldWorkerPool } from './world-pool.js';
 import { VoxelGIVolume } from './voxel-gi.js';
 
 export const CHUNK_SIZE = 16;
@@ -10,6 +13,16 @@ export const CHUNK_HEIGHT = 512;
 export const SEA_LEVEL = 64;
 
 // Face definitions: dir, corners (CCW when looking at face from outside), shade
+// LOD palette: texture averages (linear light) re-encoded with this gamma/gain into LOD vertex colors.
+const LOD_PALETTE_GAIN = 1.0;
+const LOD_PALETTE_GAMMA = 1.0;
+// Brightness multiplier the LOD shader applies to palette-colored (non-water) LOD surfaces.
+const LOD_PALETTE_LIGHT_GAIN = 1.65;
+// Chunks at least this many chunks away (Chebyshev) are merged into 4x4-chunk region batch meshes.
+const BATCH_MIN_DIST = 5;
+// Chunks at least this many chunks away use the lighter far mesh (no pitch-dark cave faces / cross plants).
+const FAR_MESH_DIST = 6;
+
 const FACES = [
   { // +Y Top
     dir: [0, 1, 0],
@@ -296,6 +309,37 @@ class MeshBucket {
     this.iCount = ii + 6;
   }
 
+  // Exact-size copies of the filled buffers (transferable from a worker; reused scratch stays untouched).
+  toArrays() {
+    if (this.vCount === 0) return null;
+    const n = this.vCount;
+    return {
+      vCount: n,
+      pos: this.pos.slice(0, n * 3),
+      norm: this.norm.slice(0, n * 3),
+      uv: this.uv.slice(0, n * 2),
+      col: this.col.slice(0, n * 3),
+      tile: this.tiled ? this.tile.slice(0, n * 4) : null,
+      blk: this.withGI ? this.blk.slice(0, n * 3) : null,
+      bnc: this.withGI ? this.bnc.slice(0, n * 3) : null,
+      idx: n < 65536 ? new Uint16Array(this.idx.subarray(0, this.iCount)) : this.idx.slice(0, this.iCount)
+    };
+  }
+
+  static geometryFromArrays(a) {
+    if (!a || !a.vCount) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(a.pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(a.norm, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(a.uv, 2));
+    geo.setAttribute('color', new THREE.BufferAttribute(a.col, 3));
+    if (a.tile) geo.setAttribute('aTile', new THREE.BufferAttribute(a.tile, 4));
+    if (a.blk) geo.setAttribute('aBlockLight', new THREE.BufferAttribute(a.blk, 3));
+    if (a.bnc) geo.setAttribute('aBounceLight', new THREE.BufferAttribute(a.bnc, 3));
+    geo.setIndex(new THREE.BufferAttribute(a.idx, 1));
+    return geo;
+  }
+
   toGeometry() {
     if (this.vCount === 0) return null;
     const geo = new THREE.BufferGeometry();
@@ -483,7 +527,9 @@ export class World {
       uLodInnerCenter: { value: new THREE.Vector2(0, 0) },
       uLodInnerRadiusSq: { value: 0.0 },
       uLodBlendInner: { value: 0.0 },
-      uLodBlendOuter: { value: 14.0 }
+      uLodBlendOuter: { value: 14.0 },
+      // LOD brightness match vs full-detail chunks (1.0 for legacy hand-tuned colors, >1 for linear texture palette)
+      uLodGain: { value: 1.0 }
     };
 
     // Shared Alpha-Tested Depth Material so tree canopies, leaves, fences, doors & glass frames cast authentic shadows!
@@ -863,7 +909,7 @@ export class World {
         polygonOffsetFactor: withInnerCutout ? 2 : 0,
         polygonOffsetUnits: withInnerCutout ? 2 : 0
       });
-      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v29' : 'lod_outer_v29');
+      mat.customProgramCacheKey = () => (withInnerCutout ? 'lod_inner_v30' : 'lod_outer_v30');
       mat.onBeforeCompile = (shader) => {
         const uniforms = {
           uTime: this.shaderUniforms.uTime,
@@ -879,7 +925,8 @@ export class World {
           uSunsetFactor: this.shaderUniforms.uSunsetFactor,
           uRainFactor: this.shaderUniforms.uRainFactor,
           uFogNear: this.shaderUniforms.uFogNear,
-          uFogFar: this.shaderUniforms.uFogFar
+          uFogFar: this.shaderUniforms.uFogFar,
+          uLodGain: this.shaderUniforms.uLodGain
         };
         if (withInnerCutout) {
           uniforms.uLodInnerCenter = this.shaderUniforms.uLodInnerCenter;
@@ -915,6 +962,7 @@ export class World {
           uniform float uRainFactor;
           uniform float uFogNear;
           uniform float uFogFar;
+          uniform float uLodGain;
           ${withInnerCutout ? 'uniform vec2 uLodInnerCenter;\nuniform float uLodBlendInner;\nuniform float uLodBlendOuter;' : ''}
           varying vec3 vWorldPos;
           varying vec3 vWorldNorm;
@@ -930,6 +978,7 @@ export class World {
              float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
              if (fadeT < ign) discard;
            }` : ''}
+           if (!(vMat > 0.15 && vMat < 0.37)) gl_FragColor.rgb *= uLodGain;
 
            vec3 viewVec = vWorldPos - cameraPosition;
            float dist = length(viewVec);
@@ -1829,12 +1878,28 @@ export class World {
     this.scene.add(this.lodGroup);
     this.lodRegions = new Map(); // key -> { rx, rz, tier, mesh, retiring }
     this.maxDetailRadius = options.maxDetailRadius || 10;
+    this._lowPower = !!options.lowPower;
     this._lodQueue = [];
     this._lodActiveKeys = new Set();
     this._lodInnerKeys = new Set(); // innermost tiles needing circular cutout `lodMat` (rest use HSR `lodMatOuter`!)
     this._lodRetiringKeys = new Set();
     this._lodPool = null;
     this._lodMaxWorkers = this.maxDetailRadius <= 6 ? 3 : 4;
+    this._lodRebuildKeys = new Set();
+    // Off-main-thread world workers (generation, meshing, real-data LODs)
+    this._headless = !!options.headless;
+    this._useWorldWorkers = !this._headless && options.useWorkers !== false;
+    this._wpool = null;
+    this._wpoolFailed = false;
+    const hwc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 4;
+    this._workerCount = Math.max(2, Math.min(options.lowPower ? 3 : 4, hwc - 1));
+    this._meshInFlight = new Map(); // chunkKey -> mesh job seq
+    // Far-chunk region batching (draw-call reduction)
+    this._batches = new Map();
+    this._batchDirty = new Set();
+    this._batchingEnabled = !this._headless && options.batching !== false;
+    this._visDirty = true;
+    this._readyChunks = 0;
     this._lastLodRx = 1e9;
     this._lastLodRz = 1e9;
     this._lastLodRD = -1;
@@ -1851,6 +1916,10 @@ export class World {
     this._specialTable = new Uint8Array(256); // 1 only for blocks needing PASS 1 (beds, torches, lights, transparent, cross, liquids)
     this._litTable = new Uint8Array(256);     // 1 when block emits light (avoids defTable lookup in PASS 2!)
     this._uvTable = new Array(256); // [blockId] -> Array(6) of { u0, v0, u1, v1, du, dv }
+    this._statefulTable = new Uint8Array(256);
+    this._lodSkipTable = new Uint8Array(256);
+    this._leafTable = new Uint8Array(256);
+    for (const lid of LEAF_BLOCK_SET) this._leafTable[lid] = 1;
     for (let id = 1; id < 256; id++) {
       const def = getBlockDef(id);
       if (!def) continue;
@@ -1859,6 +1928,9 @@ export class World {
       const isTr = isBlockTransparent(id);
       this._transTable[id] = isTr ? 1 : 0;
       this._litTable[id] = def.light > 0 ? 1 : 0;
+      this._statefulTable[id] = (isDoorBlock(id) || isFenceGateBlock(id) || isStairBlock(id) || id === BLOCK.LADDER) ? 1 : 0;
+      this._lodSkipTable[id] = (isBlockCross(id) || isFenceOrGate(id) || isDoorBlock(id) || isWheatBlock(id) ||
+        id === BLOCK.TORCH || id === BLOCK.FIRE || id === BLOCK.LADDER) ? 1 : 0;
       this._specialTable[id] = (
         isTr || def.cross || def.liquid || isBedBlock(id) || isDoorBlock(id) || isFenceOrGate(id) || isStairBlock(id) || isWheatBlock(id) ||
         id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE || id === BLOCK.LADDER
@@ -1915,6 +1987,17 @@ export class World {
     meshList.sort((a, b) => a.d2 - b.d2);
     this._spiralDataOffsets = dataList;
     this._spiralOffsets = meshList;
+  }
+
+  // True when the chunk holds blocks whose geometry depends on main-thread tile state (doors, gates, ladders,
+  // stairs): those chunks are always meshed on the main thread, everything else can be meshed in a worker.
+  _scanStateful(data, maxY) {
+    const t = this._statefulTable;
+    const end = Math.min(data.length, (Math.max(0, maxY) + 1) << 8);
+    for (let i = 0; i < end; i++) {
+      if (t[data[i]]) return true;
+    }
+    return false;
   }
 
   // Fast numeric integer key — ZERO string allocations in getBlock/raycast/meshing!
@@ -4830,7 +4913,7 @@ export class World {
       }
 
       const bundle = { segs, hubs };
-      if (this._roadRegionCache.size > 48) this._roadRegionCache.clear();
+      if (this._roadRegionCache.size > (this._roadCacheLimit || 48)) this._roadRegionCache.clear();
       this._roadRegionCache.set(rKey, bundle);
       return bundle;
     }
@@ -5242,7 +5325,14 @@ export class World {
   generateChunk(cx, cz) {
     const key = this.chunkKey(cx, cz);
     if (this.chunks.has(key)) return this.chunks.get(key);
+    const raw = this._genChunkRaw(cx, cz);
+    return this._finalizeChunk(cx, cz, raw.data, raw.maxY);
+  }
 
+  // Pure terrain + structure generation (no player mods, no chunk registration). Safe to run inside the
+  // headless World of a Web Worker: tile entities it creates land in this World's maps for the caller to collect.
+  _genChunkRaw(cx, cz) {
+    const key = this.chunkKey(cx, cz);
     const data = new Uint8Array(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
     let maxY = 1;
     const setLocal = (lx, y, lz, id) => {
@@ -5728,6 +5818,16 @@ export class World {
       }
     }
 
+    return { data, maxY };
+  }
+
+  // Main-thread half of chunk creation: apply player edits, register the chunk, kick natural fluid flow.
+  _finalizeChunk(cx, cz, data, maxY) {
+    const key = this.chunkKey(cx, cz);
+    const ox = cx * CHUNK_SIZE;
+    const oz = cz * CHUNK_SIZE;
+    const isFlat = this.worldType === 'flat';
+
     // 3. Apply player-modified blocks in this chunk in O(1)!
     const chunkMods = this.modsByChunk.get(key);
     if (chunkMods) {
@@ -5747,7 +5847,7 @@ export class World {
       }
     }
 
-    const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true, queued: false };
+    const chunk = { cx, cz, key, data, maxY, meshes: [], dirty: true, queued: false, _stateful: this._scanStateful(data, maxY) };
     this.chunks.set(key, chunk);
 
     // Trigger natural flowing physics for any naturally spawned overhanging Water or Lava (e.g. cave waterfalls/lavafalls!)
@@ -5873,6 +5973,7 @@ export class World {
     const prevId = chunk.data[cellIdx];
     chunk.data[cellIdx] = blockId;
     if (blockId !== 0 && y > chunk.maxY) chunk.maxY = y;
+    if (this._statefulTable[blockId]) chunk._stateful = true;
     this.markDirty(cx, cz);
 
     // Neighbor chunks if on edge (or within 6 blocks when placing/removing a GI light emitter!)
@@ -6593,23 +6694,28 @@ export class World {
     }
   }
 
-  buildChunkMesh(chunk) {
-    // Dispose old meshes
-    for (const m of chunk.meshes) {
-      this.group.remove(m);
-      m.geometry.dispose();
-    }
-    chunk.meshes = [];
+  _wantFarMesh(chunk) {
+    const cheb = Math.max(Math.abs(chunk.cx - this._lastChunkPcx), Math.abs(chunk.cz - this._lastChunkPcz));
+    return !this._headless && cheb >= FAR_MESH_DIST && !chunk._editPriority;
+  }
+
+  buildChunkMesh(chunk, farMode = null) {
+    chunk._meshSeq = (chunk._meshSeq || 0) + 1;
     chunk.dirty = false;
     chunk.queued = false;
-    chunk.meshed = true;
+    const far = farMode === null ? this._wantFarMesh(chunk) : farMode;
+    const res = this._computeChunkMesh(chunk, far);
+    chunk._meshFar = far;
+    this._applyChunkMesh(chunk, res);
+  }
 
-    // Refresh light-emitting block registry for this chunk
-    if (chunk.lightKeys) {
-      for (const lk of chunk.lightKeys) this.lightSources.delete(lk);
-    }
-    chunk.lightKeys = [];
-
+  // Pure mesh computation: reads chunk + neighbor voxel data, returns plain typed-array buffers.
+  // Runs unchanged on the main thread or inside the headless World of a mesh Web Worker.
+  // farMode: chunks >= FAR_MESH_DIST away skip faces nobody can see from that distance — completely dark
+  // cave/underground faces (no sky or block light), underground lava, and tiny cross plants (grass/flowers).
+  _computeChunkMesh(chunk, farMode = false) {
+    const lights = []; // flat [x, y, z, isGlowstone, ...]
+    const lavaSamples = [];
     const bOpaque = SCRATCH_BUCKETS.opaque;
     const bCutout = SCRATCH_BUCKETS.cutout;
     const bStatic = SCRATCH_BUCKETS.staticCutout;
@@ -6622,11 +6728,6 @@ export class World {
     bWater.reset();
     bLava.reset();
     bFire.reset();
-    if (chunk._hadWater) {
-      chunk._hadWater = false;
-      this._waterChunkCount = Math.max(0, this._waterChunkCount - 1);
-    }
-    chunk.lavaSamples = [];
 
     const cx = chunk.cx;
     const cz = chunk.cz;
@@ -6639,6 +6740,7 @@ export class World {
     const specialTable = this._specialTable;
     const litTable = this._litTable;
     const uvTable = this._uvTable;
+    const leafTable = this._leafTable;
 
     // Pre-fetch 3x3 neighbor chunk Uint8Arrays ONCE -> ZERO Map/string lookups in the inner loop!
     const getNbr = (dcx, dcz) => {
@@ -6683,7 +6785,8 @@ export class World {
       (cNZ && cNZ.hasEmitters !== false)
     );
     giVol.compute(data, fastGet, transTable, yLimit, hasNbrEmit);
-    chunk.hasEmitters = giVol.lastHadEmitters;
+    const hasEmitters = giVol.lastHadEmitters;
+    chunk.hasEmitters = hasEmitters;
 
     const applyGI = (bucket, nlx, ny, nlz, selfId = 0) => {
       const idx = giVol.sampleIndex(nlx, ny, nlz);
@@ -6729,6 +6832,7 @@ export class World {
           if (id === 0 || specialTable[id] === 0) continue;
           const def = defTable[id];
           if (!def) continue;
+          if (farMode && (def.cross || (id === BLOCK.LAVA && giVol.getSky(lx, y + 1, lz) === 0))) continue;
 
           const wx = ox + lx;
           // Apply 3D Voxel GI for all PASS 1 special geometry (beds, doors, fences, torches, ladders, foliage, lava!)
@@ -6738,9 +6842,7 @@ export class World {
 
           // Register light-emitting blocks (placed OR generated village torches / glowstone / fire / lava!)
           if (id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE) {
-            const lKey = `${wx},${y},${wz}`;
-            chunk.lightKeys.push(lKey);
-            this.lightSources.set(lKey, { x: wx, y, z: wz, isGlowstone: id === BLOCK.GLOWSTONE });
+            lights.push(wx, y, wz, id === BLOCK.GLOWSTONE ? 1 : 0);
           }
 
           // True 2-Block-Long × 1-Block-Wide Sculpted 3D Bed Geometry (Seamless Head + Foot Halves!)
@@ -7132,8 +7234,8 @@ export class World {
           const isWater = id === BLOCK.WATER;
           const isLava = id === BLOCK.LAVA;
           if (isWater) hasWater = true;
-          if (isLava && chunk.lavaSamples.length < 24 && ((lx + y + lz) & 1) === 0) {
-            chunk.lavaSamples.push([wx, y, wz]);
+          if (isLava && lavaSamples.length < 24 && ((lx + y + lz) & 1) === 0) {
+            lavaSamples.push([wx, y, wz]);
           }
           const isStaticCutout = id === BLOCK.GLASS || id === BLOCK.ICE;
           const b = isWater ? bWater : (isLava ? bLava : (isStaticCutout ? bStatic : bCutout));
@@ -7193,6 +7295,8 @@ export class World {
             } else {
               if (neighbor === id && isStaticCutout) continue;
               if (neighbor !== 0 && transTable[neighbor] === 0) continue;
+              // Far chunks: leaf canopies render as solid blobs (interior leaf-to-leaf faces are invisible at range)
+              if (farMode && leafTable[id] && leafTable[neighbor]) continue;
             }
 
             const uv = faceUVs[fi];
@@ -7259,6 +7363,7 @@ export class World {
 
             const baseShade = faceShade;
             const giKey = giVol.getLightPack(lx, ny, lz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
+            if (farMode && giKey < 64) continue; // pitch-dark face: invisible from far away
 
             if (fi === 0) {
               // 4-corner AO for +Y top face
@@ -7367,6 +7472,7 @@ export class World {
 
             const baseShade = faceShade;
             const giKey = giVol.getLightPack(nlx, y, lz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
+            if (farMode && giKey < 64) continue;
 
             const calcS = (dy, dz) =>
               solidTable[fastGet(nlx, y + dy, lz)] +
@@ -7481,6 +7587,7 @@ export class World {
 
             const baseShade = faceShade;
             const giKey = giVol.getLightPack(lx, y, nlz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
+            if (farMode && giKey < 64) continue;
 
             const calcS = (dy, dx) =>
               solidTable[fastGet(lx, y + dy, nlz)] +
@@ -7639,20 +7746,63 @@ export class World {
       }
     }
 
+    return {
+      hasEmitters,
+      lights,
+      lavaSamples,
+      opaque: bOpaque.toArrays(),
+      cutout: bCutout.toArrays(),
+      staticCutout: bStatic.toArrays(),
+      lava: bLava.toArrays(),
+      fire: bFire.toArrays(),
+      water: bWater.toArrays()
+    };
+  }
+
+  // Main-thread half: swap the chunk's meshes for freshly computed buffers & refresh its light registry.
+  _applyChunkMesh(chunk, res) {
+    for (const m of chunk.meshes) {
+      if (m.parent) m.parent.remove(m);
+      m.geometry.dispose();
+    }
+    chunk.meshes = [];
+    chunk.meshed = true;
+
+    if (chunk.lightKeys) {
+      for (const lk of chunk.lightKeys) this.lightSources.delete(lk);
+    }
+    chunk.lightKeys = [];
+    const L = res.lights;
+    for (let i = 0; i < L.length; i += 4) {
+      const lKey = `${L[i]},${L[i + 1]},${L[i + 2]}`;
+      chunk.lightKeys.push(lKey);
+      this.lightSources.set(lKey, { x: L[i], y: L[i + 1], z: L[i + 2], isGlowstone: L[i + 3] === 1 });
+    }
+    if (chunk._hadWater) {
+      chunk._hadWater = false;
+      this._waterChunkCount = Math.max(0, this._waterChunkCount - 1);
+    }
+    chunk.lavaSamples = res.lavaSamples || [];
+    chunk.hasEmitters = res.hasEmitters;
+
+    const cx = chunk.cx;
+    const cz = chunk.cz;
     const useShadows = this.shaderMode !== 'low';
     const useFar = this.shaderMode === 'high' || this.shaderMode === 'ultra';
     // 65% Shadow-Pass GPU Speedup: foliage/cutouts cast shadows only inside Near Hero Cascade (±2 chunks), opaque within ±4!
     const opaqueShadowR = useFar ? 4 : 2;
     const cutoutShadowR = 2;
     const distC = Math.max(Math.abs(cx - this._lastChunkPcx), Math.abs(cz - this._lastChunkPcz));
-    const addBucket = (bucket, mat, renderOrder = 0, shadowKind = 'none') => {
-      const geo = bucket.toGeometry();
+    const batched = this._batchEligible(chunk);
+    const addBucket = (arrays, mat, renderOrder = 0, shadowKind = 'none') => {
+      const geo = MeshBucket.geometryFromArrays(arrays);
       if (!geo) return;
       const mesh = new THREE.Mesh(geo, mat);
       mesh.renderOrder = renderOrder;
       mesh.frustumCulled = true;
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
+      mesh.userData.kind = shadowKind;
       if (shadowKind === 'opaque') {
         mesh.castShadow = useShadows && distC <= opaqueShadowR;
       } else if (shadowKind === 'cutout') {
@@ -7664,16 +7814,18 @@ export class World {
         this._waterChunkCount++;
       }
       mesh.receiveShadow = false;
-      this.group.add(mesh);
+      // Far, settled chunks are drawn through their region's merged batch mesh instead (see _updateBatches)
+      if (!batched) this.group.add(mesh);
       chunk.meshes.push(mesh);
     };
 
-    addBucket(bOpaque, this.opaqueMat, 0, 'opaque');
-    addBucket(bCutout, this.cutoutMat, 1, 'cutout');
-    addBucket(bStatic, this.staticCutoutMat, 1, 'cutout');
-    addBucket(bLava, this.lavaMat, 2, 'none');
-    addBucket(bFire, this.fireMat, 2, 'none');
-    addBucket(bWater, this.waterMat, 3, 'water');
+    addBucket(res.opaque, this.opaqueMat, 0, 'opaque');
+    addBucket(res.cutout, this.cutoutMat, 1, 'cutout');
+    addBucket(res.staticCutout, this.staticCutoutMat, 1, 'cutout');
+    addBucket(res.lava, this.lavaMat, 2, 'none');
+    addBucket(res.fire, this.fireMat, 2, 'none');
+    addBucket(res.water, this.waterMat, 3, 'water');
+    this._markBatchDirtyForChunk(chunk);
     if (chunk.lightKeys.length > 0) this._lightDirty = true;
     this._shadowNeedsUpdate = true;
   }
@@ -7789,6 +7941,467 @@ export class World {
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Worker pool (real generation / meshing / LOD off the main thread)
+  // ---------------------------------------------------------------------------------------------
+  _getBlockPalette() {
+    const tex = this.textures;
+    if (tex && tex._lodPalette) return tex._lodPalette;
+    const top = new Uint32Array(256);
+    const side = new Uint32Array(256);
+    try {
+      const canvas = tex && tex.canvas;
+      const ctx = tex && tex.ctx;
+      const map = tex && tex.tileMap;
+      if (!canvas || !ctx || !map) throw new Error('no atlas');
+      const W = canvas.width;
+      const img = ctx.getImageData(0, 0, W, canvas.height).data;
+      const tileAvg = new Map();
+      // Average a 16x16 tile in LINEAR light (that's what the chunk shader sees after sRGB decode), then
+      // store it as the 0..255 vertex color the LOD material multiplies in linear space.
+      const s2l = (c) => {
+        const v = c / 255;
+        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+      };
+      const avgTile = (name, mr = 1, mg = 1, mb = 1) => {
+        const ck = `${name}|${mr}|${mg}|${mb}`;
+        if (tileAvg.has(ck)) return tileAvg.get(ck);
+        const t = map[name];
+        let out = 0;
+        if (t) {
+          let r = 0, g = 0, b = 0, n = 0;
+          for (let y = 0; y < 16; y++) {
+            for (let x = 0; x < 16; x++) {
+              const i = ((t.oy + y) * W + (t.ox + x)) * 4;
+              if (img[i + 3] < 32) continue;
+              r += s2l(img[i]); g += s2l(img[i + 1]); b += s2l(img[i + 2]);
+              n++;
+            }
+          }
+          if (n > 0) {
+            const k = LOD_PALETTE_GAIN / n;
+            const cl = (v) => Math.max(1, Math.min(255, Math.round(Math.pow(Math.min(1, v * k), LOD_PALETTE_GAMMA) * 255)));
+            out = (cl(r * mr) << 16) | (cl(g * mg) << 8) | cl(b * mb);
+          }
+        }
+        tileAvg.set(ck, out);
+        return out;
+      };
+      for (let id = 1; id < 256; id++) {
+        const def = this._defTable[id];
+        if (!def || !def.faces) continue;
+        const f = def.faces;
+        // Measured LOD-vs-chunk corrections: cutout foliage reads ~10% darker as a solid LOD surface,
+        // bare stone ~10% brighter/bluer under the LOD sky lighting.
+        const key = String(BLOCK_TO_KEY[id] || '');
+        let mr = 1, mg = 1, mb = 1;
+        if (key.indexOf('leaves') >= 0) { mr = 1.3; mg = 1.22; mb = 1.3; }
+        else if (/stone|cobble|gravel|deepslate|andesite|diorite|granite|tuff|basalt/.test(key)) { mr = 0.86; mg = 0.8; mb = 0.72; }
+        top[id] = avgTile(f.top || f.all || f.side, mr, mg, mb);
+        side[id] = avgTile(f.side || f.all || f.top, mr, mg, mb);
+      }
+    } catch {
+      // Leave zeros -> kernel keeps its hand-tuned colors
+    }
+    const pal = { top, side };
+    if (tex) tex._lodPalette = pal;
+    return pal;
+  }
+
+  _ensureWorldPool() {
+    if (this._headless || this._wpoolFailed || !this._useWorldWorkers) return null;
+    if (this._wpool) return this._wpool;
+    if (typeof Worker === 'undefined') {
+      this._wpoolFailed = true;
+      return null;
+    }
+    const pal = this._getBlockPalette();
+    const pool = new WorldWorkerPool({
+      seedStr: this.seedStr,
+      worldType: this.worldType,
+      generateStructures: this.generateStructures,
+      tileMap: this.textures.tileMap,
+      palTop: pal.top,
+      palSide: pal.side
+    }, this._workerCount);
+    pool.onFail = () => {
+      this._wpoolFailed = true;
+      if (this._wpool === pool) this._wpool = null;
+      if (this._lodPool === pool) this._lodPool = null;
+      // Everything that was in flight gets redone by the main-thread / blob-worker fallbacks
+      this._meshInFlight.clear();
+      for (const c of this.chunks.values()) {
+        if (!c.meshed && !c.queued) c.dirty = true;
+      }
+      this._chunksAllLoaded = false;
+      this._spiralCursor = 0;
+      this._lastLodRx = 1e9;
+      // Palette-colored LOD tiles don't match the fallback's colors/gain: rebuild them all.
+      for (const rec of this.lodRegions.values()) {
+        this.lodGroup.remove(rec.mesh);
+        rec.mesh.geometry.dispose();
+      }
+      this.lodRegions.clear();
+      this._lodRetiringKeys.clear();
+      this._lodRebuildKeys.clear();
+      this._lodQueue.length = 0;
+      this.shaderUniforms.uLodGain.value = 1.0;
+    };
+    this._wpool = pool;
+    return pool;
+  }
+
+  _mergeGenTiles(t) {
+    if (!t) return;
+    for (const [k, v] of t.chests) if (!this.chests.has(k)) this.chests.set(k, v);
+    for (const [k, v] of t.doors) if (!this.doorStates.has(k)) this.doorStates.set(k, v);
+    for (const [k, v] of t.stairs) if (!this.stairStates.has(k)) this.stairStates.set(k, v);
+    for (const k of t.wl) this.waterloggedLadders.add(k);
+    for (const [k, v] of t.villages) if (!this.villageChunks.has(k)) this.villageChunks.set(k, v);
+    for (const [k, v] of t.megas) if (!this.megaStructures.has(k)) this.megaStructures.set(k, v);
+    for (const [k, v] of t.farmlands) if (!this.activeFarmlands.has(k)) this.activeFarmlands.set(k, v);
+  }
+
+  _adoptGenResults(wp, pcx, pcz, rMeshSq, keepSq) {
+    const list = wp.genResults;
+    if (list.length === 0) return;
+    const t0 = performance.now();
+    let n = 0;
+    while (list.length > 0) {
+      const r = list.shift();
+      const dx = r.cx - pcx;
+      const dz = r.cz - pcz;
+      if (dx * dx + dz * dz > keepSq) continue; // player moved away meanwhile
+      const ck = this.chunkKey(r.cx, r.cz);
+      if (this.chunks.has(ck)) continue;
+      if (r.failed) {
+        this.generateChunk(r.cx, r.cz);
+      } else {
+        this._mergeGenTiles(r.tiles);
+        this._finalizeChunk(r.cx, r.cz, r.data, r.maxY);
+      }
+      this._tryQueueChunkForMesh(r.cx, r.cz, pcx, pcz, rMeshSq);
+      this._tryQueueChunkForMesh(r.cx + 1, r.cz, pcx, pcz, rMeshSq);
+      this._tryQueueChunkForMesh(r.cx - 1, r.cz, pcx, pcz, rMeshSq);
+      this._tryQueueChunkForMesh(r.cx, r.cz + 1, pcx, pcz, rMeshSq);
+      this._tryQueueChunkForMesh(r.cx, r.cz - 1, pcx, pcz, rMeshSq);
+      n++;
+      if (n >= 24 || performance.now() - t0 > 1.5) break;
+    }
+  }
+
+  _chunkHasFlow(chunk) {
+    if (this._flowingChunks.size === 0) return false;
+    const cx = chunk.cx;
+    const cz = chunk.cz;
+    return this._flowingChunks.has(chunk.key) ||
+      this._flowingChunks.has(this.chunkKey(cx + 1, cz)) ||
+      this._flowingChunks.has(this.chunkKey(cx - 1, cz)) ||
+      this._flowingChunks.has(this.chunkKey(cx, cz + 1)) ||
+      this._flowingChunks.has(this.chunkKey(cx, cz - 1));
+  }
+
+  _dispatchMeshJob(wp, chunk) {
+    const cx = chunk.cx;
+    const cz = chunk.cz;
+    const nb = new Array(9);
+    let top = 0;
+    for (let i = 0; i < 9; i++) {
+      const c = this.chunks.get(this.chunkKey(cx + (i % 3) - 1, cz + Math.floor(i / 3) - 1));
+      nb[i] = c || null;
+      if (c && c.maxY > top) top = c.maxY;
+    }
+    const len = Math.min(CHUNK_HEIGHT, top + 3) << 8;
+    const datas = new Array(9);
+    const maxYs = new Array(9);
+    const emit = new Array(9);
+    const transfer = [];
+    for (let i = 0; i < 9; i++) {
+      const c = nb[i];
+      if (!c) {
+        datas[i] = null;
+        maxYs[i] = 0;
+        emit[i] = 2;
+        continue;
+      }
+      const d = c.data.slice(0, len);
+      datas[i] = d;
+      transfer.push(d.buffer);
+      maxYs[i] = c.maxY;
+      emit[i] = c.hasEmitters === false ? 0 : (c.hasEmitters === true ? 1 : 2);
+    }
+    chunk._meshSeq = (chunk._meshSeq || 0) + 1;
+    chunk.dirty = false;
+    chunk.queued = false;
+    const seq = chunk._meshSeq;
+    const far = this._wantFarMesh(chunk);
+    chunk._pendingFar = far;
+    if (!wp.requestMesh({ cx, cz, seq, far, maxYs, emit, datas }, transfer)) {
+      chunk.dirty = true;
+      return false;
+    }
+    this._meshInFlight.set(chunk.key, seq);
+    return true;
+  }
+
+  _adoptMeshResults(wp) {
+    const list = wp.meshResults;
+    if (list.length === 0) return;
+    const t0 = performance.now();
+    let n = 0;
+    while (list.length > 0) {
+      const r = list.shift();
+      const key = this.chunkKey(r.cx, r.cz);
+      if (this._meshInFlight.get(key) === r.seq) this._meshInFlight.delete(key);
+      const chunk = this.chunks.get(key);
+      if (!chunk || chunk._meshSeq !== r.seq) continue; // unloaded or superseded by a newer build
+      if (r.failed) {
+        chunk.dirty = true;
+        if (!chunk.queued) {
+          chunk.queued = true;
+          chunk._forceSync = true;
+          this.meshQueue.push(chunk);
+        }
+        continue;
+      }
+      chunk._meshFar = !!r.far;
+      this._applyChunkMesh(chunk, r.res);
+      n++;
+      if (n >= 8 || performance.now() - t0 > 2.0) break;
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Region batching: far, settled chunks are merged per 4x4-chunk region & material into one mesh,
+  // cutting ~1,800 chunk draw calls at a 16-chunk detail radius down to a few hundred.
+  // ---------------------------------------------------------------------------------------------
+  _batchKey(cx, cz) {
+    return this.chunkKey(cx >> 2, cz >> 2);
+  }
+
+  _batchEligible(chunk) {
+    return !!chunk._inBatch;
+  }
+
+  _markBatchDirtyForChunk(chunk) {
+    this._visDirty = true;
+    if (chunk._inBatch || chunk._wantBatch) this._batchDirty.add(this._batchKey(chunk.cx, chunk.cz));
+  }
+
+  _setChunkWantBatch(chunk, want) {
+    if (!!chunk._wantBatch === want) return;
+    chunk._wantBatch = want;
+    this._batchDirty.add(this._batchKey(chunk.cx, chunk.cz));
+    if (!want && chunk._inBatch) {
+      // Show it on its own immediately; the region drops it on its next rebuild.
+      chunk._inBatch = null;
+      for (const m of chunk.meshes) {
+        if (!m.parent) this.group.add(m);
+      }
+    }
+  }
+
+  _disposeBatch(bk) {
+    const rec = this._batches.get(bk);
+    if (!rec) return;
+    for (const m of rec.meshes) {
+      this.group.remove(m);
+      m.geometry.dispose();
+    }
+    this._batches.delete(bk);
+  }
+
+  _mergeGeometries(geos) {
+    const first = geos[0];
+    const names = Object.keys(first.attributes);
+    let vTotal = 0;
+    let iTotal = 0;
+    for (const g of geos) {
+      vTotal += g.attributes.position.count;
+      iTotal += g.index.count;
+    }
+    const merged = new THREE.BufferGeometry();
+    const freeArray = function () { this.array = null; };
+    for (const name of names) {
+      const a0 = first.attributes[name];
+      const out = new a0.array.constructor(vTotal * a0.itemSize);
+      let off = 0;
+      for (const g of geos) {
+        const a = g.attributes[name];
+        out.set(a.array, off);
+        off += a.array.length;
+      }
+      merged.setAttribute(name, new THREE.BufferAttribute(out, a0.itemSize, a0.normalized).onUpload(freeArray));
+    }
+    const idx = vTotal < 65536 ? new Uint16Array(iTotal) : new Uint32Array(iTotal);
+    let io = 0;
+    let vo = 0;
+    for (const g of geos) {
+      const src = g.index.array;
+      for (let i = 0; i < src.length; i++) idx[io + i] = src[i] + vo;
+      io += src.length;
+      vo += g.attributes.position.count;
+    }
+    merged.setIndex(new THREE.BufferAttribute(idx, 1).onUpload(freeArray));
+    merged.computeBoundingSphere();
+    merged.computeBoundingBox();
+    return merged;
+  }
+
+  _rebuildBatch(bk) {
+    const rcx = Math.floor(bk / 65536) - 32768;
+    const rcz = (bk % 65536) - 32768;
+    const members = [];
+    for (let dz = 0; dz < 4; dz++) {
+      for (let dx = 0; dx < 4; dx++) {
+        const c = this.chunks.get(this.chunkKey(rcx * 4 + dx, rcz * 4 + dz));
+        if (c && c._wantBatch && c.meshed && c.meshes.length > 0) members.push(c);
+      }
+    }
+    // Release chunks the old batch held that are no longer members
+    for (let dz = 0; dz < 4; dz++) {
+      for (let dx = 0; dx < 4; dx++) {
+        const c = this.chunks.get(this.chunkKey(rcx * 4 + dx, rcz * 4 + dz));
+        if (c && c._inBatch === bk && !members.includes(c)) {
+          c._inBatch = null;
+          for (const m of c.meshes) if (!m.parent) this.group.add(m);
+        }
+      }
+    }
+    this._disposeBatch(bk);
+    if (members.length < 2) {
+      for (const c of members) {
+        c._inBatch = null;
+        for (const m of c.meshes) if (!m.parent) this.group.add(m);
+      }
+      return;
+    }
+    const byMat = new Map();
+    for (const c of members) {
+      for (const m of c.meshes) {
+        let e = byMat.get(m.material);
+        if (!e) {
+          e = { geos: [], proto: m };
+          byMat.set(m.material, e);
+        }
+        e.geos.push(m.geometry);
+      }
+    }
+    const rec = { meshes: [] };
+    for (const [mat, e] of byMat) {
+      const mesh = new THREE.Mesh(this._mergeGeometries(e.geos), mat);
+      mesh.renderOrder = e.proto.renderOrder;
+      mesh.frustumCulled = true;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      if (e.proto.userData.kind === 'water') mesh.layers.set(1);
+      this.group.add(mesh);
+      rec.meshes.push(mesh);
+    }
+    for (const c of members) {
+      c._inBatch = bk;
+      for (const m of c.meshes) {
+        if (m.parent) m.parent.remove(m);
+        m.geometry.dispose(); // frees its GPU buffers; CPU arrays stay for future rebuilds
+      }
+    }
+    this._batches.set(bk, rec);
+  }
+
+  _regionSettled(bk) {
+    const rcx = Math.floor(bk / 65536) - 32768;
+    const rcz = (bk % 65536) - 32768;
+    for (let dz = 0; dz < 4; dz++) {
+      for (let dx = 0; dx < 4; dx++) {
+        const key = this.chunkKey(rcx * 4 + dx, rcz * 4 + dz);
+        const c = this.chunks.get(key);
+        if (!c) continue;
+        if (c._wantBatch && (c.dirty || c.queued || this._meshInFlight.has(key))) return false;
+      }
+    }
+    return true;
+  }
+
+  _updateBatches(budgetMs) {
+    if (this._batchDirty.size === 0) return;
+    const t0 = performance.now();
+    let rebuilt = 0;
+    for (const bk of this._batchDirty) {
+      if (!this._regionSettled(bk)) continue;
+      this._batchDirty.delete(bk);
+      this._rebuildBatch(bk);
+      rebuilt++;
+      if (rebuilt >= 2 || performance.now() - t0 > budgetMs) break;
+    }
+  }
+
+  _refreshChunkVisibility(pcx, pcz, visLimSq) {
+    this._visDirty = false;
+    const enabled = this._batchingEnabled;
+    for (const chunk of this.chunks.values()) {
+      if (!chunk.meshed || chunk.meshes.length === 0) continue;
+      const dx = chunk.cx - pcx;
+      const dz = chunk.cz - pcz;
+      const shouldVis = (dx * dx + dz * dz) <= visLimSq;
+      if (!chunk._inBatch && chunk.meshes[0].visible !== shouldVis) {
+        for (let mi = 0; mi < chunk.meshes.length; mi++) chunk.meshes[mi].visible = shouldVis;
+      }
+      const cheb = Math.max(Math.abs(dx), Math.abs(dz));
+      if (enabled) {
+        const want = shouldVis && (chunk._wantBatch ? cheb >= BATCH_MIN_DIST - 1 : cheb >= BATCH_MIN_DIST);
+        this._setChunkWantBatch(chunk, want);
+      }
+      // Detail swap: a far-mode mesh coming within range gets its full mesh; a full mesh drifting well past
+      // the far ring is slimmed down (both rebuilt in the workers, hysteresis avoids ping-pong).
+      if (!chunk.dirty && !chunk.queued && !this._meshInFlight.has(chunk.key)) {
+        const needFull = chunk._meshFar && cheb < FAR_MESH_DIST - 1;
+        const canSlim = !chunk._meshFar && cheb >= FAR_MESH_DIST + 2 && this._wpool && this._wpool.ready;
+        if (needFull || canSlim) {
+          chunk.dirty = true;
+          chunk.queued = true;
+          this.meshQueue.push(chunk);
+        }
+      }
+    }
+  }
+
+  // Player-edited chunks leaving the detail radius: hand their real surface to the LOD builders so far-away
+  // builds stay visible in the distance, and rebuild the affected LOD tiles.
+  _publishChunkSummary(chunk) {
+    const wp = this._wpool;
+    if (!wp || !wp.ready || !this.modsByChunk.has(chunk.key)) return;
+    const topY = new Int16Array(256);
+    const topId = new Uint8Array(256);
+    const data = chunk.data;
+    const skip = this._lodSkipTable;
+    const yStart = Math.min(CHUNK_HEIGHT - 1, Math.max(1, chunk.maxY));
+    for (let c = 0; c < 256; c++) {
+      let y = yStart;
+      let id = 0;
+      for (; y > 0; y--) {
+        id = data[c + (y << 8)];
+        if (id !== 0 && skip[id] === 0) break;
+      }
+      topY[c] = y;
+      topId[c] = id;
+    }
+    wp.broadcast({ type: 'sums', sums: [{ cx: chunk.cx, cz: chunk.cz, topY, topId }] });
+    for (let t = 0; t <= 2; t++) {
+      const span = 4 << t;
+      const key = `${t}:${Math.floor(chunk.cx / span)},${Math.floor(chunk.cz / span)}`;
+      if (this._lodActiveKeys.has(key)) {
+        this._lodRebuildKeys.add(key);
+        wp.enqueue({ key, rx: Math.floor(chunk.cx / span), rz: Math.floor(chunk.cz / span), tier: t });
+      }
+    }
+  }
+
+  getReadyRadius() {
+    return this._readyChunks || 0;
+  }
+
   updateChunksAround(px, pz, maxBuildsPerFrame = 2, budgetMs = 4.0, camDirX = 0, camDirZ = -1) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
@@ -7808,50 +8421,88 @@ export class World {
 
     const tStart = performance.now();
     const rMeshSq = (r + 0.5) * (r + 0.5);
+    const keepR = r + 3;
+    const keepSq = keepR * keepR;
+    const wp = this._ensureWorldPool();
+    const asyncOn = !!(wp && wp.ready);
 
-    // 1. Stream missing chunk voxel data in pre-sorted spiral order under strict frame budget!
+    if (asyncOn) {
+      if (movedChunk) {
+        const lim = (r + 2) * (r + 2);
+        wp.cancelGenOutside((cx, cz) => {
+          const dx = cx - pcx;
+          const dz = cz - pcz;
+          return dx * dx + dz * dz <= lim;
+        });
+      }
+      this._adoptGenResults(wp, pcx, pcz, rMeshSq, keepSq);
+      this._adoptMeshResults(wp);
+    }
+
+    // 1. Stream missing chunk voxel data in pre-sorted spiral order (worker-generated when available)
     if (!this._chunksAllLoaded) {
       const dataOffsets = this._spiralDataOffsets;
       let cursor = this._spiralCursor || 0;
-      let generated = 0;
-      const maxGen = r > 8 ? 3 : 2;
-      const genBudget = budgetMs * 0.48;
-
-      while (cursor < dataOffsets.length) {
-        const off = dataOffsets[cursor];
-        const cx = pcx + off.dx;
-        const cz = pcz + off.dz;
-        const ck = this.chunkKey(cx, cz);
-        if (!this.chunks.has(ck)) {
-          this.generateChunk(cx, cz);
-          generated++;
-          // Check if this chunk or any cardinal neighbor now has all 4 neighbors ready to mesh
-          this._tryQueueChunkForMesh(cx, cz, pcx, pcz, rMeshSq);
-          this._tryQueueChunkForMesh(cx + 1, cz, pcx, pcz, rMeshSq);
-          this._tryQueueChunkForMesh(cx - 1, cz, pcx, pcz, rMeshSq);
-          this._tryQueueChunkForMesh(cx, cz + 1, pcx, pcz, rMeshSq);
-          this._tryQueueChunkForMesh(cx, cz - 1, pcx, pcz, rMeshSq);
-
-          cursor++;
-          if (generated >= maxGen || performance.now() - tStart >= genBudget) break;
-        } else {
-          // Ensure already-generated unmeshed chunks inside radius get queued
-          const existing = this.chunks.get(ck);
-          if (existing && existing.dirty && !existing.queued && off.d2 <= rMeshSq && this._hasCardinalNeighbors(cx, cz)) {
-            existing.queued = true;
-            this.meshQueue.push(existing);
+      if (asyncOn) {
+        const cap = Math.max(6, this._workerCount * 3);
+        while (cursor < dataOffsets.length) {
+          const off = dataOffsets[cursor];
+          const cx = pcx + off.dx;
+          const cz = pcz + off.dz;
+          const ck = this.chunkKey(cx, cz);
+          if (!this.chunks.has(ck)) {
+            if (!wp.genPending.has(ck)) {
+              if (wp.genPending.size >= cap) break;
+              wp.requestGen(cx, cz, ck);
+            }
+          } else {
+            const existing = this.chunks.get(ck);
+            if (existing && existing.dirty && !existing.queued && off.d2 <= rMeshSq && this._hasCardinalNeighbors(cx, cz)) {
+              existing.queued = true;
+              this.meshQueue.push(existing);
+            }
           }
           cursor++;
         }
+        if (cursor >= dataOffsets.length) {
+          if (wp.genPending.size === 0) this._chunksAllLoaded = true;
+          else cursor = 0; // rescan until every in-flight chunk has landed
+        }
+      } else {
+        let generated = 0;
+        const maxGen = r > 8 ? 3 : 2;
+        const genBudget = budgetMs * 0.48;
+        while (cursor < dataOffsets.length) {
+          const off = dataOffsets[cursor];
+          const cx = pcx + off.dx;
+          const cz = pcz + off.dz;
+          const ck = this.chunkKey(cx, cz);
+          if (!this.chunks.has(ck)) {
+            this.generateChunk(cx, cz);
+            generated++;
+            this._tryQueueChunkForMesh(cx, cz, pcx, pcz, rMeshSq);
+            this._tryQueueChunkForMesh(cx + 1, cz, pcx, pcz, rMeshSq);
+            this._tryQueueChunkForMesh(cx - 1, cz, pcx, pcz, rMeshSq);
+            this._tryQueueChunkForMesh(cx, cz + 1, pcx, pcz, rMeshSq);
+            this._tryQueueChunkForMesh(cx, cz - 1, pcx, pcz, rMeshSq);
+            cursor++;
+            if (generated >= maxGen || performance.now() - tStart >= genBudget) break;
+          } else {
+            const existing = this.chunks.get(ck);
+            if (existing && existing.dirty && !existing.queued && off.d2 <= rMeshSq && this._hasCardinalNeighbors(cx, cz)) {
+              existing.queued = true;
+              this.meshQueue.push(existing);
+            }
+            cursor++;
+          }
+        }
+        if (cursor >= dataOffsets.length) this._chunksAllLoaded = true;
       }
-
       this._spiralCursor = cursor;
-      if (cursor >= dataOffsets.length) {
-        this._chunksAllLoaded = true;
-      }
     }
 
-    // 2. Build dirty chunk meshes within the remaining frame budget (zero lag spikes!)
+    // 2. Build dirty chunk meshes: streaming chunks go to the mesh workers; player edits, chunks with
+    //    door/gate/ladder/stair state or flowing fluids are built right here (instant feedback).
     if (this.meshQueue.length > 0) {
       if (this.meshQueue.length > 1) {
         // Block edits (local or from multiplayer peers) first, then nearest-first streaming.
@@ -7864,34 +8515,58 @@ export class World {
         });
       }
 
-      // Predictive budget: only start another build if the running average says it fits.
-      // (Previously the check ran *after* each ~6ms build, so frames routinely overshot to 20ms+.)
+      // Predictive budget: only start another main-thread build if the running average says it fits.
       let built = 0;
+      let dispatched = 0;
+      const meshCap = Math.max(4, this._workerCount * 2 + 2);
       let avgMs = this._meshAvgMs || 5;
-      while (this.meshQueue.length > 0 && built < maxBuildsPerFrame) {
-        const elapsed = performance.now() - tStart;
-        const head = this.meshQueue[0];
-        if (built > 0 && elapsed + avgMs > budgetMs) break;
-        // Generation already ate the whole budget: defer streaming builds (never edits) a frame.
-        if (built === 0 && elapsed >= budgetMs && head && !head._editPriority) break;
-        const chunk = this.meshQueue.shift();
+      const keep = [];
+      const q = this.meshQueue;
+      let i = 0;
+      for (; i < q.length; i++) {
+        const chunk = q[i];
         if (!chunk) continue;
-        chunk.queued = false;
-        if (chunk.dirty && this.chunks.has(chunk.key)) {
-          const t0 = performance.now();
-          this.buildChunkMesh(chunk);
-          avgMs = avgMs * 0.8 + (performance.now() - t0) * 0.2;
-          built++;
+        if (!this.chunks.has(chunk.key)) {
+          chunk.queued = false;
+          continue;
         }
+        if (!chunk.dirty) {
+          chunk.queued = false;
+          chunk._editPriority = false;
+          continue;
+        }
+        const canAsync = asyncOn && !chunk._editPriority && !chunk._forceSync && !chunk._stateful && !this._chunkHasFlow(chunk);
+        if (canAsync) {
+          if (dispatched < 8 && this._meshInFlight.size < meshCap && wp.meshQueued < meshCap) {
+            if (this._dispatchMeshJob(wp, chunk)) {
+              dispatched++;
+              continue;
+            }
+          }
+          keep.push(chunk);
+          continue;
+        }
+        const elapsed = performance.now() - tStart;
+        if (built >= maxBuildsPerFrame || (built > 0 && elapsed + avgMs > budgetMs) ||
+            (built === 0 && elapsed >= budgetMs && !chunk._editPriority)) {
+          keep.push(chunk);
+          continue;
+        }
+        chunk.queued = false;
+        const t0 = performance.now();
+        this.buildChunkMesh(chunk);
+        avgMs = avgMs * 0.8 + (performance.now() - t0) * 0.2;
+        built++;
         chunk._editPriority = false;
+        chunk._forceSync = false;
       }
+      this.meshQueue = keep;
       this._meshAvgMs = avgMs;
     }
 
     // 3. Only check unload & update nearby shadow casters when crossing a chunk border!
     if (movedChunk) {
-      const unloadR = r + 3;
-      const unloadSq = unloadR * unloadR;
+      const unloadSq = keepSq;
       const useShadows = this.shaderMode !== 'low';
       const useFar = this.shaderMode === 'high' || this.shaderMode === 'ultra';
       const opaqueShadowR = useFar ? 4 : 2;
@@ -7904,14 +8579,17 @@ export class World {
             chunk._hadWater = false;
             this._waterChunkCount = Math.max(0, this._waterChunkCount - 1);
           }
+          this._publishChunkSummary(chunk);
+          if (chunk._inBatch || chunk._wantBatch) this._batchDirty.add(this._batchKey(chunk.cx, chunk.cz));
           for (const m of chunk.meshes) {
-            this.group.remove(m);
+            if (m.parent) m.parent.remove(m);
             m.geometry.dispose();
           }
           if (chunk.lightKeys && chunk.lightKeys.length > 0) {
             for (const lk of chunk.lightKeys) this.lightSources.delete(lk);
             this._lightDirty = true;
           }
+          this._meshInFlight.delete(key);
           this.chunks.delete(key);
         } else if (useShadows) {
           const distC = Math.max(Math.abs(dx), Math.abs(dz));
@@ -7927,46 +8605,34 @@ export class World {
       this._shadowNeedsUpdate = true;
     }
 
-    // 4. Seamless Contiguous Ready-Radius + Soft 14m Dither Crossfade into Distant Horizons LOD!
-    // Measure exact contiguous meshed radius along pre-sorted spiral so LOD NEVER leaves an empty hole!
+    // 4. Contiguous ready radius (drives the soft dither crossfade into the LOD ring) + chunk visibility/batching
     const lodActive = fullRD > r;
     let readyChunks = r;
-    if (lodActive && this._spiralOffsets && this._spiralOffsets.length > 0) {
-      readyChunks = r;
-      for (let i = 0; i < this._spiralOffsets.length; i++) {
-        const off = this._spiralOffsets[i];
+    if (this._spiralOffsets && this._spiralOffsets.length > 0) {
+      for (let k = 0; k < this._spiralOffsets.length; k++) {
+        const off = this._spiralOffsets[k];
         const c = this.chunks.get(this.chunkKey(pcx + off.dx, pcz + off.dz));
         if (!c || !c.meshed) {
           readyChunks = Math.max(0, Math.sqrt(off.d2) - 0.5);
           break;
         }
       }
-      // Only refresh chunk visibility flags when readyChunks changes or player moves chunk (avoids per-frame O(N) loop!)
-      const qReady = Math.round(readyChunks * 4);
-      if (movedChunk || qReady !== this._lastVisReadyQ || this.meshQueue.length > 0) {
-        this._lastVisReadyQ = qReady;
-        const visLimSq = (readyChunks + 0.95) * (readyChunks + 0.95);
-        for (const chunk of this.chunks.values()) {
-          if (!chunk.meshed || chunk.meshes.length === 0) continue;
-          const dx = chunk.cx - pcx;
-          const dz = chunk.cz - pcz;
-          const shouldVis = (dx * dx + dz * dz) <= visLimSq;
-          if (chunk.meshes[0].visible !== shouldVis) {
-            for (let mi = 0; mi < chunk.meshes.length; mi++) chunk.meshes[mi].visible = shouldVis;
-          }
-        }
-      }
-    } else if (!lodActive && this._lastVisReadyQ !== -1) {
-      this._lastVisReadyQ = -1;
-      for (const chunk of this.chunks.values()) {
-        if (chunk.meshes.length > 0 && !chunk.meshes[0].visible) {
-          for (let mi = 0; mi < chunk.meshes.length; mi++) chunk.meshes[mi].visible = true;
-        }
-      }
     }
+    this._readyChunks = readyChunks;
+    const qReady = lodActive ? Math.round(readyChunks * 4) : -1;
+    if (movedChunk || qReady !== this._lastVisReadyQ || this._visDirty) {
+      this._lastVisReadyQ = qReady;
+      const visLimSq = lodActive ? (readyChunks + 0.95) * (readyChunks + 0.95) : Infinity;
+      this._refreshChunkVisibility(pcx, pcz, visLimSq);
+    }
+    if (!lodActive) readyChunks = r;
+    this._updateBatches(Math.max(0.8, budgetMs * 0.3));
 
     const targetReadyBlocks = Math.max(0, (readyChunks - 0.45) * CHUNK_SIZE);
-    if (this._smoothReadyBlocks === undefined) this._smoothReadyBlocks = targetReadyBlocks;
+    if (this._smoothReadyBlocks === undefined || this._snapReadyBlend) {
+      this._smoothReadyBlocks = targetReadyBlocks;
+      this._snapReadyBlend = false;
+    }
     // Shrink immediately if flying faster than chunks build (zero holes!), glide smoothly outward as chunks finish!
     if (targetReadyBlocks < this._smoothReadyBlocks) {
       this._smoothReadyBlocks = targetReadyBlocks;
@@ -7988,8 +8654,16 @@ export class World {
   }
 
   _ensureLodPool() {
-    if (!this._lodPool) {
-      this._lodPool = new LodWorkerPool(this.seed, this.worldType, this._lodMaxWorkers);
+    // Prefer the real-world module workers (exact terrain/structures/roads); fall back to the procedural blob pool.
+    const wp = this._ensureWorldPool();
+    if (wp) {
+      this._lodPool = wp;
+      this.shaderUniforms.uLodGain.value = this.textures && this.textures._lodPalette && this.textures._lodPalette.top[BLOCK.GRASS] ? LOD_PALETTE_LIGHT_GAIN : 1.0;
+      return wp;
+    }
+    this.shaderUniforms.uLodGain.value = 1.0;
+    if (!this._lodPool || this._lodPool instanceof WorldWorkerPool) {
+      this._lodPool = new LodWorkerPool(this.seed, this.worldType, this._lodMaxWorkers, this.generateStructures);
     }
     return this._lodPool;
   }
@@ -8081,7 +8755,7 @@ export class World {
     }
 
     const pool = this._ensureLodPool();
-    const isTouchLOD = this.maxDetailRadius <= 6;
+    const isTouchLOD = this._lowPower || this.maxDetailRadius <= 6;
 
     // Re-evaluate zero-overlap 7-tier Quadtree LOD partition every 2 chunks or on renderDistance change!
     // T0=1m (4x4ch), T1=2m (8x8ch), T2=4m (16x16ch), T3=8m (32x32ch), T4=16m (64x64ch), T5=32m (128x128ch), T6=64m (256x256ch -> 1024ch!)
@@ -8095,9 +8769,18 @@ export class World {
 
       const TIER_CHUNKS = [4, 8, 16, 32, 64, 128, 256];
       // Logarithmic split thresholds: ultra-lean ~95-115 frustum draw calls on iPad even at 1024 chunks (16.4 km!)
-      const SPLIT_DIST = isTouchLOD
-        ? [0, 13, 30, 68, 152, 310, 620]
-        : [0, 20, 48, 100, 208, 390, 720];
+      // The full-detail ring now reaches 16 chunks, so the finest 1m real-data tier starts right at the
+      // hand-off and each tier keeps ~2x the previous reach (more detail near, fewer tiles far).
+      // Each coarser tier reaches ~1.8x further (< 2x) so tile counts shrink with distance: ~350 tiles
+      // total at 1024 chunks instead of ~1,100, while 1m real-data tiles still cover the first ~8 LOD chunks.
+      const lowPreset = this.shaderMode === 'low';
+      const nearBase = Math.max(detailR + (lowPreset ? 6 : 8), lowPreset ? 22 : (isTouchLOD ? 24 : 28));
+      const grow = lowPreset ? 1.8 : 1.9;
+      const SPLIT_DIST = [0, nearBase];
+      for (let t = 2; t <= 6; t++) SPLIT_DIST.push(SPLIT_DIST[t - 1] * grow);
+      // Split on a point a quarter-tile inside the tile's nearest edge: avoids splitting big tiles that only
+      // graze the threshold (that overshoot used to roughly double the fine-tier tile count).
+      const SPLIT_BIAS = 0.25;
       const clampedRD = Math.min(1024, fullRD);
       const maxDistLimit = clampedRD + 2;
       const innerCullDist = Math.max(0, detailR - 2.4);
@@ -8134,7 +8817,7 @@ export class World {
         if (maxDist < innerCullDist) return;
 
         // Subdivide into 4 finer children if close enough!
-        if (tier > 0 && minDist < SPLIT_DIST[tier]) {
+        if (tier > 0 && minDist + span * SPLIT_BIAS < SPLIT_DIST[tier]) {
           const cx0 = rx * 2;
           const cz0 = rz * 2;
           const nt = tier - 1;
@@ -8240,10 +8923,19 @@ export class World {
     // 2. Mount completed worker geometries onto scene (paced gently on iPad so WebGL uploads never stutter!)
     if (pool.readyResults.length > 0) {
       let mounted = 0;
-      const maxMountPerFrame = isTouchLOD ? 6 : 12;
-      while (pool.readyResults.length > 0 && mounted < maxMountPerFrame) {
+      const maxMountPerFrame = isTouchLOD ? 4 : 10;
+      const tMount = performance.now();
+      while (pool.readyResults.length > 0 && mounted < maxMountPerFrame && (mounted === 0 || performance.now() - tMount < 1.5)) {
         const res = pool.readyResults.shift();
-        if (!this._lodActiveKeys.has(res.key) || this.lodRegions.has(res.key)) continue;
+        if (!this._lodActiveKeys.has(res.key)) continue;
+        if (this.lodRegions.has(res.key)) {
+          if (!this._lodRebuildKeys.has(res.key)) continue;
+          this._lodRebuildKeys.delete(res.key);
+          const old = this.lodRegions.get(res.key);
+          this.lodGroup.remove(old.mesh);
+          old.mesh.geometry.dispose();
+          this.lodRegions.delete(res.key);
+        }
         const mesh = this._mountLodResult(res, this._lodInnerKeys.has(res.key));
         if (mesh) {
           this.lodGroup.add(mesh);
@@ -8752,6 +9444,13 @@ export class World {
       this._lodPool.dispose();
       this._lodPool = null;
     }
+    if (this._wpool) {
+      this._wpool.dispose();
+      this._wpool = null;
+    }
+    for (const bk of Array.from(this._batches.keys())) this._disposeBatch(bk);
+    this._batchDirty.clear();
+    this._meshInFlight.clear();
     this.lightSources.clear();
     this._activeLightSources = [];
     this.leafDecayQueue.clear();

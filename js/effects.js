@@ -273,7 +273,7 @@ export class EffectsManager {
   }
 
   // Spawn a live bouncing, flashing, hissing Primed TNT 3D Entity!
-  spawnPrimedTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null) {
+  spawnPrimedTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null, remote = false) {
     const mesh = new THREE.Mesh(this.tntGeo, this.tntMat);
     mesh.position.set(x, y, z);
     mesh.castShadow = true;
@@ -289,8 +289,30 @@ export class EffectsManager {
       ),
       fuse,
       maxFuse: fuse,
-      sparkCd: 0
+      sparkCd: 0,
+      // Remote TNT (ignited by another multiplayer client) is only a visual: its owner decides where it
+      // actually explodes and broadcasts that, so every client carves the identical crater.
+      remote
     });
+  }
+
+  // Remove the remote primed TNT closest to (x, y, z) once its owner's explosion arrives.
+  claimRemoteTnt(x, y, z, maxDist = 10) {
+    let best = -1;
+    let bestD = maxDist * maxDist;
+    for (let i = 0; i < this.primedTnts.length; i++) {
+      const t = this.primedTnts[i];
+      if (!t.remote) continue;
+      const d = t.pos.distanceToSquared({ x, y, z });
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0) {
+      this.burstGroup.remove(this.primedTnts[best].mesh);
+      this.primedTnts.splice(best, 1);
+    }
   }
 
   // Dramatic 3D Explosion: White-hot Fireball + Expanding Shockwave Ring + Billowing Smoke + Flying Sparks!
@@ -434,6 +456,14 @@ export class EffectsManager {
         });
       }
 
+      if (t.remote) {
+        // Wait (briefly) for the owner's authoritative explosion; drop silently if it never comes.
+        if (t.fuse <= -2.5) {
+          this.burstGroup.remove(t.mesh);
+          this.primedTnts.splice(i, 1);
+        }
+        continue;
+      }
       if (t.fuse <= 0) {
         this.burstGroup.remove(t.mesh);
         this.primedTnts.splice(i, 1);

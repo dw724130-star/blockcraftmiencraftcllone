@@ -125,7 +125,7 @@ const LARGE_TYPES = new Set(['welcome', 'chest']);
 
 // World-changing packets a guest receives while its world is still loading are queued and
 // replayed afterwards (previously dropped -> permanent desync for edits made during a join).
-const PRELOAD_QUEUE_TYPES = new Set(['blk', 'door', 'gate', 'stair', 'lad', 'fluid', 'tnt', 'chest', 'time', 'dead', 'chat']);
+const PRELOAD_QUEUE_TYPES = new Set(['blk', 'door', 'gate', 'stair', 'lad', 'fluid', 'tnt', 'boom', 'chest', 'time', 'dead', 'chat']);
 const PRELOAD_QUEUE_MAX = 20000;
 
 // Compact pose flag bitfield (replaces 8 separate JSON keys per packet).
@@ -207,6 +207,7 @@ export class MultiplayerManager {
     this._chunkSeq = 0;
     this._chunkBufs = new Map();
     this._onChunkProgress = null;
+    this._outbox = [];
     this.onStateChange = null;
   }
 
@@ -238,6 +239,7 @@ export class MultiplayerManager {
     this._lastAppearanceSig = '';
     this._chunkBufs.clear();
     this._preloadQueue.length = 0;
+    this._outbox = [];
   }
 
   // --- HOST A MULTIPLAYER WORLD (called from Settings -> "Multiplayer World") ---
@@ -820,14 +822,31 @@ export class MultiplayerManager {
     }
   }
 
+  // Actions are batched per frame into one 'bun' packet (bed = 2 blocks, explosions, fast building...),
+  // flushed from update() before the pose packet so ordering is preserved.
   _sendAction(msg) {
     if (!this.isActive() || this._suppressBroadcast) return;
     msg.id = this.localId;
-    if (this.role === 'host') {
-      this._broadcastRaw(msg);
-    } else {
-      this._sendToHost(msg);
+    if (LARGE_TYPES.has(msg.t)) {
+      this._flushOutbox();
+      this._sendNow(msg);
+      return;
     }
+    this._outbox.push(msg);
+    if (this._outbox.length >= 48) this._flushOutbox();
+  }
+
+  _sendNow(pkt) {
+    if (this.role === 'host') this._broadcastRaw(pkt);
+    else this._sendToHost(pkt);
+  }
+
+  _flushOutbox() {
+    const box = this._outbox;
+    if (box.length === 0) return;
+    this._outbox = [];
+    if (!this.isActive()) return;
+    this._sendNow(box.length === 1 ? box[0] : { t: 'bun', id: this.localId, m: box });
   }
 
   // --- PUBLIC GAME ACTION BROADCASTERS ---
@@ -857,6 +876,10 @@ export class MultiplayerManager {
 
   sendTnt(x, y, z, fuse = 2.6) {
     this._sendAction({ t: 'tnt', x: x | 0, y: y | 0, z: z | 0, fu: r2(fuse) });
+  }
+
+  sendBoom(x, y, z, radius, chain) {
+    this._sendAction({ t: 'boom', x: r2(x), y: r2(y), z: r2(z), r: r2(radius), c: chain && chain.length ? chain : undefined });
   }
 
   sendChest(key, slots) {
@@ -899,8 +922,19 @@ export class MultiplayerManager {
   }
 
   // --- INCOMING PACKET DISPATCHER ---
-  _handleIncoming(msg, senderKey, conn = null, viaBc = false) {
+  _handleIncoming(msg, senderKey, conn = null, viaBc = false, noRelay = false) {
     const type = msg.t;
+
+    // Per-frame action bundle: relay once as a whole, then apply each action in order.
+    if (type === 'bun') {
+      if (!Array.isArray(msg.m)) return;
+      if (this.role === 'host' && !noRelay) this._broadcastRaw(msg, msg.id || senderKey);
+      for (const m of msg.m) {
+        if (!m || typeof m !== 'object' || m.t === 'bun' || m.t === 'hello' || m.t === 'welcome' || m.t === 'chk') continue;
+        this._handleIncoming(m, senderKey, conn, viaBc, true);
+      }
+      return;
+    }
 
     // 0. Reassemble chunked large payloads (world snapshot, big chests)
     if (type === 'chk') {
@@ -998,7 +1032,7 @@ export class MultiplayerManager {
     if (type === 'ka') return;
 
     // Host relays packets to all other connected guests!
-    if (this.role === 'host' && type !== 'welcome' && type !== 'hello') {
+    if (this.role === 'host' && !noRelay && type !== 'welcome' && type !== 'hello') {
       this._broadcastRaw(msg, senderId);
     }
 
@@ -1111,7 +1145,9 @@ export class MultiplayerManager {
         if (msg.op === 'place') w.placeFluidSource(msg.x, msg.y, msg.z, msg.b);
         else w.pickupFluidSource(msg.x, msg.y, msg.z);
       } else if (type === 'tnt') {
-        this.game.igniteTnt(msg.x, msg.y, msg.z, msg.fu || 2.6);
+        this.game.igniteTnt(msg.x, msg.y, msg.z, msg.fu || 2.6, null, null, null, true);
+      } else if (type === 'boom') {
+        this.game.applyRemoteExplosion(msg);
       } else if (type === 'chest' && msg.k && Array.isArray(msg.s)) {
         w.chests.set(msg.k, msg.s);
         if (this.game.ui?.activeModal === 'chest-modal' && this.game.ui.activeChestPos === msg.k) {
@@ -1330,7 +1366,8 @@ export class MultiplayerManager {
     if (!this.isActive() || !this.game || !this.game.player) return;
     if (this.role === 'guest' && !this._worldReady) return;
 
-    // 1. Send compact local pose update (only when something changed, plus a keepalive)
+    // 1. Flush this frame's batched actions, then the compact pose update (changed-only + keepalive)
+    this._flushOutbox();
     this._sendLocalPose(dt);
 
     // 2. Host syncs time & weather every 3 seconds

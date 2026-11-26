@@ -313,6 +313,7 @@ class BlockCraftGame {
   }
 
   cleanupScene() {
+    this._respawnStream = null;
     if (this.multiplayer) this.multiplayer.clearRemotePlayers();
     if (this.player && this.player.detachFromScene) this.player.detachFromScene(this.scene);
     while (this.camera.children.length > 0) {
@@ -514,7 +515,9 @@ class BlockCraftGame {
         seed: meta.seed,
         worldType: meta.worldType,
         renderDistance: this.settings.renderDistance,
-        maxDetailRadius: this.isTouch ? 5 : 10,
+        // Full-detail voxel chunks out to 16 chunks; the real-data LOD ring takes over beyond that.
+        maxDetailRadius: 16,
+        lowPower: this.isTouch,
         shaders: shaderMode,
         generateStructures: meta.generateStructures !== false
       });
@@ -697,6 +700,12 @@ class BlockCraftGame {
           try { document.exitPointerLock(); } catch {}
         }
         this.ui.showDeathScreen(reason);
+        // Far from spawn? Start streaming the spawn area right away while the death screen is up,
+        // so respawning lands in fully built terrain instead of watching LODs turn into chunks.
+        if (this._isFarFromSpawn()) {
+          this._respawnStream = { x: this.player.spawnPos.x, z: this.player.spawnPos.z };
+          document.getElementById('death-screen')?.classList.add('death-far');
+        }
       };
       this.player.onRespawn = () => {
         this.multiplayer?.sendDeathState(false);
@@ -757,6 +766,50 @@ class BlockCraftGame {
     } finally {
       this._loadingWorld = false;
       this.ui.showLoadingScreen(false);
+    }
+  }
+
+  _isFarFromSpawn() {
+    if (!this.player || !this.world) return false;
+    const dx = this.player.pos.x - this.player.spawnPos.x;
+    const dz = this.player.pos.z - this.player.spawnPos.z;
+    const detailBlocks = Math.min(this.world.maxDetailRadius, this.settings.renderDistance) * 16;
+    return dx * dx + dz * dz > (detailBlocks * 0.45) * (detailBlocks * 0.45);
+  }
+
+  // Respawn / teleport-to-spawn that never shows the LOD -> chunk build-up: stream the spawn area first
+  // (behind the death screen or a short loading veil), then move the player and snap the LOD blend ring.
+  async requestRespawn() {
+    if (!this.player || !this.world || this._respawning) return;
+    this._respawning = true;
+    try {
+      const sp = this.player.spawnPos;
+      if (!this._respawnStream && this._isFarFromSpawn()) {
+        this._respawnStream = { x: sp.x, z: sp.z };
+      }
+      if (this._respawnStream) {
+        const target = Math.min(10, this.world.maxDetailRadius, this.settings.renderDistance) - 0.6;
+        const t0 = performance.now();
+        let veil = false;
+        while (this.running && this.world && this.world.getReadyRadius() < target && performance.now() - t0 < 8000) {
+          if (!veil) {
+            veil = true;
+            this.ui.showLoadingScreen(true, 0.1, 'Loading spawn area...', this.worldMeta?.name || '');
+          } else {
+            this.ui.showLoadingScreen(true, Math.max(0.1, this.world.getReadyRadius() / target), 'Loading spawn area...');
+          }
+          await new Promise((r) => requestAnimationFrame(r));
+        }
+        if (veil) this.ui.showLoadingScreen(false);
+      }
+      if (!this.player) return;
+      this.player.respawn();
+      if (this._respawnStream && this.world) this.world._snapReadyBlend = true;
+      this._respawnStream = null;
+      document.getElementById('death-screen')?.classList.remove('death-far');
+      this.controls.enabled = true;
+    } finally {
+      this._respawning = false;
     }
   }
 
@@ -1349,18 +1402,24 @@ class BlockCraftGame {
     };
   }
 
-  igniteTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null) {
+  igniteTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null, remote = false) {
     this.world.setBlock(x, y, z, BLOCK.AIR, true);
-    this.multiplayer?.sendTnt(x, y, z, fuse);
+    if (!remote) this.multiplayer?.sendTnt(x, y, z, fuse);
     if (this.sound.playFuse) this.sound.playFuse();
     if (this.effects && this.effects.spawnPrimedTnt) {
-      this.effects.spawnPrimedTnt(x + 0.5, y + 0.5, z + 0.5, fuse, vx, vy, vz);
-    } else {
-      this.triggerExplosion(x + 0.5, y + 0.5, z + 0.5, 4.5);
+      this.effects.spawnPrimedTnt(x + 0.5, y + 0.5, z + 0.5, fuse, vx, vy, vz, remote);
+    } else if (!remote) {
+      this.triggerExplosion(x + 0.5, y + 0.5, z + 0.5, 4.5, { broadcast: true });
     }
   }
 
-  triggerExplosion(x, y, z, radius = 4.5) {
+  // Authoritative explosion from another multiplayer client: same center & chain launches => same crater.
+  applyRemoteExplosion(msg) {
+    if (this.effects && this.effects.claimRemoteTnt) this.effects.claimRemoteTnt(msg.x, msg.y, msg.z);
+    this.triggerExplosion(msg.x, msg.y, msg.z, msg.r || 4.5, { remoteChain: Array.isArray(msg.c) ? msg.c : [] });
+  }
+
+  triggerExplosion(x, y, z, radius = 4.5, opts = null) {
     this.sound.playExplosion();
     if (this.effects && this.effects.spawnExplosion) {
       this.effects.spawnExplosion(x, y, z, radius);
@@ -1371,22 +1430,38 @@ class BlockCraftGame {
     const chainTnt = res.chainTnt || [];
 
     // Launch nearby TNT blocks as flying chain-reaction Primed TNT!
-    for (const ct of chainTnt) {
-      const dx = ct.x - x;
-      const dy = ct.y - y;
-      const dz = ct.z - z;
-      const d = Math.max(0.5, Math.hypot(dx, dy, dz));
-      const launchSpd = 4.5 + Math.random() * 4.0;
-      const chainFuse = 0.45 + Math.random() * 0.55;
-      if (this.sound.playFuse) this.sound.playFuse();
-      if (this.effects && this.effects.spawnPrimedTnt) {
-        this.effects.spawnPrimedTnt(
-          ct.x, ct.y, ct.z, chainFuse,
-          (dx / d) * launchSpd,
-          3.8 + Math.random() * 3.5,
-          (dz / d) * launchSpd
-        );
+    const remoteChain = opts && opts.remoteChain;
+    const chainOut = [];
+    if (remoteChain) {
+      // Mirror the owner's chain TNT exactly (visual only; the owner broadcasts where each one blows)
+      for (let i = 0; i + 6 < remoteChain.length; i += 7) {
+        if (this.effects && this.effects.spawnPrimedTnt) {
+          this.effects.spawnPrimedTnt(remoteChain[i], remoteChain[i + 1], remoteChain[i + 2], remoteChain[i + 6],
+            remoteChain[i + 3], remoteChain[i + 4], remoteChain[i + 5], true);
+        }
       }
+      if (remoteChain.length > 0 && this.sound.playFuse) this.sound.playFuse();
+    } else {
+      for (const ct of chainTnt) {
+        const dx = ct.x - x;
+        const dy = ct.y - y;
+        const dz = ct.z - z;
+        const d = Math.max(0.5, Math.hypot(dx, dy, dz));
+        const launchSpd = 4.5 + Math.random() * 4.0;
+        const chainFuse = 0.45 + Math.random() * 0.55;
+        const vx = (dx / d) * launchSpd;
+        const vy = 3.8 + Math.random() * 3.5;
+        const vz = (dz / d) * launchSpd;
+        if (this.sound.playFuse) this.sound.playFuse();
+        if (this.effects && this.effects.spawnPrimedTnt) {
+          this.effects.spawnPrimedTnt(ct.x, ct.y, ct.z, chainFuse, vx, vy, vz);
+        }
+        const r2 = (n) => Math.round(n * 100) / 100;
+        chainOut.push(r2(ct.x), r2(ct.y), r2(ct.z), r2(vx), r2(vy), r2(vz), r2(chainFuse));
+      }
+    }
+    if (opts && opts.broadcast && this.multiplayer && this.multiplayer.isActive()) {
+      this.multiplayer.sendBoom(x, y, z, radius, chainOut);
     }
 
     // Spawn flying block debris & item drops from crater
@@ -2007,9 +2082,12 @@ class BlockCraftGame {
       this.updateEating(dt, input.using && !input.breaking, useMode, eye, dir);
       if (this._spawnBoostTimer > 0) this._spawnBoostTimer = Math.max(0, this._spawnBoostTimer - dt);
       const boostExtra = this._spawnBoostTimer > 0 ? 2 : 0;
-      const maxBuilds = (this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2)) + boostExtra;
-      const chunkBudgetMs = (this.isTouch ? 3.5 : 4.2) + (this._spawnBoostTimer > 0 ? 2.5 : 0);
-      this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
+      // While respawning far away, stream the spawn area (hidden behind the death screen / loading veil)
+      const rs = this._respawnStream;
+      const maxBuilds = rs ? 4 : ((this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2)) + boostExtra);
+      // Generation & streaming meshing run in workers now; the main-thread budget only covers edits/applies.
+      const chunkBudgetMs = rs ? 12 : ((this.isTouch ? 2.6 : 3.4) + (this._spawnBoostTimer > 0 ? 2.5 : 0));
+      this.world.updateChunksAround(rs ? rs.x : this.player.pos.x, rs ? rs.z : this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
       if (this.multiplayer) this.multiplayer.update(dt);
       this.world.updateFurnaces(dt);
       this.world.updateLeafDecay(dt, this.player.pos);
@@ -2055,8 +2133,8 @@ class BlockCraftGame {
         this.world.updateTorchLights(dt, this.player.pos, this.sky);
       }
       if (!this._tntExplodeCb) {
-        this._tntExplodeCb = (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5);
-        this._mobExplodeCb = (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r);
+        this._tntExplodeCb = (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5, { broadcast: true });
+        this._mobExplodeCb = (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r, { broadcast: true });
       }
       if (this.effects) {
         this.effects.updatePrimedTnts(dt, this.world, this._tntExplodeCb);

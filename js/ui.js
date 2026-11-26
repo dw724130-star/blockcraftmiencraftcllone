@@ -608,10 +608,10 @@ export class UIManager {
         if (this.game.setGameMode(next)) this.closeModals();
       }
     });
-    document.getElementById('btn-respawn-spawn').addEventListener('click', () => {
+    document.getElementById('btn-respawn-spawn').addEventListener('click', async () => {
       if (this.game) {
-        this.game.player.respawn();
         this.closeModals();
+        await this.game.requestRespawn();
         this.toast('Teleported to spawn');
       }
     });
@@ -772,12 +772,11 @@ export class UIManager {
     });
 
     // Death screen
-    document.getElementById('btn-death-respawn').addEventListener('click', () => {
-      document.getElementById('death-screen').classList.add('hidden');
+    document.getElementById('btn-death-respawn').addEventListener('click', async () => {
       if (this.game) {
-        this.game.player.respawn();
-        this.game.controls.enabled = true;
+        await this.game.requestRespawn();
       }
+      document.getElementById('death-screen').classList.add('hidden');
     });
     document.getElementById('btn-death-title').addEventListener('click', () => {
       document.getElementById('death-screen').classList.add('hidden');
