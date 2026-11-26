@@ -5,6 +5,7 @@ import { SEA_LEVEL } from './world.js';
 // Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
 const _scratchV1 = new THREE.Vector3();
 const _scratchV2 = new THREE.Vector3();
+const MOB_SHADOW_DIST = 28;
 
 function lerpAngle(cur, target, t) {
   let diff = target - cur;
@@ -2348,6 +2349,18 @@ export class EntityManager {
       if (distToPlayer > despawnDist || m.pos.y < -5) {
         this.removeMob(m);
         continue;
+      }
+
+      // Only nearby mobs cast shadows: every body part is a separate draw call in BOTH sun
+      // shadow cascades, and distant mob shadows are a few texels at most. Hysteresis avoids flicker.
+      const wantShadow = m._castsShadow === false ? distToPlayer < MOB_SHADOW_DIST - 4 : distToPlayer < MOB_SHADOW_DIST;
+      if (m._castsShadow !== wantShadow && m.mesh) {
+        m._castsShadow = wantShadow;
+        m.mesh.traverse((o) => {
+          if (!o.isMesh) return;
+          if (o._baseCastShadow === undefined) o._baseCastShadow = o.castShadow;
+          o.castShadow = wantShadow && o._baseCastShadow;
+        });
       }
 
       // Performance: throttle distant calm mobs (> 42m) to half update rate!

@@ -552,9 +552,21 @@ class BlockCraftGame {
       // Restore modified blocks & tile entities before preloading spawn chunks
       if (saved) {
         if (Array.isArray(saved.modifiedBlocks)) {
+          const mbMap = this.world.modifiedBlocks;
           for (const [k, v] of saved.modifiedBlocks) {
-            this.world.modifiedBlocks.set(k, v);
-            const [mx, my, mz] = k.split(',').map(Number);
+            mbMap.set(k, v);
+            const c1 = k.indexOf(',');
+            const c2 = k.indexOf(',', c1 + 1);
+            this.world.indexModifiedBlock(+k.slice(0, c1), +k.slice(c1 + 1, c2), +k.slice(c2 + 1), v);
+          }
+        }
+        // Compact multiplayer snapshot form: flat [x,y,z,id, ...]
+        if (Array.isArray(saved.modifiedBlocksFlat)) {
+          const flat = saved.modifiedBlocksFlat;
+          const mbMap = this.world.modifiedBlocks;
+          for (let i = 0; i + 3 < flat.length; i += 4) {
+            const mx = flat[i], my = flat[i + 1], mz = flat[i + 2], v = flat[i + 3];
+            mbMap.set(`${mx},${my},${mz}`, v);
             this.world.indexModifiedBlock(mx, my, mz, v);
           }
         }
@@ -786,6 +798,7 @@ class BlockCraftGame {
       time: snapshot.time,
       dayCount: snapshot.dayCount,
       modifiedBlocks: snapshot.modifiedBlocks || [],
+      modifiedBlocksFlat: Array.isArray(snapshot.mb) ? snapshot.mb : null,
       chests: snapshot.chests || [],
       furnaces: snapshot.furnaces || [],
       doorStates: snapshot.doorStates || [],
@@ -1812,12 +1825,18 @@ class BlockCraftGame {
   }
 
   loop(now) {
-    requestAnimationFrame((t) => this.loop(t));
+    if (!this._loopCb) this._loopCb = (t) => this.loop(t);
+    requestAnimationFrame(this._loopCb);
     // Self-healing iPad PWA / Safari orientation & app-resume aspect guard (impossible to stay stretched!)
-    const curW = Math.max(1, Math.round((this.container && this.container.clientWidth) || window.innerWidth));
-    const curH = Math.max(1, Math.round((this.container && this.container.clientHeight) || window.innerHeight));
-    if (curW !== this._lastViewW || curH !== this._lastViewH) {
-      this.onResize();
+    // resize/orientation/visualViewport listeners handle the normal case; this safety-net poll only
+    // needs to run a few times per second (reading clientWidth every frame can force a layout).
+    this._viewCheckFrame = ((this._viewCheckFrame || 0) + 1) % 15;
+    if (this._viewCheckFrame === 0) {
+      const curW = Math.max(1, Math.round((this.container && this.container.clientWidth) || window.innerWidth));
+      const curH = Math.max(1, Math.round((this.container && this.container.clientHeight) || window.innerHeight));
+      if (curW !== this._lastViewW || curH !== this._lastViewH) {
+        this.onResize();
+      }
     }
     const rawDtMs = now - this.lastTime;
     const dt = Math.min(0.05, rawDtMs / 1000);
@@ -2035,11 +2054,15 @@ class BlockCraftGame {
       if (this.world.updateTorchLights) {
         this.world.updateTorchLights(dt, this.player.pos, this.sky);
       }
+      if (!this._tntExplodeCb) {
+        this._tntExplodeCb = (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5);
+        this._mobExplodeCb = (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r);
+      }
       if (this.effects) {
-        this.effects.updatePrimedTnts(dt, this.world, (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5));
+        this.effects.updatePrimedTnts(dt, this.world, this._tntExplodeCb);
         this.effects.update(dt, this.player.pos, curBiome, this.sky.isNight());
       }
-      this.entities.update(dt, this.player, this.sky, (ex, ey, ez, r) => this.triggerExplosion(ex, ey, ez, r), this.mods, gameRules, this.effects);
+      this.entities.update(dt, this.player, this.sky, this._mobExplodeCb, this.mods, gameRules, this.effects);
 
       // Brief tactile camera shake during nearby TNT / Creeper blasts!
       if (this._shakeTimer > 0) {

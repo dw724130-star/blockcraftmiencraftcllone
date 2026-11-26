@@ -6584,6 +6584,7 @@ export class World {
     const c = this.chunks.get(this.chunkKey(cx, cz));
     if (c) {
       c.dirty = true;
+      c._editPriority = true;
       if (!c.queued) {
         c.queued = true;
         // Player block edits jump straight to the front for instant 0-latency feedback!
@@ -7852,25 +7853,39 @@ export class World {
 
     // 2. Build dirty chunk meshes within the remaining frame budget (zero lag spikes!)
     if (this.meshQueue.length > 0) {
-      if (this.meshQueue.length > 2) {
+      if (this.meshQueue.length > 1) {
+        // Block edits (local or from multiplayer peers) first, then nearest-first streaming.
         this.meshQueue.sort((a, b) => {
-          const da = (a.cx - pcx) ** 2 + (a.cz - pcz) ** 2;
-          const db = (b.cx - pcx) ** 2 + (b.cz - pcz) ** 2;
-          return da - db;
+          const pa = a._editPriority ? 1 : 0;
+          const pb = b._editPriority ? 1 : 0;
+          if (pa !== pb) return pb - pa;
+          const ax = a.cx - pcx, az = a.cz - pcz, bx = b.cx - pcx, bz = b.cz - pcz;
+          return (ax * ax + az * az) - (bx * bx + bz * bz);
         });
       }
 
+      // Predictive budget: only start another build if the running average says it fits.
+      // (Previously the check ran *after* each ~6ms build, so frames routinely overshot to 20ms+.)
       let built = 0;
+      let avgMs = this._meshAvgMs || 5;
       while (this.meshQueue.length > 0 && built < maxBuildsPerFrame) {
+        const elapsed = performance.now() - tStart;
+        const head = this.meshQueue[0];
+        if (built > 0 && elapsed + avgMs > budgetMs) break;
+        // Generation already ate the whole budget: defer streaming builds (never edits) a frame.
+        if (built === 0 && elapsed >= budgetMs && head && !head._editPriority) break;
         const chunk = this.meshQueue.shift();
         if (!chunk) continue;
         chunk.queued = false;
         if (chunk.dirty && this.chunks.has(chunk.key)) {
+          const t0 = performance.now();
           this.buildChunkMesh(chunk);
+          avgMs = avgMs * 0.8 + (performance.now() - t0) * 0.2;
           built++;
-          if (performance.now() - tStart >= budgetMs) break;
         }
+        chunk._editPriority = false;
       }
+      this._meshAvgMs = avgMs;
     }
 
     // 3. Only check unload & update nearby shadow casters when crossing a chunk border!
