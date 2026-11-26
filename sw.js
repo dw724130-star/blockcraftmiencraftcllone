@@ -1,4 +1,4 @@
-const CACHE_NAME = 'blockcraft-v41';
+const CACHE_NAME = 'blockcraft-v42';
 const ASSETS = [
   './',
   './index.html',

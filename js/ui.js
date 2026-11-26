@@ -1193,6 +1193,11 @@ export class UIManager {
     if (el) el.classList.toggle('hidden', !isLava);
   }
 
+  setOnFire(isBurning) {
+    const el = document.getElementById('fire-overlay');
+    if (el) el.classList.toggle('hidden', !isBurning);
+  }
+
   playSleepTransition() {
     const el = document.getElementById('sleep-overlay');
     if (!el) return;
@@ -2463,21 +2468,36 @@ export class UIManager {
 
     ctx.drawImage(this._mmBgCanvas, 0, 0);
 
-    // Draw nearby villages as gold markers
+    // Draw nearby villages as gold markers (and Underground Villages as bright cyan-teal diamonds!)
     let nearestVDist = Infinity;
+    let nearestVLabel = 'Village';
     for (const v of world.villageChunks.values()) {
       const dx = (v.x - px) / scale;
       const dz = (v.z - pz) / scale;
       const dist = Math.hypot(v.x - px, v.z - pz);
-      if (dist < nearestVDist) nearestVDist = dist;
+      if (dist < nearestVDist) {
+        nearestVDist = dist;
+        nearestVLabel = v.isUnderground ? 'Underground Village' : 'Village';
+      }
       const mx = half + dx;
       const my = half + dz;
       if (mx >= 4 && mx <= w - 4 && my >= 4 && my <= h - 4) {
-        ctx.fillStyle = '#ffd54f';
-        ctx.fillRect(mx - 3, my - 3, 6, 6);
+        ctx.fillStyle = v.isUnderground ? '#22d3ee' : '#ffd54f';
         ctx.strokeStyle = '#000';
         ctx.lineWidth = 1;
-        ctx.strokeRect(mx - 3, my - 3, 6, 6);
+        if (v.isUnderground) {
+          ctx.beginPath();
+          ctx.moveTo(mx, my - 4.5);
+          ctx.lineTo(mx + 4.5, my);
+          ctx.lineTo(mx, my + 4.5);
+          ctx.lineTo(mx - 4.5, my);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else {
+          ctx.fillRect(mx - 3, my - 3, 6, 6);
+          ctx.strokeRect(mx - 3, my - 3, 6, 6);
+        }
       }
     }
 
@@ -2515,8 +2535,8 @@ export class UIManager {
       let hintTxt = biomeName;
       if (nearestMegaDist < 260 && nearestMegaDist <= nearestVDist + 40) {
         hintTxt = `${nearestMegaName} ${Math.round(nearestMegaDist)}m`;
-      } else if (nearestVDist < 200) {
-        hintTxt = `Village ${Math.round(nearestVDist)}m`;
+      } else if (nearestVDist < 240) {
+        hintTxt = `${nearestVLabel} ${Math.round(nearestVDist)}m`;
       }
       if (hintEl.textContent !== hintTxt) hintEl.textContent = hintTxt;
     }

@@ -34,7 +34,7 @@ function px(ctx, ox, oy, x, y, color, w = 1, h = 1) {
 }
 
 function keyIsSolidCubeIcon(key, def) {
-  return Boolean(def && def.isBlock && key !== 'bed' && !def.isDoor && !def.isFence && !def.isFenceGate);
+  return Boolean(def && def.isBlock && key !== 'bed' && !def.isDoor && !def.isFence && !def.isFenceGate && !def.isStair);
 }
 
 export class TextureManager {
@@ -154,8 +154,9 @@ export class TextureManager {
       if (name === 'iron_ore' || name === 'gold_ore' || name === 'diamond_ore' || name === 'coal_ore') {
         return { rough: 0.80, metal: 0.0, f0: 0.05, bump: 2.4, emit: name === 'diamond_ore' ? 0.18 : 0.0, ore: true };
       }
-      if (name === 'stone' || name === 'bedrock' || name === 'furnace_top' || name === 'furnace_front' || name.startsWith('sandstone')) {
-        return { rough: 0.78, metal: 0.0, f0: 0.06, bump: 2.1, emit: name === 'furnace_front' ? 0.35 : 0.0, ore: false };
+      if (name === 'stone' || name === 'bedrock' || name === 'furnace_top' || name === 'furnace_front' || name.startsWith('sandstone') ||
+          name.startsWith('deepslate') || name === 'granite' || name === 'diorite' || name === 'andesite' || name === 'tuff' || name.startsWith('basalt')) {
+        return { rough: name.startsWith('deepslate') || name.startsWith('basalt') ? 0.72 : 0.78, metal: 0.0, f0: 0.065, bump: 2.3, emit: name === 'furnace_front' ? 0.35 : 0.0, ore: false };
       }
       if (name.includes('planks') || name.includes('door') || name.includes('chest') || name.includes('craft') || name === 'bookshelf') {
         return { rough: 0.72, metal: 0.0, f0: 0.06, bump: 1.95, emit: 0.0, ore: false };
@@ -1075,6 +1076,123 @@ export class TextureManager {
         px(c, x, y, 12, 13, ds.knob, 2, 2);
       });
     }
+
+    // --- DEEPSLATE & 5 NEW STONE BLOCKS (Granite, Diorite, Andesite, Tuff, Basalt) ---
+    // 1. Deepslate (dark charcoal-blue layered metamorphic rock!)
+    this.addTile('deepslate_side', (c, x, y) => {
+      const tones = ['#2c2e35', '#363942', '#424652', '#4e5260', '#5b606f', '#24262c'];
+      for (let iy = 0; iy < 16; iy++) {
+        const layer = (iy % 4 === 0) ? -1 : ((iy % 4 === 2) ? 1 : 0);
+        for (let ix = 0; ix < 16; ix++) {
+          const h = pxHash(ix >> 1, iy, 161);
+          const f = pxHash(ix, iy, 162);
+          let idx = Math.floor(h * 4) + layer + (f > 0.75 ? 1 : (f < 0.2 ? -1 : 0));
+          idx = Math.max(0, Math.min(tones.length - 1, idx));
+          px(c, x, y, ix, iy, tones[idx]);
+        }
+      }
+      for (let i = 0; i < 10; i++) {
+        const sx = Math.floor(pxHash(i, 1, 163) * 11);
+        const sy = Math.floor(pxHash(i, 2, 163) * 16);
+        px(c, x, y, sx, sy, i % 2 === 0 ? '#1f2127' : '#656a7a', 4, 1);
+      }
+    });
+    this.addTile('deepslate_top', (c, x, y) => {
+      const tones = ['#2e3138', '#393d47', '#464a56', '#545966', '#25282e'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const ring = Math.max(Math.abs(ix - 7.5), Math.abs(iy - 7.5));
+          const h = pxHash(ix, iy, 164);
+          const idx = Math.min(4, Math.max(0, Math.floor((h * 0.7 + ((ring % 3) / 3) * 0.3) * 5)));
+          px(c, x, y, ix, iy, tones[idx]);
+        }
+      }
+      px(c, x, y, 2, 5, '#202229', 5, 1);
+      px(c, x, y, 9, 10, '#626775', 5, 1);
+    });
+
+    // 2. Granite (warm rosy terracotta-brown speckled igneous stone!)
+    this.addTile('granite', (c, x, y) => {
+      const tones = ['#7d5243', '#946352', '#a67461', '#b88570', '#694336', '#cfa493'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 165);
+          const fine = pxHash(ix, iy, 166);
+          if (fine > 0.90) px(c, x, y, ix, iy, '#dec1b4');
+          else if (fine < 0.12) px(c, x, y, ix, iy, '#57362b');
+          else px(c, x, y, ix, iy, tones[Math.min(5, Math.floor((clump * 0.55 + fine * 0.45) * 5))]);
+        }
+      }
+    });
+
+    // 3. Diorite (bright speckled white-ivory & dark mineral quartz rock!)
+    this.addTile('diorite', (c, x, y) => {
+      const tones = ['#b5b5b8', '#c8c8cc', '#d9d9de', '#e8e8ed', '#94949a'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 167);
+          const fine = pxHash(ix, iy, 168);
+          if (fine < 0.16) px(c, x, y, ix, iy, '#5e5f66');
+          else if (fine > 0.88) px(c, x, y, ix, iy, '#f4f4f8');
+          else px(c, x, y, ix, iy, tones[Math.min(4, Math.floor((clump * 0.6 + fine * 0.4) * 5))]);
+        }
+      }
+    });
+
+    // 4. Andesite (cool muted blue-grey mottled volcanic stone!)
+    this.addTile('andesite', (c, x, y) => {
+      const tones = ['#6c7073', '#7c8185', '#8b9094', '#9a9fa3', '#5c6063'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 169);
+          const fine = pxHash(ix, iy, 170);
+          if (fine > 0.88) px(c, x, y, ix, iy, '#aeb3b8');
+          else if (fine < 0.14) px(c, x, y, ix, iy, '#4e5255');
+          else px(c, x, y, ix, iy, tones[Math.min(4, Math.floor((clump * 0.55 + fine * 0.45) * 5))]);
+        }
+      }
+    });
+
+    // 5. Tuff (earthy olive-ash layered cave volcanic rock!)
+    this.addTile('tuff', (c, x, y) => {
+      const tones = ['#575950', '#66695e', '#75786c', '#828578', '#4a4c44'];
+      for (let iy = 0; iy < 16; iy++) {
+        for (let ix = 0; ix < 16; ix++) {
+          const clump = pxHash(ix >> 1, iy >> 1, 171);
+          const fine = pxHash(ix, iy, 172);
+          let idx = Math.min(4, Math.floor((clump * 0.6 + fine * 0.4) * 5));
+          px(c, x, y, ix, iy, tones[idx]);
+        }
+      }
+      for (let i = 0; i < 8; i++) {
+        px(c, x, y, Math.floor(pxHash(i, 1, 173) * 13), Math.floor(pxHash(i, 2, 173) * 15), i % 2 === 0 ? '#42443c' : '#909485', 3, 1);
+      }
+    });
+
+    // 6. Basalt (dark columnar volcanic basalt with vertical flutes & hexagonal top!)
+    this.addTile('basalt_side', (c, x, y) => {
+      const tones = ['#323238', '#3e3e45', '#4c4d57', '#5a5b66', '#25252a'];
+      for (let ix = 0; ix < 16; ix++) {
+        const groove = (ix % 4 === 0) ? -1 : ((ix % 4 === 2) ? 1 : 0);
+        for (let iy = 0; iy < 16; iy++) {
+          const h = pxHash(ix, iy >> 1, 174);
+          const f = pxHash(ix, iy, 175);
+          let idx = Math.floor(h * 4) + groove + (f > 0.76 ? 1 : (f < 0.2 ? -1 : 0));
+          idx = Math.max(0, Math.min(4, idx));
+          px(c, x, y, ix, iy, tones[idx]);
+        }
+      }
+    });
+    this.addTile('basalt_top', (c, x, y) => {
+      fillNoise(c, x, y, '#484952', 11, 176);
+      px(c, x, y, 0, 0, '#2c2d33', 16, 1);
+      px(c, x, y, 0, 15, '#2c2d33', 16, 1);
+      px(c, x, y, 0, 0, '#2c2d33', 1, 16);
+      px(c, x, y, 15, 0, '#2c2d33', 1, 16);
+      px(c, x, y, 3, 3, '#5d5f6b', 10, 10);
+      px(c, x, y, 5, 5, '#3b3c44', 6, 6);
+      px(c, x, y, 6, 6, '#696b78', 4, 4);
+    });
   }
 
   // Lazy on-demand 16x16 (32x32) icon caching — cuts initial startup time dramatically!
@@ -1174,7 +1292,38 @@ export class TextureManager {
           '................'
         ], pal);
       }
-      return finish();
+      return;
+    }
+
+    if (def && def.isStair) {
+      // Crisp 2-step Stair silhouette rendered directly from the material's own atlas tile!
+      const sideTile = this.getUV(def.faces.side || def.faces.all || def.faces.top);
+      const topTile = this.getUV(def.faces.top || def.faces.all || def.faces.side);
+      // Draw bottom full step (x: 2..30, y: 16..30)
+      c.drawImage(this.canvas, sideTile.ox, sideTile.oy + 8, 16, 8, 2, 16, 28, 14);
+      // Draw upper back step (x: 16..30, y: 2..16)
+      c.drawImage(this.canvas, sideTile.ox + 8, sideTile.oy, 8, 8, 16, 2, 14, 14);
+      // Top tread highlights (lower tread & upper tread)
+      c.drawImage(this.canvas, topTile.ox, topTile.oy, 8, 3, 2, 16, 14, 3);
+      c.drawImage(this.canvas, topTile.ox + 8, topTile.oy, 8, 3, 16, 2, 14, 3);
+      // Crisp bevel shading & stepped outline
+      c.fillStyle = 'rgba(255,255,255,0.22)';
+      c.fillRect(2, 16, 14, 2);
+      c.fillRect(16, 2, 14, 2);
+      c.fillStyle = 'rgba(0,0,0,0.20)';
+      c.fillRect(16, 16, 14, 14);
+      c.strokeStyle = 'rgba(0,0,0,0.68)';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.moveTo(2, 30);
+      c.lineTo(2, 16);
+      c.lineTo(16, 16);
+      c.lineTo(16, 2);
+      c.lineTo(30, 2);
+      c.lineTo(30, 30);
+      c.closePath();
+      c.stroke();
+      return;
     }
 
     if (def && def.isDoor && def.doorWood) {
@@ -2489,26 +2638,35 @@ export class TextureManager {
     const botUV = this.getUV(blockDef.faces.bottom || blockDef.faces.all || blockDef.faces.side);
     const sideUV = this.getUV(blockDef.faces.side || blockDef.faces.all || blockDef.faces.top);
 
-    const faces = [
-      { uv: topUV, n: [0, 1, 0], v: [[-h, h, h], [h, h, h], [h, h, -h], [-h, h, -h]] },
-      { uv: botUV, n: [0, -1, 0], v: [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]] },
-      { uv: sideUV, n: [1, 0, 0], v: [[h, -h, h], [h, -h, -h], [h, h, -h], [h, h, h]] },
-      { uv: sideUV, n: [-1, 0, 0], v: [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h]] },
-      { uv: sideUV, n: [0, 0, 1], v: [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]] },
-      { uv: sideUV, n: [0, 0, -1], v: [[h, -h, -h], [-h, -h, -h], [-h, h, -h], [h, h, -h]] }
-    ];
-
     const pos = [], norm = [], uv = [], idx = [];
     let base = 0;
-    for (const f of faces) {
-      const u = f.uv;
-      for (const pt of f.v) {
-        pos.push(pt[0], pt[1], pt[2]);
-        norm.push(f.n[0], f.n[1], f.n[2]);
+    const pushBox = (x0, y0, z0, x1, y1, z1) => {
+      const boxFaces = [
+        { uv: topUV, n: [0, 1, 0], v: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
+        { uv: botUV, n: [0, -1, 0], v: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
+        { uv: sideUV, n: [1, 0, 0], v: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
+        { uv: sideUV, n: [-1, 0, 0], v: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
+        { uv: sideUV, n: [0, 0, 1], v: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
+        { uv: sideUV, n: [0, 0, -1], v: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] }
+      ];
+      for (const f of boxFaces) {
+        const u = f.uv;
+        for (const pt of f.v) {
+          pos.push(pt[0], pt[1], pt[2]);
+          norm.push(f.n[0], f.n[1], f.n[2]);
+        }
+        uv.push(u.u0, u.v0, u.u1, u.v0, u.u1, u.v1, u.u0, u.v1);
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        base += 4;
       }
-      uv.push(u.u0, u.v0, u.u1, u.v0, u.u1, u.v1, u.u0, u.v1);
-      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-      base += 4;
+    };
+
+    if (blockDef.isStair) {
+      // Authentic 3D stepped-L stair model for held item & dropped stair items!
+      pushBox(-h, -h, -h, h, 0, h);
+      pushBox(-h, 0, -h, h, h, 0);
+    } else {
+      pushBox(-h, -h, -h, h, h, h);
     }
 
     const geo = new THREE.BufferGeometry();

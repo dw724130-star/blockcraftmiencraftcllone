@@ -2112,7 +2112,15 @@ export class EntityManager {
           const needed = Math.max(0, spawns.length - liveVil);
           for (let si = 0; si < needed; si++) {
             const [mType, ox, oz, prof] = spawns[si];
-            this._pendingVillageSpawns.push({ mType, sx: v.x + ox, sz: v.z + oz, baseY: v.y, prof, settlement: v });
+            this._pendingVillageSpawns.push({
+              mType,
+              sx: v.x + ox,
+              sz: v.z + oz,
+              baseY: v.y,
+              exactY: Boolean(v.exactY || v.isUnderground),
+              prof,
+              settlement: v
+            });
           }
         }
       }
@@ -2126,18 +2134,18 @@ export class EntityManager {
           ms.discovered = true;
           if (this.onDiscoverMega) this.onDiscoverMega(ms);
         }
-        if (d > 160 && ms.crowdSpawned) {
+        if (d > 190 && ms.crowdSpawned) {
           ms.crowdSpawned = false;
         }
-        // Only spawn once player is within loaded chunk radius (< 82m) AND center chunk is actually loaded!
-        if (!ms.crowdSpawned && d < 82 && isChunkLoadedAt(ms.x, ms.z)) {
+        // Only spawn once player is within loaded chunk radius (< 108m) AND center chunk is actually loaded!
+        if (!ms.crowdSpawned && d < 108 && isChunkLoadedAt(ms.x, ms.z)) {
           let liveMega = 0;
           for (let mi = 0; mi < this.mobs.length; mi++) {
             const mm = this.mobs[mi];
-            if ((mm.def.villager || mm.def.golem) && Math.hypot(mm.pos.x - ms.x, mm.pos.z - ms.z) < (ms.radius + 12)) liveMega++;
+            if ((mm.def.villager || mm.def.golem) && Math.hypot(mm.pos.x - ms.x, mm.pos.z - ms.z) < (ms.radius + 16)) liveMega++;
           }
           ms.crowdSpawned = true;
-          if (liveMega < 16) {
+          if (liveMega < 56) {
             this._spawnMegaCrowd(ms, liveMega);
           }
         }
@@ -2148,7 +2156,7 @@ export class EntityManager {
     if (this._pendingVillageSpawns.length > 0) {
       let spawnedThisFrame = 0;
       let checked = 0;
-      while (spawnedThisFrame < 3 && checked < this._pendingVillageSpawns.length && checked < 12) {
+      while (spawnedThisFrame < 8 && checked < this._pendingVillageSpawns.length && checked < 24) {
         const sp = this._pendingVillageSpawns.shift();
         checked++;
         if (!isChunkLoadedAt(sp.sx, sp.sz)) {
@@ -2336,7 +2344,7 @@ export class EntityManager {
       }
       const distToPlayer = m.pos.distanceTo(player.pos);
 
-      const despawnDist = (m.def.villager || m.def.golem) ? 165 : 78;
+      const despawnDist = (m.def.villager || m.def.golem) ? 200 : 78;
       if (distToPlayer > despawnDist || m.pos.y < -5) {
         this.removeMob(m);
         continue;
@@ -3240,27 +3248,41 @@ export class EntityManager {
   }
 
   _spawnMegaCrowd(ms, existingCount = 0) {
-    // Spawn ALL REAL full-physics Villagers, Villager Soldiers & Iron Golems inside Castles & Pyramids!
-    const innerR = ms.innerRadius || 20;
-    const villagerTotal = Math.max(0, 24 - Math.floor(existingCount * 0.7));
-    const soldierTotal = Math.max(0, 6 - Math.floor(existingCount * 0.2));
-    const golemTotal = Math.max(0, 3 - Math.floor(existingCount * 0.1));
+    // Spawn bustling full-physics crowds of Villagers, Villager Soldiers & Iron Golems inside Great Pyramids & Mega Castles!
+    const innerR = ms.innerRadius || 24;
+    const isPyramid = ms.type === 'great_pyramid';
+    const targetVillagers = isPyramid ? 72 : 62;
+    const targetSoldiers = isPyramid ? 16 : 24;
+    const targetGolems = isPyramid ? 6 : 8;
+    const villagerTotal = Math.max(0, targetVillagers - Math.floor(existingCount * 0.72));
+    const soldierTotal = Math.max(0, targetSoldiers - Math.floor(existingCount * 0.20));
+    const golemTotal = Math.max(0, targetGolems - Math.floor(existingCount * 0.08));
 
-    const pickSafeSpot = (idx, minRad = 4.0) => {
-      for (let tries = 0; tries < 28; tries++) {
-        const mode = (idx + tries) % 3;
+    const pickSafeSpot = (idx, minRad = 3.5) => {
+      for (let tries = 0; tries < 36; tries++) {
+        const mode = (idx + tries) % 4;
         let rx, rz;
         if (mode === 0) {
-          rx = (Math.random() - 0.5) * 3.0;
-          rz = (Math.random() - 0.5) * (innerR * 1.75);
+          // North-South main avenue
+          rx = (Math.random() - 0.5) * 3.6;
+          rz = (Math.random() - 0.5) * (innerR * 1.9);
         } else if (mode === 1) {
-          rx = (Math.random() - 0.5) * (innerR * 1.75);
-          rz = (Math.random() - 0.5) * 3.0;
-        } else {
-          const ang = ((idx + tries * 0.37) / 14) * Math.PI * 2;
-          const rad = minRad + Math.random() * Math.max(2, innerR - minRad - 1.5);
+          // East-West main avenue
+          rx = (Math.random() - 0.5) * (innerR * 1.9);
+          rz = (Math.random() - 0.5) * 3.6;
+        } else if (mode === 2) {
+          // Courtyard plazas & inner market rings
+          const ang = ((idx + tries * 0.41) / 18) * Math.PI * 2;
+          const rad = minRad + Math.random() * Math.max(3, innerR - minRad - 1.0);
           rx = Math.cos(ang) * rad;
           rz = Math.sin(ang) * rad;
+        } else {
+          // Outer courtyard perimeter walkways
+          const side = (idx + tries) & 3;
+          const span = (Math.random() - 0.5) * (innerR * 1.65);
+          const edge = innerR * (0.72 + Math.random() * 0.20);
+          rx = side === 0 ? span : (side === 1 ? span : (side === 2 ? edge : -edge));
+          rz = side === 0 ? edge : (side === 1 ? -edge : span);
         }
         const tx = ms.x + rx;
         const tz = ms.z + rz;
@@ -3271,11 +3293,13 @@ export class EntityManager {
           return { x: tx, z: tz };
         }
       }
-      return { x: ms.x + ((idx % 5) - 2) * 2.5, z: ms.z + (Math.floor(idx / 5) - 2) * 2.5 };
+      const ang = (idx * 2.39996) % (Math.PI * 2);
+      const rad = 4.5 + (idx % 6) * 2.4;
+      return { x: ms.x + Math.cos(ang) * rad, z: ms.z + Math.sin(ang) * rad };
     };
 
     for (let i = 0; i < villagerTotal; i++) {
-      const pt = pickSafeSpot(i, 4.2);
+      const pt = pickSafeSpot(i, 3.8);
       this._pendingVillageSpawns.push({
         mType: 'villager',
         sx: pt.x,
@@ -3286,7 +3310,7 @@ export class EntityManager {
       });
     }
     for (let i = 0; i < soldierTotal; i++) {
-      const pt = pickSafeSpot(i + 40, 5.5);
+      const pt = pickSafeSpot(i + 80, 4.5);
       this._pendingVillageSpawns.push({
         mType: 'villager_soldier',
         sx: pt.x,
@@ -3297,7 +3321,7 @@ export class EntityManager {
       });
     }
     for (let i = 0; i < golemTotal; i++) {
-      const pt = pickSafeSpot(i + 80, 6.0);
+      const pt = pickSafeSpot(i + 160, 5.5);
       this._pendingVillageSpawns.push({
         mType: 'iron_golem',
         sx: pt.x,

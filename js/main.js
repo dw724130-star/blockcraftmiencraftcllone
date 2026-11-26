@@ -564,6 +564,9 @@ class BlockCraftGame {
         if (Array.isArray(saved.ladderStates)) {
           for (const [k, v] of saved.ladderStates) this.world.ladderStates.set(k, v);
         }
+        if (Array.isArray(saved.stairStates)) {
+          for (const [k, v] of saved.stairStates) this.world.stairStates.set(k, v);
+        }
       }
 
       this.sky = new SkySystem(this.scene);
@@ -765,7 +768,8 @@ class BlockCraftGame {
       furnaces: Array.from(this.world.furnaces.entries()),
       doorStates: Array.from(this.world.doorStates.entries()),
       gateStates: Array.from(this.world.gateStates.entries()),
-      ladderStates: Array.from(this.world.ladderStates.entries())
+      ladderStates: Array.from(this.world.ladderStates.entries()),
+      stairStates: Array.from(this.world.stairStates.entries())
     };
     await saveWorld(record);
     if (showToast) this.ui.toast('World Saved!');
@@ -1153,6 +1157,25 @@ class BlockCraftGame {
         if (heldDef.blockId === BLOCK.LADDER) {
           if (isRepeat) return;
           this.world.placeLadder(px, py, pz, this.currentTarget.nx, this.currentTarget.ny, this.currentTarget.nz);
+          this.sound.playBlock(heldDef.sound, true);
+          if (this.player.mode === 'survival') {
+            this.inventory.consumeSelected(1);
+            this.ui.updateHotbar();
+          }
+          return;
+        }
+
+        if (heldDef.isStair) {
+          if (insidePlayer(px, py, pz)) return;
+          // Orient stair so walking in player's forward look direction ascends the stairs (0=-Z, 1=+X, 2=+Z, 3=-X)!
+          const fx = -Math.sin(this.player.yaw);
+          const fz = -Math.cos(this.player.yaw);
+          let facing = 0;
+          if (Math.abs(fx) > Math.abs(fz)) facing = fx > 0 ? 1 : 3;
+          else facing = fz > 0 ? 2 : 0;
+          const half = this.currentTarget.ny === -1 ? 'top' : 'bottom';
+          if (isRepeat) this.player.swingAnim = 1.0;
+          this.world.placeStair(px, py, pz, heldDef.blockId, facing, half, true);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1681,6 +1704,19 @@ class BlockCraftGame {
       this.player.update(dt, input, this.mods, gameRules);
       this.ui.setUnderwater(this.player.headInWater);
       if (this.ui.setInLava) this.ui.setInLava(this.player.headInLava);
+      const playerBurning = this.player.burnTimer > 0 || this.player.inLava || this.player.inFire;
+      if (this.ui.setOnFire) this.ui.setOnFire(playerBurning);
+      if (playerBurning && this.effects && this.effects.spawnFireEmber) {
+        this._playerBurnEmberTimer = (this._playerBurnEmberTimer || 0) + dt;
+        if (this._playerBurnEmberTimer >= 0.09) {
+          this._playerBurnEmberTimer = 0;
+          this.effects.spawnFireEmber(
+            this.player.pos.x + (Math.random() - 0.5) * 0.55,
+            this.player.pos.y + 0.35 + Math.random() * 0.9,
+            this.player.pos.z + (Math.random() - 0.5) * 0.55
+          );
+        }
+      }
 
       // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
       const eye = this.player.getEyePosition(this._eyeVec);

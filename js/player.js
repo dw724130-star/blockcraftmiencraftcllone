@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate } from './blocks.js';
+import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate, isStairBlock } from './blocks.js';
 
 const PLAYER_RADIUS = 0.33;
 const PLAYER_HEIGHT = 1.75;
@@ -410,6 +410,52 @@ export class Player {
     this.playerModel = this.buildPlayerModel();
     this.playerModel.root.visible = false;
 
+    // 3D Animated Burning Flames wrapping Steve when on fire (visible in 3rd-person views!)
+    this.playerFireGroup = new THREE.Group();
+    const firePlaneGeo = new THREE.PlaneGeometry(0.95, 1.35);
+    const fireOuterMat = new THREE.MeshBasicMaterial({
+      color: 0xff6a14,
+      transparent: true,
+      opacity: 0.82,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const fireInnerMat = new THREE.MeshBasicMaterial({
+      color: 0xffd23f,
+      transparent: true,
+      opacity: 0.78,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    if (textures && textures.atlasTexture && textures.getUV) {
+      const fuv = textures.getUV('fire');
+      const uvAttr = firePlaneGeo.attributes.uv;
+      uvAttr.setXY(0, fuv.u0, fuv.v1);
+      uvAttr.setXY(1, fuv.u1, fuv.v1);
+      uvAttr.setXY(2, fuv.u0, fuv.v0);
+      uvAttr.setXY(3, fuv.u1, fuv.v0);
+      uvAttr.needsUpdate = true;
+      fireOuterMat.map = textures.atlasTexture;
+      fireOuterMat.color.setHex(0xffffff);
+      fireOuterMat.alphaTest = 0.25;
+      fireInnerMat.map = textures.atlasTexture;
+      fireInnerMat.color.setHex(0xffe082);
+      fireInnerMat.alphaTest = 0.25;
+    }
+    const f1 = new THREE.Mesh(firePlaneGeo, fireOuterMat);
+    f1.position.set(0, 0.78, 0.26);
+    const f2 = new THREE.Mesh(firePlaneGeo, fireOuterMat);
+    f2.position.set(0, 0.78, -0.26);
+    const f3 = new THREE.Mesh(firePlaneGeo, fireInnerMat);
+    f3.position.set(0.28, 0.72, 0);
+    f3.rotation.y = Math.PI * 0.5;
+    const f4 = new THREE.Mesh(firePlaneGeo, fireInnerMat);
+    f4.position.set(-0.28, 0.72, 0);
+    f4.rotation.y = Math.PI * 0.5;
+    this.playerFireGroup.add(f1, f2, f3, f4);
+    this.playerFireGroup.visible = false;
+    this.playerModel.root.add(this.playerFireGroup);
+
     // Callbacks wired by main.js
     this.onDamage = null;
     this.onDeath = null;
@@ -505,6 +551,10 @@ export class Player {
     this.hp = this.maxHp;
     this.hunger = this.maxHunger;
     this.air = this.maxAir;
+    this.burnTimer = 0;
+    this._burnTick = 0;
+    this.inLava = false;
+    this.inFire = false;
     this.clearEffects();
     this.vel.set(0, 0, 0);
     this.pos.copy(this.spawnPos);
@@ -512,6 +562,63 @@ export class Player {
     if (this.pos.y < sy) this.pos.y = sy + 0.5;
     this.fallStartY = null;
     if (this.onHudDirty) this.onHudDirty();
+  }
+
+  _getStairStepSupportY(px, py, pz, x, y, z) {
+    // Returns highest stair sub-box top Y colliding with player AABB, or -1 if no collision!
+    const st = this.world.getStairState ? this.world.getStairState(x, y, z) : { facing: 0, half: 'bottom' };
+    const pMinX = px - PLAYER_RADIUS, pMaxX = px + PLAYER_RADIUS;
+    const pMinZ = pz - PLAYER_RADIUS, pMaxZ = pz + PLAYER_RADIUS;
+    const pMinY = py, pMaxY = py + PLAYER_HEIGHT - 0.05;
+    let hitTop = -1;
+    const checkBox = (x0, y0, z0, x1, y1, z1) => {
+      if (pMaxX > x0 && pMinX < x1 && pMaxZ > z0 && pMinZ < z1 && pMaxY > y0 && pMinY < y1) {
+        if (y1 > hitTop) hitTop = y1;
+      }
+    };
+    let sx0 = x, sx1 = x + 1, sz0 = z, sz1 = z + 1;
+    if (st.facing === 0) { sz1 = z + 0.5; }
+    else if (st.facing === 1) { sx0 = x + 0.5; }
+    else if (st.facing === 2) { sz0 = z + 0.5; }
+    else { sx1 = x + 0.5; }
+    if (st.half === 'top') {
+      checkBox(x, y + 0.5, z, x + 1, y + 1.0, z + 1);
+      checkBox(sx0, y, sz0, sx1, y + 0.5, sz1);
+    } else {
+      checkBox(x, y, z, x + 1, y + 0.5, z + 1);
+      checkBox(sx0, y + 0.5, sz0, sx1, y + 1.0, sz1);
+    }
+    return hitTop;
+  }
+
+  _getLandingY(px, ny, pz) {
+    const minX = Math.floor(px - PLAYER_RADIUS);
+    const maxX = Math.floor(px + PLAYER_RADIUS);
+    const minY = Math.floor(ny);
+    const maxY = Math.floor(ny + PLAYER_HEIGHT - 0.05);
+    const minZ = Math.floor(pz - PLAYER_RADIUS);
+    const maxZ = Math.floor(pz + PLAYER_RADIUS);
+    let bestY = Math.floor(ny) + 1;
+    let found = false;
+    for (let y = minY; y <= maxY; y++) {
+      for (let z = minZ; z <= maxZ; z++) {
+        for (let x = minX; x <= maxX; x++) {
+          const bid = this.world.getBlock(x, y, z);
+          if (isBlockSolid(bid)) {
+            if (isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z)) continue;
+            if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(x, y, z)) continue;
+            if (isStairBlock(bid)) {
+              const topY = this._getStairStepSupportY(px, ny, pz, x, y, z);
+              if (topY > 0 && (!found || topY > bestY)) { bestY = topY; found = true; }
+            } else {
+              const topY = y + 1;
+              if (!found || topY > bestY) { bestY = topY; found = true; }
+            }
+          }
+        }
+      }
+    }
+    return bestY;
   }
 
   collidesAt(px, py, pz) {
@@ -529,6 +636,10 @@ export class Player {
           if (isBlockSolid(bid)) {
             if (isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z)) continue;
             if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(x, y, z)) continue;
+            if (isStairBlock(bid)) {
+              if (this._getStairStepSupportY(px, py, pz, x, y, z) > 0) return true;
+              continue;
+            }
             return true;
           }
           // Authentic Minecraft 1.5-block tall Fence & Closed Fence Gate collision (cannot jump over fences!)
@@ -665,6 +776,10 @@ export class Player {
       const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(nx, this.pos.y - 0.2, this.pos.z);
       if (!this.collidesAt(nx, this.pos.y, this.pos.z) && safeEdge) {
         this.pos.x = nx;
+      } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(nx, this.pos.y + 0.56, this.pos.z)) {
+        // Smooth Minecraft 0.5-block stair step-up!
+        this.pos.x = nx;
+        this.pos.y = this._getLandingY(nx, this.pos.y, this.pos.z);
       } else {
         horizBlocked = true;
         this.vel.x = 0;
@@ -676,6 +791,10 @@ export class Player {
       const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(this.pos.x, this.pos.y - 0.2, nz);
       if (!this.collidesAt(this.pos.x, this.pos.y, nz) && safeEdge) {
         this.pos.z = nz;
+      } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(this.pos.x, this.pos.y + 0.56, nz)) {
+        // Smooth Minecraft 0.5-block stair step-up!
+        this.pos.z = nz;
+        this.pos.y = this._getLandingY(this.pos.x, this.pos.y, nz);
       } else {
         horizBlocked = true;
         this.vel.z = 0;
@@ -696,8 +815,8 @@ export class Player {
     const ny = this.pos.y + dy;
     if (this.collidesAt(this.pos.x, ny, this.pos.z)) {
       if (this.vel.y < 0) {
-        // Landed
-        const landedY = Math.floor(ny) + 1;
+        // Landed (supports both full blocks and 0.5-block stair steps!)
+        const landedY = this._getLandingY(this.pos.x, ny, this.pos.z);
         if (this.fallStartY !== null && !this.inWater && this.mode === 'survival' && !moonGrav) {
           const drop = this.fallStartY - landedY;
           if (drop > 3.5) {
@@ -736,25 +855,34 @@ export class Player {
       }
     }
 
+    // Burning state (catch on fire in Lava/Fire in BOTH Survival & Creative; extinguished immediately by Water!)
+    if (this.inWater) {
+      this.burnTimer = 0;
+      this._burnTick = 0;
+    } else if (this.inLava) {
+      this.burnTimer = Math.max(this.burnTimer, 8.0);
+    } else if (this.inFire) {
+      this.burnTimer = Math.max(this.burnTimer, 5.0);
+    } else if (this.burnTimer > 0) {
+      this.burnTimer = Math.max(0, this.burnTimer - dt);
+    }
+
     // Survival Hunger, Air, Lava/Fire Burn, Regen
     if (this.mode === 'survival') {
       // Lava & Fire Damage (authentic Minecraft burning!)
       if (this.inLava) {
-        this.burnTimer = Math.max(this.burnTimer, 3.2);
         this._burnTick += dt;
         if (this._burnTick >= 0.5) {
           this._burnTick = 0;
           this.takeDamage(4, 'Tried to swim in lava');
         }
       } else if (this.inFire) {
-        this.burnTimer = Math.max(this.burnTimer, 2.2);
         this._burnTick += dt;
         if (this._burnTick >= 0.6) {
           this._burnTick = 0;
           this.takeDamage(2, 'Went up in flames');
         }
       } else if (this.burnTimer > 0) {
-        this.burnTimer = Math.max(0, this.burnTimer - dt);
         this._burnTick += dt;
         if (this._burnTick >= 0.9) {
           this._burnTick = 0;
@@ -1008,6 +1136,21 @@ export class Player {
     // Held item on 3D player model
     pm.heldItem.visible = !!held;
     if (held) pm.heldItem.material.color.setHex(heldCol);
+
+    // Animate 3rd-person flames when Steve is burning!
+    if (this.playerFireGroup) {
+      const burning = this.burnTimer > 0 || this.inLava || this.inFire;
+      this.playerFireGroup.visible = burning;
+      if (burning) {
+        const ft = performance.now() * 0.015;
+        this.playerFireGroup.scale.set(
+          0.96 + Math.sin(ft * 1.9) * 0.08,
+          0.92 + Math.cos(ft * 2.6) * 0.14,
+          0.96 + Math.cos(ft * 2.1) * 0.08
+        );
+        this.playerFireGroup.position.y = Math.sin(ft * 3.1) * 0.04;
+      }
+    }
   }
 
   getMiningSpeed(blockDef) {

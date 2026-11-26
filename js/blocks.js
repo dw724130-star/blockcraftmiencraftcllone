@@ -114,7 +114,33 @@ export const BLOCK = {
   SPRUCE_FENCE_GATE: 110,
   ACACIA_FENCE_GATE: 111,
   JUNGLE_FENCE_GATE: 112,
-  CHERRY_FENCE_GATE: 113
+  CHERRY_FENCE_GATE: 113,
+  // Deepslate + 5 New Stone Blocks
+  DEEPSLATE: 114,
+  GRANITE: 115,
+  DIORITE: 116,
+  ANDESITE: 117,
+  TUFF: 118,
+  BASALT: 119,
+  // Stairs for Every Building Material (Wood + Stone + Masonry + Deepslate + New Stones)
+  OAK_STAIRS: 120,
+  BIRCH_STAIRS: 121,
+  SPRUCE_STAIRS: 122,
+  ACACIA_STAIRS: 123,
+  JUNGLE_STAIRS: 124,
+  CHERRY_STAIRS: 125,
+  STONE_STAIRS: 126,
+  COBBLESTONE_STAIRS: 127,
+  MOSSY_COBBLESTONE_STAIRS: 128,
+  STONE_BRICK_STAIRS: 129,
+  SANDSTONE_STAIRS: 130,
+  BRICK_STAIRS: 131,
+  DEEPSLATE_STAIRS: 132,
+  GRANITE_STAIRS: 133,
+  DIORITE_STAIRS: 134,
+  ANDESITE_STAIRS: 135,
+  TUFF_STAIRS: 136,
+  BASALT_STAIRS: 137
 };
 
 // Block numeric ID -> string item key
@@ -315,6 +341,68 @@ for (const fw of FENCE_WOODS) {
     transparent: true, solid: true, isFenceGate: true, fenceWood: fw.key,
     interactive: 'fence_gate',
     faces: { all: fw.planks }
+  });
+}
+
+// --- DEEPSLATE & 5 NEW STONE BLOCKS (Granite, Diorite, Andesite, Tuff, Basalt) ---
+regBlock(BLOCK.DEEPSLATE, 'deepslate', {
+  name: 'Deepslate', hardness: 3.0, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { top: 'deepslate_top', side: 'deepslate_side', bottom: 'deepslate_top' }
+});
+regBlock(BLOCK.GRANITE, 'granite', {
+  name: 'Granite', hardness: 2.2, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { all: 'granite' }
+});
+regBlock(BLOCK.DIORITE, 'diorite', {
+  name: 'Diorite', hardness: 2.2, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { all: 'diorite' }
+});
+regBlock(BLOCK.ANDESITE, 'andesite', {
+  name: 'Andesite', hardness: 2.2, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { all: 'andesite' }
+});
+regBlock(BLOCK.TUFF, 'tuff', {
+  name: 'Tuff', hardness: 2.4, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { all: 'tuff' }
+});
+regBlock(BLOCK.BASALT, 'basalt', {
+  name: 'Basalt', hardness: 2.6, tool: 'pickaxe', minTier: 1, sound: 'stone',
+  faces: { top: 'basalt_top', side: 'basalt_side', bottom: 'basalt_top' }
+});
+
+// --- STAIRS FOR EVERY MATERIAL (Woods, Classic Stones, Masonry, Deepslate & All 5 New Stones!) ---
+export const STAIR_DEFS = [
+  { key: 'oak',               label: 'Oak',               id: BLOCK.OAK_STAIRS,               mat: 'oak_planks',        isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'oak_planks' } },
+  { key: 'birch',             label: 'Birch',             id: BLOCK.BIRCH_STAIRS,             mat: 'birch_planks',      isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'birch_planks' } },
+  { key: 'spruce',            label: 'Spruce',            id: BLOCK.SPRUCE_STAIRS,            mat: 'spruce_planks',     isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'spruce_planks' } },
+  { key: 'acacia',            label: 'Acacia',            id: BLOCK.ACACIA_STAIRS,            mat: 'acacia_planks',     isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'acacia_planks' } },
+  { key: 'jungle',            label: 'Jungle',            id: BLOCK.JUNGLE_STAIRS,            mat: 'jungle_planks',     isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'jungle_planks' } },
+  { key: 'cherry',            label: 'Cherry',            id: BLOCK.CHERRY_STAIRS,            mat: 'cherry_planks',     isWood: true,  hardness: 1.6, minTier: 0, faces: { all: 'cherry_planks' } },
+  { key: 'stone',             label: 'Stone',             id: BLOCK.STONE_STAIRS,             mat: 'stone',             isWood: false, hardness: 2.2, minTier: 1, faces: { all: 'stone' } },
+  { key: 'cobblestone',       label: 'Cobblestone',       id: BLOCK.COBBLESTONE_STAIRS,       mat: 'cobblestone',       isWood: false, hardness: 2.4, minTier: 1, faces: { all: 'cobblestone' } },
+  { key: 'mossy_cobblestone', label: 'Mossy Cobblestone', id: BLOCK.MOSSY_COBBLESTONE_STAIRS, mat: 'mossy_cobblestone', isWood: false, hardness: 2.4, minTier: 1, faces: { all: 'mossy_cobblestone' } },
+  { key: 'stone_brick',       label: 'Stone Brick',       id: BLOCK.STONE_BRICK_STAIRS,       mat: 'stone_bricks',      isWood: false, hardness: 2.3, minTier: 1, faces: { all: 'stone_bricks' } },
+  { key: 'sandstone',         label: 'Sandstone',         id: BLOCK.SANDSTONE_STAIRS,         mat: 'sandstone',         isWood: false, hardness: 1.8, minTier: 1, faces: { top: 'sandstone_top', side: 'sandstone_side', bottom: 'sandstone_top' } },
+  { key: 'brick',             label: 'Brick',             id: BLOCK.BRICK_STAIRS,             mat: 'bricks',            isWood: false, hardness: 2.2, minTier: 1, faces: { all: 'bricks' } },
+  { key: 'deepslate',         label: 'Deepslate',         id: BLOCK.DEEPSLATE_STAIRS,         mat: 'deepslate',         isWood: false, hardness: 3.0, minTier: 1, faces: { top: 'deepslate_top', side: 'deepslate_side', bottom: 'deepslate_top' } },
+  { key: 'granite',           label: 'Granite',           id: BLOCK.GRANITE_STAIRS,           mat: 'granite',           isWood: false, hardness: 2.2, minTier: 1, faces: { all: 'granite' } },
+  { key: 'diorite',           label: 'Diorite',           id: BLOCK.DIORITE_STAIRS,           mat: 'diorite',           isWood: false, hardness: 2.2, minTier: 1, faces: { all: 'diorite' } },
+  { key: 'andesite',          label: 'Andesite',          id: BLOCK.ANDESITE_STAIRS,          mat: 'andesite',          isWood: false, hardness: 2.2, minTier: 1, faces: { all: 'andesite' } },
+  { key: 'tuff',              label: 'Tuff',              id: BLOCK.TUFF_STAIRS,              mat: 'tuff',              isWood: false, hardness: 2.4, minTier: 1, faces: { all: 'tuff' } },
+  { key: 'basalt',            label: 'Basalt',            id: BLOCK.BASALT_STAIRS,            mat: 'basalt',            isWood: false, hardness: 2.6, minTier: 1, faces: { top: 'basalt_top', side: 'basalt_side', bottom: 'basalt_top' } }
+];
+for (const st of STAIR_DEFS) {
+  regBlock(st.id, `${st.key}_stairs`, {
+    name: `${st.label} Stairs`,
+    hardness: st.hardness,
+    tool: st.isWood ? 'axe' : 'pickaxe',
+    minTier: st.minTier,
+    sound: st.isWood ? 'wood' : 'stone',
+    transparent: true,
+    solid: true,
+    isStair: true,
+    stairMat: st.mat,
+    faces: st.faces
   });
 }
 
@@ -546,6 +634,18 @@ export function isFenceOrGate(id) {
   return id >= BLOCK.OAK_FENCE && id <= BLOCK.CHERRY_FENCE_GATE;
 }
 
+export function isStairBlock(id) {
+  return id >= BLOCK.OAK_STAIRS && id <= BLOCK.BASALT_STAIRS;
+}
+
+export function isNaturalStoneBlock(id) {
+  return (
+    id === BLOCK.STONE || id === BLOCK.DEEPSLATE ||
+    id === BLOCK.GRANITE || id === BLOCK.DIORITE ||
+    id === BLOCK.ANDESITE || id === BLOCK.TUFF || id === BLOCK.BASALT
+  );
+}
+
 export function isWheatBlock(id) {
   return id >= BLOCK.WHEAT_0 && id <= BLOCK.WHEAT_7;
 }
@@ -562,7 +662,7 @@ export function getItemCategory(def) {
   if (def.food) return 'food';
   if (!def.isBlock) return 'materials';
   if (def.isDoor || def.isFenceGate) return 'utility';
-  if (def.isFence) return 'building';
+  if (def.isFence || def.isStair) return 'building';
   const id = def.id;
   if (['crafting_table', 'furnace', 'chest', 'bed', 'tnt', 'torch', 'bookshelf', 'ladder', 'glowstone', 'glass'].includes(id)) {
     return 'utility';

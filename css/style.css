@@ -83,6 +83,70 @@ input, select, textarea {
   background: radial-gradient(circle, rgba(235, 62, 12, 0.72), rgba(175, 18, 4, 0.92));
 }
 
+/* Authentic Minecraft First-Person Burning Fire Overlay */
+#fire-overlay {
+  z-index: 6;
+  overflow: hidden;
+}
+
+#fire-overlay .fire-glow {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(255, 86, 12, 0.42) 0%, rgba(255, 120, 20, 0.16) 28%, transparent 62%);
+  animation: fireGlowPulse 0.24s ease-in-out infinite alternate;
+}
+
+#fire-overlay .fire-flames {
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  bottom: -14px;
+  background-repeat: repeat-x;
+  background-position: bottom center;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+#fire-overlay .fire-flames-back {
+  height: 36vh;
+  max-height: 290px;
+  opacity: 0.82;
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(220, 44, 6, 0.92) 18px 34px, rgba(255, 108, 16, 0.95) 34px 54px, transparent 54px 74px),
+    repeating-linear-gradient(90deg, rgba(255, 146, 22, 0.88) 0 22px, transparent 22px 46px, rgba(235, 60, 10, 0.92) 46px 76px);
+  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 38%, rgba(0,0,0,0.75) 68%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, #000 38%, rgba(0,0,0,0.75) 68%, transparent 100%);
+  animation: fireFlickerBack 0.18s steps(3) infinite alternate;
+}
+
+#fire-overlay .fire-flames-front {
+  height: 28vh;
+  max-height: 230px;
+  opacity: 0.92;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255, 198, 42, 0.95) 0 16px, rgba(255, 120, 18, 0.92) 16px 32px, transparent 32px 48px, rgba(255, 240, 122, 0.95) 48px 62px, rgba(255, 104, 16, 0.9) 62px 84px);
+  -webkit-mask-image: linear-gradient(to top, #000 0%, #000 45%, rgba(0,0,0,0.65) 75%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, #000 45%, rgba(0,0,0,0.65) 75%, transparent 100%);
+  animation: fireFlickerFront 0.14s steps(4) infinite alternate;
+}
+
+@keyframes fireGlowPulse {
+  from { opacity: 0.78; }
+  to { opacity: 1.0; }
+}
+
+@keyframes fireFlickerBack {
+  0%   { transform: translate3d(-10px, 8px, 0) scaleY(0.92); }
+  50%  { transform: translate3d(6px, -6px, 0) scaleY(1.06); }
+  100% { transform: translate3d(14px, 4px, 0) scaleY(0.98); }
+}
+
+@keyframes fireFlickerFront {
+  0%   { transform: translate3d(12px, 10px, 0) scaleY(0.90); }
+  50%  { transform: translate3d(-8px, -8px, 0) scaleY(1.08); }
+  100% { transform: translate3d(-16px, 2px, 0) scaleY(0.96); }
+}
+
 #damage-overlay {
   background: radial-gradient(circle, rgba(220, 30, 30, 0.1), rgba(220, 20, 20, 0.55));
   animation: dmgFlash 0.25s ease-out;

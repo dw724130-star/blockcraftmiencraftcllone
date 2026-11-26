@@ -13,8 +13,8 @@ export function createLodKernel(seed, worldType) {
   const SEA_LEVEL = 64;
   const CHUNK_HEIGHT = 512;
   const CHUNK_SIZE = 16;
-  const SNOW_LINE = SEA_LEVEL + 64;
-  const ROCK_LINE = SEA_LEVEL + 46;
+  const SNOW_LINE = SEA_LEVEL + 92;
+  const ROCK_LINE = SEA_LEVEL + 66;
   const CELLS = 64; // 64x64 voxel columns per super-region -> TRUE 1m voxel detail on Tier 0 & 2x resolution on ALL tiers!
   const PAD = CELLS + 2; // 66x66 padded grid for exact slopes, cliffs, and corner AO
 
@@ -125,12 +125,12 @@ export function createLodKernel(seed, worldType) {
       return;
     }
     const octBiome = detailLevel >= 2 ? 2 : 3;
-    const temp = fbm2D(permB, wx * 0.00145, wz * 0.00145, octBiome);
-    const moist = fbm2D(permM, wx * 0.00145, wz * 0.00145, octBiome);
-    const mountField = fbm2D(permH, wx * 0.00155 + 50, wz * 0.00155 - 50, octBiome);
+    const temp = fbm2D(permB, wx * 0.00062, wz * 0.00062, octBiome);
+    const moist = fbm2D(permM, wx * 0.00062, wz * 0.00062, octBiome);
+    const mountField = fbm2D(permH, wx * 0.00068 + 50, wz * 0.00068 - 50, octBiome);
     const octCont = detailLevel >= 3 ? 2 : (detailLevel >= 1 ? 3 : 4);
-    const cont = fbm2D(permH, wx * 0.0018, wz * 0.0018, octCont);
-    const isOceanZone = cont < -0.175 && mountField < 0.04 && (wx * wx + wz * wz) > 140 * 140;
+    const cont = fbm2D(permH, wx * 0.00078, wz * 0.00078, octCont);
+    const isOceanZone = cont < -0.175 && mountField < 0.04 && (wx * wx + wz * wz) > 260 * 260;
 
     let biome = 0;
     if (isOceanZone) biome = 11;
@@ -145,8 +145,8 @@ export function createLodKernel(seed, worldType) {
     else if (moist > 0.07) biome = temp > 0.0 ? 4 : 5;
 
     const octHills = detailLevel >= 3 ? 1 : (detailLevel >= 1 ? 2 : 3);
-    const hills = fbm2D(permH, wx * 0.0085, wz * 0.0085, octHills);
-    const micro = detailLevel === 0 ? noise2D(permH, wx * 0.042, wz * 0.042) * 1.3 : 0;
+    const hills = fbm2D(permH, wx * 0.0042, wz * 0.0042, octHills);
+    const micro = detailLevel === 0 ? noise2D(permH, wx * 0.028, wz * 0.028) * 1.5 : 0;
 
     let mRaw = (mountField - 0.01) / 0.34;
     if (mRaw < 0) mRaw = 0;
@@ -156,26 +156,26 @@ export function createLodKernel(seed, worldType) {
     let alpineBoost = 0;
     if (mSmooth > 0.001) {
       const warpOct = detailLevel >= 2 ? 1 : 2;
-      const warpX = fbm2D(permB, wx * 0.0042 + 11, wz * 0.0042 - 19, warpOct) * 48;
-      const warpZ = fbm2D(permM, wx * 0.0042 - 27, wz * 0.0042 + 33, warpOct) * 48;
+      const warpX = fbm2D(permB, wx * 0.0022 + 11, wz * 0.0022 - 19, warpOct) * 78;
+      const warpZ = fbm2D(permM, wx * 0.0022 - 27, wz * 0.0022 + 33, warpOct) * 78;
       const rx = wx + warpX;
       const rz = wz + warpZ;
 
-      const r1 = 1.0 - Math.abs(noise2D(permH, rx * 0.0044, rz * 0.0044) * 1.85);
+      const r1 = 1.0 - Math.abs(noise2D(permH, rx * 0.0024, rz * 0.0024) * 1.85);
       const ridgeA = r1 > 0 ? Math.pow(r1, 1.65) : 0;
 
       let ridgeB = 0;
       let ridgeC = 0;
       if (detailLevel < 3) {
-        const r2 = 1.0 - Math.abs(noise2D(permH, rx * 0.0105 + 41, rz * 0.0105 - 17) * 1.85);
+        const r2 = 1.0 - Math.abs(noise2D(permH, rx * 0.0058 + 41, rz * 0.0058 - 17) * 1.85);
         if (r2 > 0) ridgeB = Math.pow(r2, 1.95) * (0.35 + 0.65 * ridgeA);
         if (detailLevel === 0) {
-          const r3 = 1.0 - Math.abs(noise2D(permH, rx * 0.025 - 13, rz * 0.025 + 29) * 1.85);
+          const r3 = 1.0 - Math.abs(noise2D(permH, rx * 0.015 - 13, rz * 0.015 + 29) * 1.85);
           if (r3 > 0) ridgeC = Math.pow(r3, 2.1) * (0.25 + 0.75 * ridgeB);
         }
       }
 
-      alpineBoost = mSmooth * 24.0 + (mSmooth * mSmooth) * (ridgeA * 106.0 + ridgeB * 40.0 + ridgeC * 12.0);
+      alpineBoost = mSmooth * 36.0 + (mSmooth * mSmooth) * (ridgeA * 142.0 + ridgeB * 52.0 + ridgeC * 16.0);
     }
 
     let valleyCarve = 0;
@@ -183,17 +183,17 @@ export function createLodKernel(seed, worldType) {
     let pondCarve = 0;
     if (detailLevel < 3 && mSmooth < 0.78) {
       const octRiv = detailLevel >= 1 ? 2 : 3;
-      const riverRaw = Math.abs(fbm2D(permM, wx * 0.0028 + 200, wz * 0.0028 - 150, octRiv));
+      const riverRaw = Math.abs(fbm2D(permM, wx * 0.0015 + 200, wz * 0.0015 - 150, octRiv));
       const valleyT = riverRaw < 0.14 ? (1 - riverRaw / 0.14) : 0;
-      valleyCarve = (valleyT * valleyT * (3 - 2 * valleyT)) * 12.0 * (1 - mSmooth * 0.45);
+      valleyCarve = (valleyT * valleyT * (3 - 2 * valleyT)) * 18.0 * (1 - mSmooth * 0.45);
       const riverT = riverRaw < 0.044 ? (1 - riverRaw / 0.044) : 0;
-      riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 14.0 * (1 - mSmooth * 0.72);
+      riverCarve = (riverT * riverT * (3 - 2 * riverT)) * 20.0 * (1 - mSmooth * 0.72);
 
       const pondOct = detailLevel >= 2 ? 1 : 2;
-      const pondNoise = fbm2D(permB, wx * 0.0075 - 90, wz * 0.0075 + 110, pondOct);
+      const pondNoise = fbm2D(permB, wx * 0.0042 - 90, wz * 0.0042 + 110, pondOct);
       let pondT = pondNoise < -0.24 ? (-0.24 - pondNoise) / 0.22 : 0;
       if (pondT > 1) pondT = 1;
-      pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 9.0 * (1 - mSmooth * 0.9);
+      pondCarve = (pondT * pondT * (3 - 2 * pondT)) * 11.0 * (1 - mSmooth * 0.9);
     }
 
     let flatBlend = 1 - mSmooth * 1.8;
@@ -201,37 +201,37 @@ export function createLodKernel(seed, worldType) {
     else if (flatBlend > 1) flatBlend = 1;
 
     let biomeOffset = 0;
-    let hillAmp = (temp > 0.13 ? 5.5 : 8.2) * flatBlend + 4.5 * mSmooth;
+    let hillAmp = (temp > 0.13 ? 8.5 : 13.5) * flatBlend + 7.0 * mSmooth;
     if (biome === 8) {
       const mesaRaw = Math.max(0, Math.min(1, (hills + 0.18) * 2.2));
-      const stepped = Math.floor(mesaRaw * 4) * 7.0 + Math.min(1, (mesaRaw * 4) % 1 * 3.5) * 2.0;
+      const stepped = Math.floor(mesaRaw * 4) * 10.0 + Math.min(1, (mesaRaw * 4) % 1 * 3.5) * 3.0;
       biomeOffset = stepped * flatBlend;
-      hillAmp = 2.5 * flatBlend;
+      hillAmp = 3.5 * flatBlend;
     } else if (biome === 6) {
-      biomeOffset = (hills > 0.12 ? 9.0 : 2.5) * flatBlend;
-      hillAmp = 4.5 * flatBlend;
+      biomeOffset = (hills > 0.12 ? 14.0 : 4.0) * flatBlend;
+      hillAmp = 7.0 * flatBlend;
     } else if (biome === 7) {
-      hillAmp = 10.5 * flatBlend;
-      biomeOffset = 4.0 * flatBlend;
+      hillAmp = 15.5 * flatBlend;
+      biomeOffset = 6.5 * flatBlend;
     } else if (biome === 9) {
-      hillAmp = 2.4 * flatBlend;
-      biomeOffset = -6.5 * flatBlend;
+      hillAmp = 2.6 * flatBlend;
+      biomeOffset = -12.0 * flatBlend;
     } else if (biome === 10) {
-      biomeOffset = 8.0 * flatBlend;
-      hillAmp = 6.5 * flatBlend;
+      biomeOffset = 12.0 * flatBlend;
+      hillAmp = 9.5 * flatBlend;
     }
 
-    const terrace = detailLevel < 3 ? Math.sin(hills * 3.14159) * 0.5 * flatBlend : 0;
+    const terrace = detailLevel < 3 ? Math.sin(hills * 3.14159) * 0.75 * flatBlend : 0;
     let oceanCarve = 0;
     if (isOceanZone) {
       let oRaw = (-0.175 - cont) / 0.18;
       if (oRaw < 0) oRaw = 0;
       else if (oRaw > 1) oRaw = 1;
-      oceanCarve = 10.5 + (oRaw * oRaw * (3 - 2 * oRaw)) * 18.5;
+      oceanCarve = 18.0 + (oRaw * oRaw * (3 - 2 * oRaw)) * 24.0;
     }
-    let baseH = SEA_LEVEL + 7.5 + cont * 21.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve - oceanCarve;
+    let baseH = SEA_LEVEL + 16.5 + cont * 32.0 + (hills * hillAmp + terrace) + biomeOffset + micro + alpineBoost - valleyCarve - riverCarve - pondCarve - oceanCarve;
     if (isOceanZone) {
-      baseH = Math.min(baseH, SEA_LEVEL - 4.5 + hills * 2.5);
+      baseH = Math.min(baseH, SEA_LEVEL - 5.0 + hills * 3.0);
     } else if (biome === 9 && mSmooth < 0.15) {
       baseH = Math.min(baseH, SEA_LEVEL + 3.5 + hills * 3.0);
       baseH = Math.max(baseH, SEA_LEVEL - 2.5);
@@ -245,33 +245,34 @@ export function createLodKernel(seed, worldType) {
 
   function isVillageCenter(vcx, vcz) {
     if (isFlat) return false;
-    if (vcx === 3 && vcz === 2) return true;
-    if (((vcx % 16) + 16) % 16 !== 5 || ((vcz % 16) + 16) % 16 !== 5) return false;
-    return coordHash(vcx * 13, vcz * 17, seed + 555) > 0.24;
+    if (vcx === 5 && vcz === 4) return true;
+    if (((vcx % 32) + 32) % 32 !== 11 || ((vcz % 32) + 32) % 32 !== 11) return false;
+    return coordHash(vcx * 13, vcz * 17, seed + 555) > 0.28;
   }
 
   function isWatchtowerChunk(cx, cz) {
     if (isFlat) return false;
-    if (((cx % 10) + 10) % 10 !== 5 || ((cz % 10) + 10) % 10 !== 4) return false;
+    if (((cx % 20) + 20) % 20 !== 10 || ((cz % 20) + 20) % 20 !== 9) return false;
     return coordHash(cx * 31, cz * 29, seed + 777) > 0.55;
   }
 
   // Exact match to World.getMegaStructureForChunk so Great Pyramids & 64x64 Mega Castles rise majestically on the horizon!
   function getMegaOriginInGrid(gx, gz) {
     if (gx === 0 && gz === 0) {
-      return { type: 1, originCx: -9, originCz: -8, sizeChunks: 4 }; // Starter Great Pyramid!
+      return { type: 1, originCx: -15, originCz: -13, sizeChunks: 4 }; // Starter Great Pyramid!
     }
-    const GRID = 36;
+    const GRID = 68;
+    const HALF_GRID = 34;
     const hRoll = coordHash(gx * 59, gz * 83, seed + 1901);
     if (hRoll < 0.25) return null;
     const isCastle = (((gx + gz) & 1) === 1) || hRoll > 0.62;
     const sizeChunks = 4;
-    const offX = 5 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 12));
-    const offZ = 5 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 12));
+    const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 18));
+    const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 18));
     return {
       type: isCastle ? 2 : 1,
-      originCx: gx * GRID - 18 + offX,
-      originCz: gz * GRID - 18 + offZ,
+      originCx: gx * GRID - HALF_GRID + offX,
+      originCz: gz * GRID - HALF_GRID + offZ,
       sizeChunks
     };
   }
@@ -363,82 +364,92 @@ export function createLodKernel(seed, worldType) {
 
     // Pass 1B-Mega: Render Great Pyramids & Grand Citadels on the horizon (Tiers 0..3)!
     if (!isFlat && tier <= 3) {
-      const GRID = 28;
+      const GRID = 68;
+      const HALF_GRID = 34;
       const minCxM = Math.floor((ox - step) / CHUNK_SIZE) - 4;
       const maxCxM = Math.floor((ox + regionBlocks + step) / CHUNK_SIZE) + 4;
       const minCzM = Math.floor((oz - step) / CHUNK_SIZE) - 4;
       const maxCzM = Math.floor((oz + regionBlocks + step) / CHUNK_SIZE) + 4;
-      const gx0 = Math.floor((minCxM + 14) / GRID);
-      const gx1 = Math.floor((maxCxM + 14) / GRID);
-      const gz0 = Math.floor((minCzM + 14) / GRID);
-      const gz1 = Math.floor((maxCzM + 14) / GRID);
+      const gx0 = Math.floor((minCxM + HALF_GRID) / GRID);
+      const gx1 = Math.floor((maxCxM + HALF_GRID) / GRID);
+      const gz0 = Math.floor((minCzM + HALF_GRID) / GRID);
+      const gz1 = Math.floor((maxCzM + HALF_GRID) / GRID);
 
+      const megaList = [];
       for (let gz = gz0; gz <= gz1; gz++) {
         for (let gx = gx0; gx <= gx1; gx++) {
           const m = getMegaOriginInGrid(gx, gz);
-          if (!m) continue;
-          const mx0 = m.originCx * CHUNK_SIZE;
-          const mz0 = m.originCz * CHUNK_SIZE;
-          const spanB = m.sizeChunks * CHUNK_SIZE;
-          const mx1 = mx0 + spanB;
-          const mz1 = mz0 + spanB;
-          if (mx1 < ox - step || mx0 > ox + regionBlocks + step || mz1 < oz - step || mz0 > oz + regionBlocks + step) continue;
+          if (m) megaList.push({ ...m, isStarter: gx === 0 && gz === 0 });
+        }
+      }
+      // Also include the Starter Mega Castle at (16, -14) when near origin!
+      if (minCxM <= 20 && maxCxM >= 16 && minCzM <= -10 && maxCzM >= -14) {
+        megaList.push({ type: 2, originCx: 16, originCz: -14, sizeChunks: 4, isStarter: true });
+      }
 
-          sampleColumnLod(mx0 + (spanB >> 1), mz0 + (spanB >> 1), 0);
-          if (m.type === 1 && !(gx === 0 && gz === 0) && (outH <= SEA_LEVEL - 2 || outH > SEA_LEVEL + 56)) continue;
-          if (m.type === 2 && (outH <= SEA_LEVEL - 2 || outH > SEA_LEVEL + 56)) continue;
-          const baseY = Math.max(SEA_LEVEL + 4, Math.min(SEA_LEVEL + 46, outH));
+      for (let mi = 0; mi < megaList.length; mi++) {
+        const m = megaList[mi];
+        const mx0 = m.originCx * CHUNK_SIZE;
+        const mz0 = m.originCz * CHUNK_SIZE;
+        const spanB = m.sizeChunks * CHUNK_SIZE;
+        const mx1 = mx0 + spanB;
+        const mz1 = mz0 + spanB;
+        if (mx1 < ox - step || mx0 > ox + regionBlocks + step || mz1 < oz - step || mz0 > oz + regionBlocks + step) continue;
 
-          const pxStart = Math.max(0, Math.floor((mx0 - ox) / step) + 1);
-          const pxEnd = Math.min(PAD - 1, Math.ceil((mx1 - ox) / step) + 1);
-          const pzStart = Math.max(0, Math.floor((mz0 - oz) / step) + 1);
-          const pzEnd = Math.min(PAD - 1, Math.ceil((mz1 - oz) / step) + 1);
+        sampleColumnLod(mx0 + (spanB >> 1), mz0 + (spanB >> 1), 0);
+        if (m.type === 1 && !m.isStarter && (outH <= SEA_LEVEL - 2 || outH > SEA_LEVEL + 96)) continue;
+        if (m.type === 2 && (outH <= SEA_LEVEL - 2 || outH > SEA_LEVEL + 96)) continue;
+        const baseY = Math.max(SEA_LEVEL + 4, Math.min(SEA_LEVEL + 86, outH));
 
-          for (let pz = pzStart; pz <= pzEnd; pz++) {
-            const wz = oz + (pz - 1) * step + halfStep;
-            if (wz < mz0 || wz >= mz1) continue;
-            const lzM = wz - mz0;
-            const row = pz * PAD;
-            for (let px = pxStart; px <= pxEnd; px++) {
-              const wx = ox + (px - 1) * step + halfStep;
-              if (wx < mx0 || wx >= mx1) continue;
-              const lxM = wx - mx0;
-              const idx = row + px;
+        const pxStart = Math.max(0, Math.floor((mx0 - ox) / step) + 1);
+        const pxEnd = Math.min(PAD - 1, Math.ceil((mx1 - ox) / step) + 1);
+        const pzStart = Math.max(0, Math.floor((mz0 - oz) / step) + 1);
+        const pzEnd = Math.min(PAD - 1, Math.ceil((mz1 - oz) / step) + 1);
 
-              colBaseH[idx] = baseY;
-              if (m.type === 1) {
-                // Stepped Great Pyramid silhouette with golden apex & royal terracotta bands!
-                const dxC = Math.abs(lxM - 31.5);
-                const dzC = Math.abs(lzM - 31.5);
-                const dist = Math.max(dxC, dzC);
-                const pyH = Math.max(0, Math.floor(31.5 - dist));
-                colStructH[idx] = pyH;
-                if (pyH >= 29 || (Math.abs(dxC - dzC) <= Math.max(1.0, step * 0.6) && pyH >= 3)) {
-                  colVillage[idx] = 6; // Shimmering Gold Capstone & Corner Ribs!
-                } else if (pyH > 0 && (pyH % 6 === 0 || pyH % 6 === 3)) {
-                  colVillage[idx] = 7; // Royal Terracotta Band
-                } else {
-                  colVillage[idx] = 5; // Monumental Sandstone Step
-                }
+        for (let pz = pzStart; pz <= pzEnd; pz++) {
+          const wz = oz + (pz - 1) * step + halfStep;
+          if (wz < mz0 || wz >= mz1) continue;
+          const lzM = wz - mz0;
+          const row = pz * PAD;
+          for (let px = pxStart; px <= pxEnd; px++) {
+            const wx = ox + (px - 1) * step + halfStep;
+            if (wx < mx0 || wx >= mx1) continue;
+            const lxM = wx - mx0;
+            const idx = row + px;
+
+            colBaseH[idx] = baseY;
+            if (m.type === 1) {
+              // Stepped Great Pyramid silhouette with golden apex & royal terracotta bands!
+              const dxC = Math.abs(lxM - 31.5);
+              const dzC = Math.abs(lzM - 31.5);
+              const dist = Math.max(dxC, dzC);
+              const pyH = Math.max(0, Math.floor(31.5 - dist));
+              colStructH[idx] = pyH;
+              if (pyH >= 29 || (Math.abs(dxC - dzC) <= Math.max(1.0, step * 0.6) && pyH >= 3)) {
+                colVillage[idx] = 6; // Shimmering Gold Capstone & Corner Ribs!
+              } else if (pyH > 0 && (pyH % 6 === 0 || pyH % 6 === 3)) {
+                colVillage[idx] = 7; // Royal Terracotta Band
               } else {
-                // Grand Citadel Fortress Walls, Corner Watchtowers & Red-Roof Guilds!
-                const inTower = (lxM <= 7 || lxM >= 40) && (lzM <= 7 || lzM >= 40);
-                const dxC = Math.abs(lxM - 23.5);
-                const dzC = Math.abs(lzM - 23.5);
-                const dist = Math.max(dxC, dzC);
-                if (inTower) {
-                  colStructH[idx] = 18;
-                  colVillage[idx] = 8;
-                } else if (dist >= 21.0) {
-                  colStructH[idx] = 11;
-                  colVillage[idx] = 8;
-                } else if (lxM >= 10 && lxM <= 37 && lzM >= 10 && lzM <= 37 && Math.min(dxC, dzC) > 3.5) {
-                  colStructH[idx] = 6;
-                  colVillage[idx] = 9;
-                } else {
-                  colStructH[idx] = 0;
-                  colVillage[idx] = 1;
-                }
+                colVillage[idx] = 5; // Monumental Sandstone Step
+              }
+            } else {
+              // Grand Citadel Fortress Walls, Corner Watchtowers & Red-Roof Guilds!
+              const inTower = (lxM <= 8 || lxM >= 55) && (lzM <= 8 || lzM >= 55);
+              const dxC = Math.abs(lxM - 31.5);
+              const dzC = Math.abs(lzM - 31.5);
+              const dist = Math.max(dxC, dzC);
+              if (inTower) {
+                colStructH[idx] = 22;
+                colVillage[idx] = 8;
+              } else if (dist >= 29.0) {
+                colStructH[idx] = 13;
+                colVillage[idx] = 8;
+              } else if (lxM >= 22 && lxM <= 41 && lzM >= 22 && lzM <= 41) {
+                colStructH[idx] = 24;
+                colVillage[idx] = 9;
+              } else {
+                colStructH[idx] = 0;
+                colVillage[idx] = 1;
               }
             }
           }
@@ -461,7 +472,7 @@ export function createLodKernel(seed, worldType) {
             sampleColumnLod(centerWx, centerWz, 0);
             const baseY = outH;
             const vBiome = outB;
-            if (baseY > SEA_LEVEL + 1 && baseY <= SEA_LEVEL + 36 && vBiome !== 1 && vBiome !== 9) {
+            if (baseY > SEA_LEVEL + 1 && baseY <= SEA_LEVEL + 82 && vBiome !== 1 && vBiome !== 9) {
               // 3x3 chunk village footprint: [(vcx-1)*16 .. (vcx+2)*16)
               const vx0 = (vcx - 1) * CHUNK_SIZE;
               const vz0 = (vcz - 1) * CHUNK_SIZE;

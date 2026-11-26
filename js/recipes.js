@@ -1,4 +1,5 @@
 // Crafting & Smelting Recipes
+import { STAIR_DEFS } from './blocks.js';
 
 export const SMELTING_RECIPES = {
   raw_iron: 'iron_ingot',
@@ -58,6 +59,12 @@ export const FUEL_VALUES = {
   acacia_fence_gate: 15,
   jungle_fence_gate: 15,
   cherry_fence_gate: 15,
+  oak_stairs: 15,
+  birch_stairs: 15,
+  spruce_stairs: 15,
+  acacia_stairs: 15,
+  jungle_stairs: 15,
+  cherry_stairs: 15,
   oak_log: 15,
   birch_log: 15,
   spruce_log: 15,
@@ -125,6 +132,17 @@ const RAW_RECIPES = [
   { out: 'gold_ingot', count: 9, ingredients: { gold_block: 1 } },
   { out: 'diamond', count: 9, ingredients: { diamond_block: 1 } }
 ];
+
+// Authentic Minecraft Stair Recipes (6 blocks in a staircase L-shape -> 4 Stairs) for EVERY material!
+for (const st of STAIR_DEFS) {
+  RAW_RECIPES.push({
+    out: `${st.key}_stairs`,
+    count: 4,
+    table: true,
+    pattern: ['M  ', 'MM ', 'MMM'],
+    map: { M: st.mat }
+  });
+}
 
 // Tools & Weapons
 const TOOL_MATS = [
