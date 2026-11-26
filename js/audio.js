@@ -103,6 +103,55 @@ export class SoundManager {
     osc.stop(now + 0.17);
   }
 
+  // Punchy Minecraft-style PvP Hit Confirmation Sound (crisp impact smack + deep thud + high tick!)
+  playPlayerHit() {
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    // 1. Punchy low-mid body impact thud
+    const thud = this.ctx.createOscillator();
+    const tg = this.ctx.createGain();
+    thud.type = 'triangle';
+    thud.frequency.setValueAtTime(240, now);
+    thud.frequency.exponentialRampToValueAtTime(68, now + 0.11);
+    tg.gain.setValueAtTime(0.24, now);
+    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    thud.connect(tg);
+    tg.connect(this.ctx.destination);
+    thud.start(now);
+    thud.stop(now + 0.13);
+
+    // 2. Crisp slap noise transient
+    if (this.noiseBuffer) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = 'bandpass';
+      filt.frequency.setValueAtTime(1600, now);
+      filt.Q.value = 1.1;
+      const ng = this.ctx.createGain();
+      ng.gain.setValueAtTime(0.22, now);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      src.connect(filt);
+      filt.connect(ng);
+      ng.connect(this.ctx.destination);
+      src.start(now);
+      src.stop(now + 0.09);
+    }
+
+    // 3. Subtle crisp hit-marker tick
+    const tick = this.ctx.createOscillator();
+    const kg = this.ctx.createGain();
+    tick.type = 'sine';
+    tick.frequency.setValueAtTime(980, now);
+    tick.frequency.exponentialRampToValueAtTime(640, now + 0.045);
+    kg.gain.setValueAtTime(0.11, now);
+    kg.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    tick.connect(kg);
+    kg.connect(this.ctx.destination);
+    tick.start(now);
+    tick.stop(now + 0.055);
+  }
+
   playFuse() {
     if (!this.enabled || !this.ctx || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;

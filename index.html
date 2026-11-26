@@ -14,31 +14,31 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="css/style.css?v=46" />
+  <link rel="stylesheet" href="css/style.css?v=49" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=46",
-        "./js/textures.js": "./js/textures.js?v=46",
-        "./js/mods.js": "./js/mods.js?v=46",
-        "./js/inventory.js": "./js/inventory.js?v=46",
-        "./js/recipes.js": "./js/recipes.js?v=46",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=46",
-        "./js/noise.js": "./js/noise.js?v=46",
-        "./js/voxel-gi.js": "./js/voxel-gi.js?v=46",
-        "./js/world.js": "./js/world.js?v=46",
-        "./js/mobs.js": "./js/mobs.js?v=46",
-        "./js/player.js": "./js/player.js?v=46",
-        "./js/effects.js": "./js/effects.js?v=46",
-        "./js/audio.js": "./js/audio.js?v=46",
-        "./js/ui.js": "./js/ui.js?v=46",
-        "./js/controls.js": "./js/controls.js?v=46",
-        "./js/sky.js": "./js/sky.js?v=46",
-        "./js/postfx.js": "./js/postfx.js?v=46",
-        "./js/panorama.js": "./js/panorama.js?v=46",
-        "./js/multiplayer.js": "./js/multiplayer.js?v=46",
-        "./js/storage.js": "./js/storage.js?v=46"
+        "./js/blocks.js": "./js/blocks.js?v=49",
+        "./js/textures.js": "./js/textures.js?v=49",
+        "./js/mods.js": "./js/mods.js?v=49",
+        "./js/inventory.js": "./js/inventory.js?v=49",
+        "./js/recipes.js": "./js/recipes.js?v=49",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=49",
+        "./js/noise.js": "./js/noise.js?v=49",
+        "./js/voxel-gi.js": "./js/voxel-gi.js?v=49",
+        "./js/world.js": "./js/world.js?v=49",
+        "./js/mobs.js": "./js/mobs.js?v=49",
+        "./js/player.js": "./js/player.js?v=49",
+        "./js/effects.js": "./js/effects.js?v=49",
+        "./js/audio.js": "./js/audio.js?v=49",
+        "./js/ui.js": "./js/ui.js?v=49",
+        "./js/controls.js": "./js/controls.js?v=49",
+        "./js/sky.js": "./js/sky.js?v=49",
+        "./js/postfx.js": "./js/postfx.js?v=49",
+        "./js/panorama.js": "./js/panorama.js?v=49",
+        "./js/multiplayer.js": "./js/multiplayer.js?v=49",
+        "./js/storage.js": "./js/storage.js?v=49"
       }
     }
   </script>
@@ -457,14 +457,16 @@
         <button id="btn-chat" class="hud-icon-btn" title="Chat / Commands"><img class="px-ui-icon hud-btn-px" data-px-icon="chat" alt="Chat" /></button>
         <button id="btn-camera" class="hud-icon-btn" title="Toggle Perspective"><img class="px-ui-icon hud-btn-px" data-px-icon="camera" alt="Camera" /></button>
       </div>
-      <div class="hud-info-pill" id="hud-info">
-        <span id="hud-coords">0, 40, 0</span>
-        <span class="sep">|</span>
-        <span id="hud-biome">Plains</span>
-        <span class="sep">|</span>
-        <span id="hud-time">Day 1 08:00</span>
-        <span class="sep">|</span>
-        <span id="hud-fps">60 FPS</span>
+      <div class="hud-center-stack">
+        <div class="hud-info-pill" id="hud-info">
+          <span id="hud-coords">0, 40, 0</span>
+          <span class="sep">|</span>
+          <span id="hud-biome">Plains</span>
+          <span class="sep">|</span>
+          <span id="hud-time">Day 1 08:00</span>
+          <span class="sep">|</span>
+          <span id="hud-fps">60 FPS</span>
+        </div>
         <button type="button" id="hud-mp-pill" class="hud-mp-pill hidden" title="Tap to copy room code">
           <span class="mp-live-dot"></span>
           <span id="hud-mp-text">ONLINE</span>
@@ -484,10 +486,17 @@
       </div>
     </div>
 
-    <!-- Center Crosshair + Break Progress -->
+    <!-- Center Crosshair + Break Progress + PvP Hit Marker UI -->
     <div id="crosshair">
       <div class="ch-h"></div>
       <div class="ch-v"></div>
+      <div id="hit-marker" class="hit-marker hidden" aria-hidden="true">
+        <span class="hm-t hm-tl"></span>
+        <span class="hm-t hm-tr"></span>
+        <span class="hm-t hm-bl"></span>
+        <span class="hm-t hm-br"></span>
+      </div>
+      <div id="hit-dmg-pop" class="hit-dmg-pop hidden"></div>
       <svg id="break-ring" viewBox="0 0 44 44" class="hidden">
         <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="4" />
         <circle id="break-ring-fill" cx="22" cy="22" r="18" fill="none" stroke="#ffd54f" stroke-width="4"
@@ -1148,6 +1157,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=46"></script>
+  <script type="module" src="js/main.js?v=49"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ITEMS, BLOCK, getBlockDef } from './blocks.js';
-import { createSteveModel, updateSteveArmor, updateSteveSkin, updateHeldItemRig, createSteveFireGroup, createPlayerNametag, updatePlayerNametag } from './player.js';
+import { createSteveModel, updateSteveArmor, updateSteveSkin, setSteveHurtFlash, updateHeldItemRig, createSteveFireGroup, createPlayerNametag, updatePlayerNametag } from './player.js';
 import { getSavedPlayerName, savePlayerName, getSavedPlayerSkin, savePlayerSkin } from './storage.js';
 
 export { getSavedPlayerName, savePlayerName, getSavedPlayerSkin, savePlayerSkin };
@@ -218,11 +218,10 @@ export class MultiplayerManager {
   }
 
   _attachHostPeerConnection(conn) {
-    conn.on('open', () => {
-      conn.on('data', (msg) => {
-        if (!msg || typeof msg !== 'object') return;
-        this._handleIncoming(msg, conn.peer, conn);
-      });
+    // CRITICAL: Attach 'data' listener immediately (PeerJS can emit 'data' right as 'open' fires or already be open!)
+    conn.on('data', (msg) => {
+      if (!msg || typeof msg !== 'object') return;
+      this._handleIncoming(msg, conn.peer, conn);
     });
     const onClose = () => {
       const pid = conn._bcPlayerId || conn.peer;
@@ -252,10 +251,17 @@ export class MultiplayerManager {
     return new Promise(async (resolve, reject) => {
       let connected = false;
       let done = false;
+      let bcRetryTimer = null;
+
+      const clearTimers = () => {
+        if (bcRetryTimer) { clearInterval(bcRetryTimer); bcRetryTimer = null; }
+        clearTimeout(overallTimeout);
+      };
 
       const fail = (errMsg) => {
         if (done) return;
         done = true;
+        clearTimers();
         this.disconnect(true);
         reject(new Error(errMsg));
       };
@@ -264,6 +270,7 @@ export class MultiplayerManager {
         if (done) return;
         done = true;
         connected = true;
+        clearTimers();
         rememberRoomCode(code, snapshot?.meta?.name || 'Multiplayer World');
         report('World received! Loading terrain...');
         try {
@@ -291,13 +298,17 @@ export class MultiplayerManager {
         }
       }, 13000);
 
-      // 1. Try instant local BroadcastChannel first (connects in <30ms for same-browser testing!)
+      // 1. Try instant local BroadcastChannel first (with retry pulse every 500ms while waiting!)
       this._setupBroadcastChannel(code);
-      this._sendBroadcastChannel({ t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin });
+      const helloPkt = { t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin };
+      this._sendBroadcastChannel(helloPkt);
+      bcRetryTimer = setInterval(() => {
+        if (!done && this.bc) this._sendBroadcastChannel(helloPkt);
+      }, 500);
 
       // 2. Simultaneously connect over WebRTC PeerJS for cross-device / internet multiplayer!
       const PeerCtor = await loadPeerJS();
-      if (done) { clearTimeout(overallTimeout); return; }
+      if (done) { clearTimers(); return; }
       if (!PeerCtor) {
         report('Checking local room...');
         return;
@@ -320,16 +331,19 @@ export class MultiplayerManager {
           const hostPeerId = PEER_PREFIX + code;
           const conn = peer.connect(hostPeerId, { reliable: true, serialization: 'json' });
           this.hostConn = conn;
-          conn.on('open', () => {
-            if (done) return;
-            this.onlineMode = 'online';
-            report('Connected! Downloading world snapshot...');
-            conn.send({ t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin });
-          });
+          // Attach data handler immediately before open fires!
           conn.on('data', (msg) => {
             if (!msg || typeof msg !== 'object') return;
             this._handleIncoming(msg, 'host', conn);
           });
+          const sendHello = () => {
+            if (done) return;
+            this.onlineMode = 'online';
+            report('Connected! Downloading world snapshot...');
+            conn.send({ t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin });
+          };
+          if (conn.open) sendHello();
+          else conn.on('open', sendHello);
           conn.on('close', () => {
             if (connected && this.role === 'guest') {
               this.game.ui?.addChatMessage('Disconnected from host world.');
@@ -339,7 +353,6 @@ export class MultiplayerManager {
           });
           conn.on('error', () => {
             if (!connected && !this.bc) {
-              clearTimeout(overallTimeout);
               fail(`Unable to reach host "${formatRoomCode(code)}".`);
             }
           });
@@ -349,10 +362,9 @@ export class MultiplayerManager {
             // Wait a brief moment in case local BroadcastChannel responds
             setTimeout(() => {
               if (!connected && !done) {
-                clearTimeout(overallTimeout);
                 fail(`World code "${formatRoomCode(code)}" is not online right now.`);
               }
-            }, 900);
+            }, 1100);
           }
         });
       } catch {
@@ -518,6 +530,8 @@ export class MultiplayerManager {
       fl: p.flying ? 1 : 0,
       wt: p.inWater ? 1 : 0,
       bn: (p.burnTimer > 0 || p.inLava || p.inFire) ? 1 : 0,
+      ht: p.hurtTimer > 0 ? 1 : 0,
+      dd: p.dead ? 1 : 0,
       hp: Math.round(p.hp)
     };
   }
@@ -594,6 +608,12 @@ export class MultiplayerManager {
   }
 
   sendPvpHit(targetId, dmg, dir) {
+    // Immediate local red hurt flash + flinch feedback on attacker's screen!
+    const rp = this.remotePlayers.get(targetId);
+    if (rp && !rp.dead) {
+      rp.hurtTimer = 0.40;
+      rp.flinchTimer = 0.24;
+    }
     this._sendAction({
       t: 'pvp',
       to: targetId,
@@ -603,6 +623,10 @@ export class MultiplayerManager {
       kz: r2((dir?.z || 0) * 6.5),
       nm: this.playerName
     });
+  }
+
+  sendDeathState(isDead, reason = '') {
+    this._sendAction({ t: 'dead', dd: isDead ? 1 : 0, r: String(reason || '').slice(0, 64), nm: this.playerName });
   }
 
   // --- INCOMING PACKET DISPATCHER ---
@@ -707,11 +731,40 @@ export class MultiplayerManager {
     }
 
     if (type === 'pvp') {
-      if (msg.to === this.localId && this.game.player) {
+      if (msg.to === this.localId && this.game.player && !this.game.player.dead) {
         this.game.player.vel.x += msg.kx || 0;
         this.game.player.vel.y = Math.max(this.game.player.vel.y, msg.ky || 4.0);
         this.game.player.vel.z += msg.kz || 0;
+        if (this.game.sound?.playPlayerHit) this.game.sound.playPlayerHit();
         this.game.player.takeDamage(msg.d || 2, `Slain by ${msg.nm || 'Player'}`);
+      } else if (msg.to && msg.to !== this.localId) {
+        const victim = this.remotePlayers.get(msg.to);
+        if (victim && !victim.dead) {
+          victim.hurtTimer = 0.40;
+          victim.flinchTimer = 0.24;
+          if (this.game.player && victim.pos.distanceToSquared(this.game.player.pos) < 256) {
+            if (this.game.sound?.playPlayerHit) this.game.sound.playPlayerHit();
+          }
+        }
+      }
+      return;
+    }
+
+    if (type === 'dead') {
+      const rp = this.remotePlayers.get(senderId);
+      if (rp) {
+        const nowDead = Boolean(msg.dd);
+        const wasDead = rp.dead;
+        rp.dead = nowDead;
+        rp.model.root.visible = !nowDead;
+        if (rp.nametag?.sprite) rp.nametag.sprite.visible = !nowDead;
+        if (nowDead && !wasDead) {
+          rp.hurtTimer = 0;
+          setSteveHurtFlash(rp.model, false);
+          this.game.ui?.addChatMessage(msg.r ? `${rp.name}: ${msg.r}` : `${rp.name} died!`);
+        } else if (!nowDead && wasDead) {
+          rp._snapNextPos = true;
+        }
       }
       return;
     }
@@ -808,10 +861,16 @@ export class MultiplayerManager {
         flying: false,
         inWater: false,
         burning: false,
+        hurtTimer: 0,
+        flinchTimer: 0,
+        dead: Boolean(data?.dd),
+        _snapNextPos: false,
         walkPhase: 0,
         hp: 20,
         lastSeen: performance.now()
       };
+      model.root.visible = !rp.dead;
+      if (nametag.sprite) nametag.sprite.visible = !rp.dead;
       this.remotePlayers.set(id, rp);
       this._emitState();
     }
@@ -827,7 +886,22 @@ export class MultiplayerManager {
         rp.skinId = data.sk;
         updateSteveSkin(rp.model, data.sk);
       }
-      if (typeof data.x === 'number') rp.targetPos.set(data.x, data.y, data.z);
+      if (typeof data.dd === 'number') {
+        const nextDead = Boolean(data.dd);
+        if (nextDead !== rp.dead) {
+          if (!nextDead && rp.dead) rp._snapNextPos = true;
+          rp.dead = nextDead;
+          rp.model.root.visible = !nextDead;
+          if (rp.nametag?.sprite) rp.nametag.sprite.visible = !nextDead;
+        }
+      }
+      if (typeof data.x === 'number') {
+        rp.targetPos.set(data.x, data.y, data.z);
+        if (rp._snapNextPos) {
+          rp.pos.copy(rp.targetPos);
+          rp._snapNextPos = false;
+        }
+      }
       if (typeof data.yw === 'number') rp.targetYaw = data.yw;
       if (typeof data.pt === 'number') rp.targetPitch = data.pt;
       if (typeof data.h === 'string' && data.h !== rp.heldId) {
@@ -839,6 +913,7 @@ export class MultiplayerManager {
         updateSteveArmor(rp.model, data.ar.map((aid) => (aid ? { id: aid } : null)));
       }
       if (data.sw && rp.swingAnim < 0.2) rp.swingAnim = 1.0;
+      if (data.ht && rp.hurtTimer < 0.15) rp.hurtTimer = 0.36;
       rp.isEating = Boolean(data.ea);
       rp.sneaking = Boolean(data.sn);
       rp.flying = Boolean(data.fl);
@@ -862,24 +937,25 @@ export class MultiplayerManager {
     this._emitState();
   }
 
-  // Raycast remote players for hover nametags & PvP hits!
-  raycastRemotePlayer(origin, dir, maxDist = 4.6) {
+  // Raycast remote players for hover nametags & PvP hits (ignores players currently on Death Screen!)
+  raycastRemotePlayer(origin, dir, maxDist = 5.0) {
     if (this.remotePlayers.size === 0) return null;
     let best = null;
     let bestDist = maxDist;
     for (const rp of this.remotePlayers.values()) {
+      if (rp.dead) continue;
       const cx = rp.pos.x;
-      const cy = rp.pos.y + 0.92;
+      const cy = rp.pos.y + 0.95;
       const cz = rp.pos.z;
       const dx = cx - origin.x;
       const dy = cy - origin.y;
       const dz = cz - origin.z;
       const proj = dx * dir.x + dy * dir.y + dz * dir.z;
-      if (proj < 0.2 || proj > bestDist) continue;
+      if (proj < 0.15 || proj > bestDist) continue;
       const px = origin.x + dir.x * proj - cx;
       const py = origin.y + dir.y * proj - cy;
       const pz = origin.z + dir.z * proj - cz;
-      if (px * px + pz * pz <= 0.34 && Math.abs(py) <= 1.0) {
+      if (px * px + pz * pz <= 0.46 && Math.abs(py) <= 1.05) {
         bestDist = proj;
         best = { player: rp, dist: proj };
       }
@@ -896,7 +972,7 @@ export class MultiplayerManager {
     if (this._sendTimer >= 0.055) {
       this._sendTimer = 0;
       const pkt = this._buildLocalPlayerPacket();
-      const sig = `${pkt.x}|${pkt.y}|${pkt.z}|${pkt.yw}|${pkt.pt}|${pkt.sk}|${pkt.h}|${pkt.ar.join(',')}|${pkt.sw}|${pkt.ea}|${pkt.sn}|${pkt.fl}|${pkt.bn}`;
+      const sig = `${pkt.x}|${pkt.y}|${pkt.z}|${pkt.yw}|${pkt.pt}|${pkt.sk}|${pkt.h}|${pkt.ar.join(',')}|${pkt.sw}|${pkt.ea}|${pkt.sn}|${pkt.fl}|${pkt.bn}|${pkt.ht}|${pkt.dd}`;
       this._keepaliveAccum = (this._keepaliveAccum || 0) + 0.055;
       if (sig !== this._lastSentSig || this._keepaliveAccum >= 0.8) {
         this._lastSentSig = sig;
@@ -932,6 +1008,14 @@ export class MultiplayerManager {
         continue;
       }
 
+      // Keep dead players completely hidden out of view while on the Death Screen!
+      if (rp.dead) {
+        rp.model.root.visible = false;
+        if (rp.nametag?.sprite) rp.nametag.sprite.visible = false;
+        continue;
+      }
+      rp.model.root.visible = true;
+
       const prevX = rp.pos.x;
       const prevZ = rp.pos.z;
       if (rp.pos.distanceToSquared(rp.targetPos) > 144) {
@@ -947,13 +1031,32 @@ export class MultiplayerManager {
         rp.walkPhase += dt * Math.min(14, 8.5 + horizSpeed * 0.75);
       }
       if (rp.swingAnim > 0) rp.swingAnim = Math.max(0, rp.swingAnim - dt * 5.8);
+      if (rp.hurtTimer > 0) rp.hurtTimer = Math.max(0, rp.hurtTimer - dt);
+      if (rp.flinchTimer > 0) rp.flinchTimer = Math.max(0, rp.flinchTimer - dt);
       if (rp.isEating) rp.eatTime += dt;
       else rp.eatTime = 0;
 
       const pm = rp.model;
+      setSteveHurtFlash(pm, rp.hurtTimer > 0);
       pm.root.position.copy(rp.pos);
       pm.root.rotation.y = rp.yaw;
+      // Subtle classic Minecraft hit-flinch tilt when struck!
+      const flinchZ = rp.flinchTimer > 0 ? Math.sin((rp.flinchTimer / 0.24) * Math.PI) * 0.22 : 0;
+      pm.bodyPivot.rotation.z = flinchZ;
       pm.headPivot.rotation.x = rp.pitch * 0.85;
+
+      // Always keep nametag clearly visible & distance-scaled (never vanishes or clips behind blocks/water!)
+      if (rp.nametag?.sprite && this.game.camera) {
+        const dist = this.game.camera.position.distanceTo(rp.pos);
+        const visibleDist = dist < 72;
+        rp.nametag.sprite.visible = visibleDist;
+        if (visibleDist) {
+          const s = Math.max(0.88, Math.min(2.2, 0.78 + dist * 0.042));
+          rp.nametag.sprite.scale.set(1.12 * s, 0.21 * s, 1);
+          rp.nametag.sprite.position.y = 2.08 + Math.min(0.35, dist * 0.008);
+          rp.nametag.mat.opacity = dist > 26 ? 0.65 : 0.95;
+        }
+      }
 
       const targetBodyPitch = rp.flying ? -0.35 : (rp.inWater && horizSpeed > 0.4 ? -0.55 : (rp.sneaking ? -0.25 : 0));
       pm.bodyPivot.rotation.x = THREE.MathUtils.lerp(pm.bodyPivot.rotation.x, targetBodyPitch, Math.min(1, dt * 12));

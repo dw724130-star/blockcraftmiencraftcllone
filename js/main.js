@@ -673,6 +673,7 @@ class BlockCraftGame {
       this.player.onDeath = (reason) => {
         this.controls.enabled = false;
         this.controls.resetInputs();
+        this.multiplayer?.sendDeathState(true, reason);
         if (!this.mods.isEnabled('keep_inventory')) {
           this.inventory.slots.fill(null);
           this.inventory.armor.fill(null);
@@ -684,6 +685,9 @@ class BlockCraftGame {
           try { document.exitPointerLock(); } catch {}
         }
         this.ui.showDeathScreen(reason);
+      };
+      this.player.onRespawn = () => {
+        this.multiplayer?.sendDeathState(false);
       };
       this.player.onHudDirty = () => {
         this.ui.updateStats();
@@ -939,7 +943,7 @@ class BlockCraftGame {
       this.player.swingAnim = 1.0;
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
-      const remoteHit = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 4.6) : null;
+      const remoteHit = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 5.0) : null;
       const mob = this.entities.raycastMob(eye, dir, 5.2);
       const blk = this.world ? this.world.raycast(eye, dir, 5.5) : null;
       if (remoteHit && (!blk || remoteHit.dist <= blk.dist + 0.35) && (!mob || remoteHit.dist <= mob._hitDist)) {
@@ -948,7 +952,9 @@ class BlockCraftGame {
         const held = this.inventory.getHeldDef();
         const dmg = held?.damage || 2;
         this.multiplayer.sendPvpHit(remoteHit.player.id, dmg, dir);
-        this.sound.playPop();
+        if (this.sound.playPlayerHit) this.sound.playPlayerHit();
+        else this.sound.playHurt();
+        if (this.ui.flashHitMarker) this.ui.flashHitMarker(dmg, remoteHit.player.name);
         if (this.player.mode === 'survival') {
           this.inventory.damageSelectedTool(1);
           this.ui.updateHotbar();
@@ -1859,7 +1865,7 @@ class BlockCraftGame {
       // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
-      const lookRemote = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 4.6) : null;
+      const lookRemote = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 5.0) : null;
       const lookMob = this.entities.raycastMob(eye, dir, 5.2);
       const heldForRay = this.inventory.getHeldDef();
       const rayHitLiquids = !!(heldForRay && heldForRay.bucketType === 'empty');
@@ -1953,7 +1959,9 @@ class BlockCraftGame {
           const held = this.inventory.getHeldDef();
           const dmg = held?.damage || 2;
           this.multiplayer.sendPvpHit(lookRemote.player.id, dmg, dir);
-          this.sound.playPop();
+          if (this.sound.playPlayerHit) this.sound.playPlayerHit();
+          else this.sound.playHurt();
+          if (this.ui.flashHitMarker) this.ui.flashHitMarker(dmg, lookRemote.player.name);
           if (this.player.mode === 'survival') {
             this.inventory.damageSelectedTool(1);
             this.ui.updateHotbar();

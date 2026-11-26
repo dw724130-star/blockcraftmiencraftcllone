@@ -1294,6 +1294,33 @@ export class UIManager {
     this._dmgTimer = setTimeout(() => el.classList.add('hidden'), 240);
   }
 
+  // Crisp Crosshair Hit Marker & Damage Pop UI when hitting another player!
+  flashHitMarker(dmg = 2, targetName = '') {
+    const hm = document.getElementById('hit-marker');
+    const pop = document.getElementById('hit-dmg-pop');
+    if (hm) {
+      hm.classList.remove('hidden', 'hit-pop-anim');
+      void hm.offsetWidth;
+      hm.classList.add('hit-pop-anim');
+      clearTimeout(this._hitMarkerTimer);
+      this._hitMarkerTimer = setTimeout(() => {
+        hm.classList.add('hidden');
+        hm.classList.remove('hit-pop-anim');
+      }, 220);
+    }
+    if (pop) {
+      pop.textContent = targetName ? `-${dmg} HP • ${targetName}` : `-${dmg} HP`;
+      pop.classList.remove('hidden', 'dmg-float-anim');
+      void pop.offsetWidth;
+      pop.classList.add('dmg-float-anim');
+      clearTimeout(this._hitPopTimer);
+      this._hitPopTimer = setTimeout(() => {
+        pop.classList.add('hidden');
+        pop.classList.remove('dmg-float-anim');
+      }, 520);
+    }
+  }
+
   setUnderwater(isUnder) {
     document.getElementById('underwater-overlay').classList.toggle('hidden', !isUnder);
   }
@@ -2671,9 +2698,10 @@ export class UIManager {
       ctx.fillRect(mx - 2, my - 2, 4, 4);
     }
 
-    // Draw connected Multiplayer friends as bright emerald-cyan circles on the minimap!
+    // Draw connected alive Multiplayer friends as bright emerald-cyan circles on the minimap!
     if (this.game?.multiplayer?.remotePlayers?.size > 0) {
       for (const rp of this.game.multiplayer.remotePlayers.values()) {
+        if (rp.dead) continue;
         const mx = Math.max(5, Math.min(w - 5, half + (rp.pos.x - px) / scale));
         const my = Math.max(5, Math.min(h - 5, half + (rp.pos.z - pz) / scale));
         ctx.fillStyle = '#4ade80';

@@ -9,8 +9,8 @@ const EYE_HEIGHT = 1.56;
 // Authentic Minecraft Floating Nametag Sprite positioned directly above the player's head!
 export function createPlayerNametag(name = 'Player', isHost = false) {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 48;
+  canvas.width = 512;
+  canvas.height = 96;
   const tex = new THREE.CanvasTexture(canvas);
   tex.minFilter = THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
@@ -18,12 +18,15 @@ export function createPlayerNametag(name = 'Player', isHost = false) {
   const mat = new THREE.SpriteMaterial({
     map: tex,
     transparent: true,
-    depthTest: true,
+    opacity: 0.94,
+    depthTest: false,
     depthWrite: false
   });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(1.75, 0.33, 1);
-  sprite.position.set(0, 2.16, 0);
+  sprite.scale.set(1.12, 0.21, 1);
+  sprite.position.set(0, 2.08, 0);
+  sprite.renderOrder = 30;
+  sprite.frustumCulled = false;
   const tagObj = { sprite, canvas, tex, mat, name: '', isHost: false };
   updatePlayerNametag(tagObj, name, isHost);
   return tagObj;
@@ -38,23 +41,23 @@ export function updatePlayerNametag(tagObj, name = 'Player', isHost = false) {
   tagObj.isHost = hostFlag;
 
   const ctx = tagObj.canvas.getContext('2d');
-  ctx.clearRect(0, 0, 256, 48);
+  ctx.clearRect(0, 0, 512, 96);
 
   const label = hostFlag ? `★ ${clean}` : clean;
-  ctx.font = 'bold 24px "Courier New", Consolas, monospace';
-  const tw = Math.min(244, Math.max(68, Math.ceil(ctx.measureText(label).width) + 22));
-  const rx = Math.round((256 - tw) * 0.5);
+  ctx.font = 'bold 46px "Courier New", Consolas, monospace';
+  const tw = Math.min(488, Math.max(136, Math.ceil(ctx.measureText(label).width) + 44));
+  const rx = Math.round((512 - tw) * 0.5);
 
   // Classic Minecraft translucent dark nameplate floating cleanly above head
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.46)';
-  ctx.fillRect(rx, 8, tw, 32);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.44)';
+  ctx.fillRect(rx, 16, tw, 64);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
-  ctx.fillText(label, 130, 26);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.82)';
+  ctx.fillText(label, 259, 51);
   ctx.fillStyle = hostFlag ? '#ffe57f' : '#ffffff';
-  ctx.fillText(label, 128, 24);
+  ctx.fillText(label, 256, 48);
   tagObj.tex.needsUpdate = true;
 }
 
@@ -269,6 +272,33 @@ export function updateSteveSkin(model, skinId = 'steve') {
   model.rightArm.position.x = bundle.slimArms ? 0.34 : 0.365;
 }
 
+// Minecraft Red Damage Tint Flash across a player's 3D skin & armor meshes!
+export function setSteveHurtFlash(model, active) {
+  if (!model) return;
+  const flag = Boolean(active);
+  if (model._hurtFlashing === flag) return;
+  model._hurtFlashing = flag;
+  const applyMat = (m) => {
+    if (!m) return;
+    if (Array.isArray(m)) {
+      for (let i = 0; i < m.length; i++) applyMat(m[i]);
+      return;
+    }
+    if (m.emissive) m.emissive.setHex(flag ? 0xb81616 : 0x000000);
+    if (m.color) m.color.setHex(flag ? 0xff5a5a : 0xffffff);
+  };
+  if (model.skinMeshes) {
+    for (const mesh of Object.values(model.skinMeshes)) {
+      if (mesh) applyMat(mesh.material);
+    }
+  }
+  if (model.armorMeshes) {
+    for (const mesh of Object.values(model.armorMeshes)) {
+      if (mesh && mesh.visible) applyMat(mesh.material);
+    }
+  }
+}
+
 // Shared geometries/materials for sculpted 3D held torches (reused across 1st-person, 3rd-person & all multiplayer friends!)
 let _sharedTorchAssets = null;
 function getSharedTorchAssets() {
@@ -424,25 +454,25 @@ export function updateHeldItemRig(rig, itemDef, textures, isFirstPerson = false)
       if (isFirstPerson) {
         itemPivot.position.set(-0.02, -0.04, -0.10);
         if (tt === 'sword') {
-          // Proud forward-up Minecraft combat stance
-          itemPivot.rotation.set(0.08, Math.PI * 0.44, -0.08);
+          // Proud forward-up Minecraft combat stance (with 'YXZ', Rz pitches forward-down in tool plane, Ry faces -Z!)
+          itemPivot.rotation.set(0.04, Math.PI * 0.44, 0.06);
         } else if (tt === 'pickaxe') {
           // Pickaxe head pointing cleanly forward & curving down toward blocks
-          itemPivot.rotation.set(-0.18, Math.PI * 0.47, -0.05);
+          itemPivot.rotation.set(0.04, Math.PI * 0.47, -0.22);
         } else if (tt === 'axe' || tt === 'hoe') {
           // Cutting/tilling edge facing cleanly forward-down
-          itemPivot.rotation.set(-0.15, Math.PI * 0.47, -0.05);
+          itemPivot.rotation.set(0.04, Math.PI * 0.47, -0.18);
         } else {
           // Shovel ready to dig forward
-          itemPivot.rotation.set(-0.20, Math.PI * 0.47, -0.05);
+          itemPivot.rotation.set(0.04, Math.PI * 0.47, -0.24);
         }
       } else {
-        // 3rd-Person & Multiplayer Remote Steve: handle gripped inside right fist, tool pointing forward (-Z)!
-        itemPivot.position.set(0.0, -0.59, -0.06);
+        // 3rd-Person & Multiplayer Remote Steve: handle gripped inside right fist, tool pointing straight forward (-Z)!
+        itemPivot.position.set(0.02, -0.58, -0.10);
         if (tt === 'sword') {
-          itemPivot.rotation.set(-0.34, Math.PI * 0.5, 0);
+          itemPivot.rotation.set(0.0, Math.PI * 0.5, -0.32);
         } else {
-          itemPivot.rotation.set(-0.54, Math.PI * 0.5, 0);
+          itemPivot.rotation.set(0.0, Math.PI * 0.5, -0.52);
         }
       }
     } else if (itemDef.id === 'stick') {
@@ -450,10 +480,10 @@ export function updateHeldItemRig(rig, itemDef, textures, isFirstPerson = false)
       itemMesh.rotation.set(0, 0, 0);
       if (isFirstPerson) {
         itemPivot.position.set(-0.02, -0.02, -0.12);
-        itemPivot.rotation.set(-0.10, Math.PI * 0.45, -0.05);
+        itemPivot.rotation.set(0.04, Math.PI * 0.45, -0.12);
       } else {
-        itemPivot.position.set(0.0, -0.59, -0.07);
-        itemPivot.rotation.set(-0.46, Math.PI * 0.5, 0);
+        itemPivot.position.set(0.02, -0.58, -0.10);
+        itemPivot.rotation.set(0.0, Math.PI * 0.5, -0.45);
       }
     } else if (itemDef.isDoor) {
       itemMesh.position.set(0, size * 0.15, 0);
@@ -658,6 +688,7 @@ export class Player {
     this.xp = 0;
     this.level = 0;
     this.dead = false;
+    this.hurtTimer = 0;
     this.fallStartY = null;
     this.hungerTimer = 0;
     this.regenTimer = 0;
@@ -751,6 +782,7 @@ export class Player {
     // Callbacks wired by main.js
     this.onDamage = null;
     this.onDeath = null;
+    this.onRespawn = null;
     this.onHudDirty = null;
   }
 
@@ -829,10 +861,18 @@ export class Player {
   }
 
   takeDamage(amount, reason = 'You died.') {
-    if (this.mode === 'creative' || this.dead) return;
+    if (this.dead) return;
+    if (this.mode === 'creative') {
+      // Still flash hurt feedback cleanly if hit in Creative PvP, without draining HP
+      this.hurtTimer = 0.36;
+      this.sound.playHurt();
+      if (this.onDamage) this.onDamage();
+      return;
+    }
     const def = this.inventory.getArmorDefense();
     const reduced = Math.max(0.5, amount * (1 - Math.min(0.8, def * 0.04)));
     this.hp = Math.max(0, this.hp - reduced);
+    this.hurtTimer = 0.38;
     this.inventory.damageArmor();
     this.sound.playHurt();
     if (this.onDamage) this.onDamage();
@@ -840,6 +880,9 @@ export class Player {
 
     if (this.hp <= 0) {
       this.dead = true;
+      // Hide local player model & hand cleanly while on the Death Screen!
+      if (this.playerModel?.root) this.playerModel.root.visible = false;
+      if (this.handGroup) this.handGroup.visible = false;
       if (this.onDeath) this.onDeath(reason);
     }
   }
@@ -858,6 +901,7 @@ export class Player {
 
   respawn() {
     this.dead = false;
+    this.hurtTimer = 0;
     this.hp = this.maxHp;
     this.hunger = this.maxHunger;
     this.air = this.maxAir;
@@ -871,6 +915,8 @@ export class Player {
     const sy = this.world.getSurfaceY(this.pos.x, this.pos.z);
     if (this.pos.y < sy) this.pos.y = sy + 0.5;
     this.fallStartY = null;
+    if (this.playerModel) setSteveHurtFlash(this.playerModel, false);
+    if (this.onRespawn) this.onRespawn();
     if (this.onHudDirty) this.onHudDirty();
   }
 
@@ -1295,20 +1341,21 @@ export class Player {
     if (this.cameraMode === 1 || this.cameraMode === 2) {
       const dir = this.getLookDirection(this._dirTmp);
       const sign = this.cameraMode === 1 ? -1 : 1;
-      const maxDist = this.cameraMode === 1 ? 3.8 : 3.6;
-      // Ray-step 3rd-person camera against solid walls so it NEVER clips inside blocks!
+      const maxDist = this.cameraMode === 1 ? 4.2 : 3.8;
+      const yLift = this.cameraMode === 1 ? 0.56 : 0.34;
+      // Ray-step 3rd-person camera cleanly against solid walls without clipping ground blocks behind feet!
       let safeDist = maxDist;
-      for (let dStep = 0.4; dStep <= maxDist; dStep += 0.22) {
+      for (let dStep = 0.65; dStep <= maxDist; dStep += 0.20) {
         const cx = eye.x + dir.x * sign * dStep;
-        const cy = eye.y + dir.y * sign * dStep + 0.35 * (dStep / maxDist);
+        const cy = Math.max(this.pos.y + 0.55, eye.y + dir.y * sign * dStep + yLift * (dStep / maxDist));
         const cz = eye.z + dir.z * sign * dStep;
         if (isWallBlock(cx, cy, cz)) {
-          safeDist = Math.max(0.45, dStep - 0.28);
+          safeDist = Math.max(1.05, dStep - 0.30);
           break;
         }
       }
       const camPos = this._camPosScratch.copy(eye).addScaledVector(dir, sign * safeDist);
-      camPos.y += (this.cameraMode === 1 ? 0.42 : 0.32) * (safeDist / maxDist);
+      camPos.y = Math.max(this.pos.y + 0.55, camPos.y + yLift * (safeDist / maxDist));
       this.camera.position.copy(camPos);
       if (this.cameraMode === 1) {
         this.camera.rotation.order = 'YXZ';
@@ -1316,7 +1363,7 @@ export class Player {
         this.camera.rotation.x = this.pitch;
         this.camera.rotation.z = 0;
       } else {
-        this.camera.lookAt(eye.x, eye.y - 0.15, eye.z);
+        this.camera.lookAt(eye.x, eye.y - 0.12, eye.z);
       }
       this.handGroup.visible = false;
       this.playerModel.root.visible = true;
@@ -1385,10 +1432,15 @@ export class Player {
       0.08 + swingArc * 0.22 + 0.26 * eb + eatChompX * 2.2
     );
 
-    // Animate 3D Player Model (for 3rd-person views) + sync visible 3D Armor & 3D Held Item!
+    // Animate 3D Player Model (for 3rd-person views) + sync visible 3D Armor, Hurt Red Flash & 3D Held Item!
+    if (this.hurtTimer > 0) this.hurtTimer = Math.max(0, this.hurtTimer - dt);
     const pm = this.playerModel;
     updateSteveArmor(pm, this.inventory.armor);
+    setSteveHurtFlash(pm, this.hurtTimer > 0);
     updateHeldItemRig(pm.heldRig, held, this.textures, false);
+    if (this.nametag?.sprite) {
+      this.nametag.sprite.visible = !this.dead && this.cameraMode !== 0;
+    }
     pm.root.position.copy(this.pos);
     pm.root.rotation.y = this.yaw;
 
