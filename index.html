@@ -95,9 +95,12 @@
       <div class="java-logo-stage">
         <div class="logo-title-wrap">
           <h1 class="game-logo java-logo" data-text="BLOCKCRAFT">BLOCKCRAFT</h1>
-          <div class="splash-text" id="title-splash">Silky 60 FPS Voxel World!</div>
+          <div class="splash-text" id="title-splash">MULTIPLAYER UPDATE!</div>
         </div>
-        <div class="java-edition-banner">VOXEL EDITION</div>
+        <div class="java-edition-banner mp-update-banner">
+          <span class="mp-banner-dot"></span>
+          <span>VOXEL EDITION &bull; MULTIPLAYER UPDATE</span>
+        </div>
       </div>
 
       <div class="java-menu-stack">
@@ -105,9 +108,10 @@
           <img class="px-ui-icon btn-px" data-px-icon="play" alt="" />
           <span>Singleplayer</span>
         </button>
-        <button id="btn-nav-multiplayer" class="mc-stone-btn java-wide" data-title-view="multiplayer">
+        <button id="btn-nav-multiplayer" class="mc-stone-btn mp-highlight-btn java-wide" data-title-view="multiplayer">
           <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
           <span>Multiplayer</span>
+          <span class="java-new-pill">NEW</span>
         </button>
         <button id="btn-nav-mods" class="mc-stone-btn java-wide java-mods-btn" data-title-view="mods">
           <img class="px-ui-icon btn-px" data-px-icon="mods" alt="" />
@@ -131,8 +135,8 @@
       </div>
 
       <div class="java-corner-footer">
-        <span>BlockCraft 1.21 • Voxel Edition</span>
-        <span>iPad &amp; WebGL Optimized</span>
+        <span>BlockCraft 1.21 &bull; Multiplayer Update</span>
+        <span>3D Held Items &bull; Ultra-Fast WebGL Engine</span>
       </div>
     </div>
 
@@ -247,62 +251,69 @@
       </div>
     </div>
 
-    <!-- MULTIPLAYER SUB-SCREEN (Authentic Placeholder Server Browser!) -->
+    <!-- MULTIPLAYER SUB-SCREEN (Live Room-Code Co-Op Hub!) -->
     <div id="title-view-multiplayer" class="java-subscreen hidden">
       <div class="java-sub-header">
-        <h2><img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" /> Play Multiplayer</h2>
+        <h2><img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" /> Multiplayer</h2>
       </div>
       <div class="java-sub-body mp-body">
-        <div class="mp-placeholder-banner">
-          <img class="px-ui-icon btn-px" data-px-icon="server" alt="" />
-          <div>
-            <strong>Multiplayer Mode — Coming Soon (Placeholder)</strong>
-            <span>Online Realms, LAN Co-Op &amp; Custom Servers are being built. Preview the server browser below!</span>
+        <div class="mp-hero-card">
+          <div class="mp-hero-top">
+            <div class="mp-hero-icon"><img class="px-ui-icon mod-px" data-px-icon="globe" alt="" /></div>
+            <div class="mp-hero-copy">
+              <strong>Play BlockCraft With Friends</strong>
+              <span>Enter a friend's 6-character world code to jump straight into their live world with real-time blocks, chat, and 3D held tools!</span>
+            </div>
+          </div>
+          <div class="mp-name-row">
+            <label for="mp-player-name">Your Display Name</label>
+            <input type="text" id="mp-player-name" class="cw-mc-input mp-name-input" maxlength="16" placeholder="Player" />
+          </div>
+          <div class="mp-hero-actions">
+            <button id="btn-open-join-world" class="mc-stone-btn primary mp-join-hero-btn">
+              <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
+              <span>Join World</span>
+            </button>
           </div>
         </div>
-        <div id="mp-server-list" class="mp-server-list">
-          <div class="mp-server-row selected" data-server="BlockCraft Official Hub">
-            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="globe" alt="" /></div>
-            <div class="mp-server-info">
-              <div class="mp-server-top">
-                <span class="mp-server-name">BlockCraft Official Hub</span>
-                <span class="mp-server-status">0 / 100 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+
+        <div class="mp-howto-card">
+          <div class="mp-section-title">How to Host &amp; Play Together</div>
+          <div class="mp-steps-grid">
+            <div class="mp-step">
+              <span class="mp-step-num">1</span>
+              <div>
+                <strong>Open Any World</strong>
+                <span>Load or create a world in Singleplayer.</span>
               </div>
-              <div class="mp-server-motd">Survival SMP • Villages • Cross-Play WebGL — Coming Soon!</div>
-              <div class="mp-server-addr">play.blockcraft.gg (Placeholder)</div>
             </div>
-          </div>
-          <div class="mp-server-row" data-server="Alpine Realms SMP">
-            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="map" alt="" /></div>
-            <div class="mp-server-info">
-              <div class="mp-server-top">
-                <span class="mp-server-name">Alpine Realms SMP</span>
-                <span class="mp-server-status">0 / 40 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+            <div class="mp-step">
+              <span class="mp-step-num">2</span>
+              <div>
+                <strong>Settings &rarr; Multiplayer World</strong>
+                <span>Tap Pause / Settings and click <em>Multiplayer World</em> to generate a 6-letter code.</span>
               </div>
-              <div class="mp-server-motd">Co-op Mountain Building, Trading Villages &amp; Custom Biomes</div>
-              <div class="mp-server-addr">smp.blockcraft.local (Placeholder)</div>
             </div>
-          </div>
-          <div class="mp-server-row" data-server="Creative Plots &amp; Minigames">
-            <div class="mp-server-icon"><img class="px-ui-icon mod-px" data-px-icon="star" alt="" /></div>
-            <div class="mp-server-info">
-              <div class="mp-server-top">
-                <span class="mp-server-name">Creative Plots &amp; Minigames</span>
-                <span class="mp-server-status">0 / 64 <img class="px-ui-icon inline-px" data-px-icon="signal_off" alt="" /></span>
+            <div class="mp-step">
+              <span class="mp-step-num">3</span>
+              <div>
+                <strong>Share &amp; Join</strong>
+                <span>Your friend clicks <em>Join World</em> here, types the code, and spawns right next to you!</span>
               </div>
-              <div class="mp-server-motd">Infinite Creative Plots • Parkour • TNT Arena — Coming Soon!</div>
-              <div class="mp-server-addr">creative.blockcraft.local (Placeholder)</div>
             </div>
           </div>
         </div>
-        <div id="mp-status-msg" class="mp-status-msg">Select a server or add a custom address (Multiplayer networking coming soon).</div>
+
+        <div class="mp-recent-card">
+          <div class="mp-section-title">Recent Room Codes</div>
+          <div id="mp-recent-list" class="mp-recent-list">
+            <div class="mp-recent-empty">No recent room codes yet. Click <strong>Join World</strong> above to enter a code!</div>
+          </div>
+        </div>
       </div>
       <div class="java-sub-footer mp-footer-grid">
-        <button id="btn-mp-join" class="mc-stone-btn primary">Join Server</button>
-        <button id="btn-mp-direct" class="mc-stone-btn">Direct Connection</button>
-        <button id="btn-mp-add" class="mc-stone-btn">Add Server</button>
-        <button id="btn-mp-refresh" class="mc-stone-btn">Refresh</button>
-        <button class="mc-stone-btn java-back-btn" data-title-view="home">Cancel</button>
+        <button id="btn-mp-join-footer" class="mc-stone-btn primary">Join World</button>
+        <button class="mc-stone-btn java-back-btn" data-title-view="home">Back to Title</button>
       </div>
     </div>
 
@@ -429,6 +440,10 @@
         <span id="hud-time">Day 1 08:00</span>
         <span class="sep">|</span>
         <span id="hud-fps">60 FPS</span>
+        <button type="button" id="hud-mp-pill" class="hud-mp-pill hidden" title="Tap to copy room code">
+          <span class="mp-live-dot"></span>
+          <span id="hud-mp-text">ONLINE</span>
+        </button>
       </div>
       <div class="hud-top-right">
         <div class="right-quick-bar">
@@ -829,9 +844,36 @@
       <div class="pause-body">
         <div class="pause-actions">
           <button id="btn-resume" class="mc-btn primary">Resume Game</button>
+          <button id="btn-mp-world" class="mc-btn mp-world-btn">
+            <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
+            <span id="btn-mp-world-label">Multiplayer World</span>
+          </button>
           <button id="btn-save-quit" class="mc-btn danger">Save &amp; Quit</button>
           <button id="btn-toggle-mode" class="mc-btn">Switch Mode (Survival / Creative)</button>
           <button id="btn-respawn-spawn" class="mc-btn">Teleport to Spawn</button>
+        </div>
+
+        <!-- LIVE MULTIPLAYER WORLD CODE & PLAYER ROSTER PANEL -->
+        <div id="pause-mp-panel" class="pause-mp-panel hidden">
+          <div class="pause-mp-header">
+            <div class="pause-mp-title">
+              <span class="mp-live-dot"></span>
+              <span id="pause-mp-status-title">Multiplayer World Active</span>
+            </div>
+            <span id="pause-mp-mode-tag" class="pause-mp-mode-tag">ONLINE</span>
+          </div>
+          <div class="pause-mp-code-row">
+            <div class="pause-mp-code-box">
+              <span class="pause-mp-code-label">SHARE WORLD CODE</span>
+              <strong id="pause-mp-code" class="pause-mp-code">------</strong>
+            </div>
+            <button type="button" id="btn-mp-copy-code" class="mc-btn primary sm">Copy Code</button>
+          </div>
+          <div class="pause-mp-players-wrap">
+            <div class="pause-mp-players-lbl">Connected Players (<span id="pause-mp-count">1</span>)</div>
+            <div id="pause-mp-players" class="pause-mp-players"></div>
+          </div>
+          <button type="button" id="btn-mp-stop" class="mc-btn danger sm">Stop Multiplayer World</button>
         </div>
 
         <div class="settings-list">
@@ -1050,9 +1092,35 @@
     </div>
   </div>
 
+  <!-- JOIN WORLD ROOM-CODE POPUP MODAL -->
+  <div id="join-world-modal" class="modal-backdrop hidden">
+    <div class="mc-window join-world-window">
+      <div class="mc-window-header">
+        <span class="header-with-icon"><img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" /> Join World</span>
+        <button class="close-modal-btn" id="btn-close-join-modal"><img class="px-ui-icon close-px" data-px-icon="close" alt="Close" /></button>
+      </div>
+      <div class="join-world-body">
+        <p class="join-world-desc">Enter the 6-character code generated in your friend's <strong>Settings &rarr; Multiplayer World</strong> menu:</p>
+        <div class="join-field">
+          <label for="join-code-input">World Code</label>
+          <input type="text" id="join-code-input" class="join-code-input" placeholder="ABC-123" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+        </div>
+        <div class="join-field">
+          <label for="join-name-input">Your Name</label>
+          <input type="text" id="join-name-input" class="cw-mc-input" placeholder="Player" maxlength="16" />
+        </div>
+        <div id="join-world-status" class="join-world-status hidden"></div>
+        <div class="join-world-actions">
+          <button type="button" id="btn-confirm-join-world" class="mc-stone-btn primary">Join World</button>
+          <button type="button" id="btn-cancel-join-world" class="mc-stone-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=41"></script>
+  <script type="module" src="js/main.js?v=44"></script>
 </body>
 </html>

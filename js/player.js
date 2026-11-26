@@ -118,12 +118,7 @@ export function createSteveModel(textures) {
 
     let heldItem = null;
     if (isRight) {
-      heldItem = new THREE.Mesh(
-        new THREE.BoxGeometry(0.24, 0.24, 0.24),
-        new THREE.MeshLambertMaterial({ color: 0xc9b393 })
-      );
-      heldItem.position.set(0, -0.62, -0.18);
-      heldItem.visible = false;
+      heldItem = createHeldItemRig(textures, false);
       pivot.add(heldItem);
     }
     bodyPivot.add(pivot);
@@ -157,6 +152,7 @@ export function createSteveModel(textures) {
     leftArm: leftArmObj.pivot,
     rightArm: rightArmObj.pivot,
     heldItem: rightArmObj.heldItem,
+    heldRig: rightArmObj.heldItem,
     armorMeshes: {
       helm: helmArmor,
       chest: chestArmor,
@@ -172,6 +168,271 @@ export function createSteveModel(textures) {
     _armorMatCache: {},
     _lastArmorSig: ''
   };
+}
+
+// Shared geometries/materials for sculpted 3D held torches (reused across 1st-person, 3rd-person & all multiplayer friends!)
+let _sharedTorchAssets = null;
+function getSharedTorchAssets() {
+  if (_sharedTorchAssets) return _sharedTorchAssets;
+  _sharedTorchAssets = {
+    woodGeo: new THREE.BoxGeometry(0.062, 0.26, 0.062),
+    collarGeo: new THREE.BoxGeometry(0.074, 0.044, 0.074),
+    headGeo: new THREE.BoxGeometry(0.070, 0.064, 0.070),
+    tipGeo: new THREE.BoxGeometry(0.044, 0.056, 0.044),
+    woodMat: new THREE.MeshLambertMaterial({ color: 0x9c6e3b }),
+    collarMat: new THREE.MeshLambertMaterial({ color: 0x2c2826 }),
+    headMat: new THREE.MeshBasicMaterial({ color: 0xffa62b }),
+    flameMat: new THREE.MeshBasicMaterial({ color: 0xfff099 })
+  };
+  return _sharedTorchAssets;
+}
+
+// Unified Detailed 3D Held-Item Rig (used in 1st-person hand, 3rd-person Steve, AND multiplayer remote players!)
+export function createHeldItemRig(textures, isFirstPerson = false) {
+  const rig = new THREE.Group();
+  rig.visible = false;
+
+  const blockMat = textures && textures.getBlockAtlasMaterial
+    ? textures.getBlockAtlasMaterial()
+    : new THREE.MeshLambertMaterial({ color: 0xc9b393 });
+  const blockMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.24), blockMat);
+  blockMesh.visible = false;
+  rig.add(blockMesh);
+
+  // Inner pivot for voxel-extruded 3D tools, swords, foods, buckets, doors, gems, flowers & armor
+  const itemPivot = new THREE.Group();
+  itemPivot.rotation.order = 'YXZ';
+  const itemMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.01, 0.01, 0.01),
+    new THREE.MeshLambertMaterial({ color: 0xffffff })
+  );
+  itemPivot.add(itemMesh);
+  itemPivot.visible = false;
+  rig.add(itemPivot);
+
+  // Sculpted 3D Torch (wood shaft + soot collar + glowing ember + flame tip)
+  const ta = getSharedTorchAssets();
+  const torchGroup = new THREE.Group();
+  const tShaft = new THREE.Mesh(ta.woodGeo, ta.woodMat);
+  tShaft.position.set(0, -0.02, 0);
+  const tCollar = new THREE.Mesh(ta.collarGeo, ta.collarMat);
+  tCollar.position.set(0, 0.12, 0);
+  const tHead = new THREE.Mesh(ta.headGeo, ta.headMat);
+  tHead.position.set(0, 0.17, 0);
+  const tTip = new THREE.Mesh(ta.tipGeo, ta.flameMat);
+  tTip.position.set(0, 0.228, 0);
+  torchGroup.add(tShaft, tCollar, tHead, tTip);
+  torchGroup.visible = false;
+  rig.add(torchGroup);
+
+  rig.userData = {
+    isFirstPerson,
+    blockMesh,
+    itemPivot,
+    itemMesh,
+    torchGroup,
+    lastItemId: null
+  };
+  return rig;
+}
+
+// Updates a held-item rig to the exact 3D model + authentic Minecraft hand grip & tool orientation!
+export function updateHeldItemRig(rig, itemDef, textures, isFirstPerson = false) {
+  if (!rig || !rig.userData) return;
+  const ud = rig.userData;
+  const nextId = itemDef ? itemDef.id : null;
+  if (!nextId) {
+    rig.visible = false;
+    ud.lastItemId = null;
+    return;
+  }
+  rig.visible = true;
+  if (ud.lastItemId === nextId) return;
+  ud.lastItemId = nextId;
+
+  const { blockMesh, itemPivot, itemMesh, torchGroup } = ud;
+  blockMesh.visible = false;
+  itemPivot.visible = false;
+  torchGroup.visible = false;
+
+  // 1. Sculpted 3D Torch
+  if (nextId === 'torch') {
+    torchGroup.visible = true;
+    if (isFirstPerson) {
+      torchGroup.scale.setScalar(1.05);
+      torchGroup.position.set(-0.04, 0.08, -0.14);
+      torchGroup.rotation.set(0.14, -0.20, 0.10);
+    } else {
+      torchGroup.scale.setScalar(1.18);
+      torchGroup.position.set(0.0, -0.56, -0.14);
+      torchGroup.rotation.set(-0.48, 0, 0);
+    }
+    return;
+  }
+
+  // 2. Full 3D Block Models (Cubes, Stairs, Fences, Fence Gates, Beds, Ladders)
+  const is3DBlockShape = !!(
+    itemDef.isBlock &&
+    !itemDef.cross &&
+    !itemDef.isDoor
+  );
+  if (is3DBlockShape && textures && textures.createBlockDropGeometry) {
+    const size = isFirstPerson ? 0.29 : 0.27;
+    blockMesh.geometry = textures.createBlockDropGeometry(itemDef, size);
+    blockMesh.material = textures.getBlockAtlasMaterial();
+    blockMesh.visible = true;
+    if (isFirstPerson) {
+      if (itemDef.id === 'bed') {
+        blockMesh.position.set(-0.04, 0.08, -0.15);
+        blockMesh.rotation.set(0.24, 0.72, 0.06);
+      } else if (itemDef.isFence || itemDef.isFenceGate || itemDef.id === 'ladder') {
+        blockMesh.position.set(-0.04, 0.09, -0.14);
+        blockMesh.rotation.set(0.12, 0.48, 0.06);
+      } else {
+        blockMesh.position.set(-0.04, 0.08, -0.14);
+        blockMesh.rotation.set(0.20, 0.68, 0.05);
+      }
+    } else {
+      blockMesh.position.set(0.0, -0.60, -0.18);
+      blockMesh.rotation.set(0.26, 0.62, 0.08);
+    }
+    return;
+  }
+
+  // 3. Detailed 3D Voxel-Extruded Pixel-Art Model for ALL Tools, Weapons, Foods, Buckets, Doors, Ores, Gems & Items!
+  if (textures && textures.createExtrudedItemGeometry) {
+    const tt = itemDef.toolType || null;
+    const isHandheldTool = tt === 'pickaxe' || tt === 'axe' || tt === 'shovel' || tt === 'hoe' || tt === 'sword';
+    const size = isHandheldTool
+      ? (isFirstPerson ? 0.56 : 0.62)
+      : (itemDef.isDoor ? (isFirstPerson ? 0.40 : 0.42) : (isFirstPerson ? 0.36 : 0.36));
+
+    itemMesh.geometry = textures.createExtrudedItemGeometry(nextId, size);
+    itemMesh.material = textures.getExtrudedItemMaterial(nextId);
+    itemPivot.visible = true;
+
+    if (isHandheldTool) {
+      // Anchor pivot cleanly at the bottom-left handle so the hand grips the handle naturally!
+      itemMesh.position.set(size * 0.30, size * 0.30, 0);
+      // For Axe & Hoe, pure rigid rotation (Rx=PI, Rz=PI/2) keeps handle in hand & flips blade/hook to face FORWARD & DOWN!
+      if (tt === 'axe' || tt === 'hoe') {
+        itemMesh.rotation.set(Math.PI, 0, Math.PI * 0.5);
+      } else {
+        // Pickaxe, Sword, Shovel: shaft runs bottom-left -> top-right, pickaxe front prong already curves forward-down!
+        itemMesh.rotation.set(0, 0, 0);
+      }
+
+      if (isFirstPerson) {
+        itemPivot.position.set(-0.02, -0.04, -0.10);
+        if (tt === 'sword') {
+          // Proud forward-up Minecraft combat stance
+          itemPivot.rotation.set(0.08, Math.PI * 0.44, -0.08);
+        } else if (tt === 'pickaxe') {
+          // Pickaxe head pointing cleanly forward & curving down toward blocks
+          itemPivot.rotation.set(-0.18, Math.PI * 0.47, -0.05);
+        } else if (tt === 'axe' || tt === 'hoe') {
+          // Cutting/tilling edge facing cleanly forward-down
+          itemPivot.rotation.set(-0.15, Math.PI * 0.47, -0.05);
+        } else {
+          // Shovel ready to dig forward
+          itemPivot.rotation.set(-0.20, Math.PI * 0.47, -0.05);
+        }
+      } else {
+        // 3rd-Person & Multiplayer Remote Steve: handle gripped inside right fist, tool pointing forward (-Z)!
+        itemPivot.position.set(0.0, -0.59, -0.06);
+        if (tt === 'sword') {
+          itemPivot.rotation.set(-0.34, Math.PI * 0.5, 0);
+        } else {
+          itemPivot.rotation.set(-0.54, Math.PI * 0.5, 0);
+        }
+      }
+    } else if (itemDef.id === 'stick') {
+      itemMesh.position.set(size * 0.24, size * 0.24, 0);
+      itemMesh.rotation.set(0, 0, 0);
+      if (isFirstPerson) {
+        itemPivot.position.set(-0.02, -0.02, -0.12);
+        itemPivot.rotation.set(-0.10, Math.PI * 0.45, -0.05);
+      } else {
+        itemPivot.position.set(0.0, -0.59, -0.07);
+        itemPivot.rotation.set(-0.46, Math.PI * 0.5, 0);
+      }
+    } else if (itemDef.isDoor) {
+      itemMesh.position.set(0, size * 0.15, 0);
+      itemMesh.rotation.set(0, 0, 0);
+      if (isFirstPerson) {
+        itemPivot.position.set(-0.04, 0.08, -0.14);
+        itemPivot.rotation.set(0.08, 0.36, 0.04);
+      } else {
+        itemPivot.position.set(0.0, -0.58, -0.16);
+        itemPivot.rotation.set(0.18, 0.38, 0);
+      }
+    } else if (itemDef.food) {
+      itemMesh.position.set(0, 0, 0);
+      itemMesh.rotation.set(0, 0, 0);
+      if (isFirstPerson) {
+        itemPivot.position.set(-0.04, 0.11, -0.14);
+        itemPivot.rotation.set(0.10, -0.32, 0.10);
+      } else {
+        itemPivot.position.set(0.0, -0.60, -0.16);
+        itemPivot.rotation.set(0.32, 0.28, 0.06);
+      }
+    } else {
+      // Buckets, Flint & Steel, Armor, Ingots, Gems, Flowers, Saplings, Spawn Eggs, Seeds, etc.
+      itemMesh.position.set(0, 0, 0);
+      itemMesh.rotation.set(0, 0, 0);
+      if (isFirstPerson) {
+        itemPivot.position.set(-0.04, 0.11, -0.14);
+        itemPivot.rotation.set(0.10, -0.34, 0.08);
+      } else {
+        itemPivot.position.set(0.0, -0.60, -0.16);
+        itemPivot.rotation.set(0.28, 0.35, 0.04);
+      }
+    }
+  }
+}
+
+// Reusable 3D Animated Burning Flame Wrap for 3rd-Person Steve & Multiplayer Remote Players!
+export function createSteveFireGroup(textures) {
+  const group = new THREE.Group();
+  const firePlaneGeo = new THREE.PlaneGeometry(0.95, 1.35);
+  const fireOuterMat = new THREE.MeshBasicMaterial({
+    color: 0xff6a14,
+    transparent: true,
+    opacity: 0.82,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  const fireInnerMat = new THREE.MeshBasicMaterial({
+    color: 0xffd23f,
+    transparent: true,
+    opacity: 0.78,
+    side: THREE.DoubleSide,
+    depthWrite: false
+  });
+  if (textures && textures.atlasTexture && textures.getUV) {
+    const fuv = textures.getUV('fire');
+    const uvAttr = firePlaneGeo.attributes.uv;
+    uvAttr.setXY(0, fuv.u0, fuv.v1);
+    uvAttr.setXY(1, fuv.u1, fuv.v1);
+    uvAttr.setXY(2, fuv.u0, fuv.v0);
+    uvAttr.setXY(3, fuv.u1, fuv.v0);
+    uvAttr.needsUpdate = true;
+    fireOuterMat.map = textures.atlasTexture;
+    fireOuterMat.color.setHex(0xffffff);
+    fireOuterMat.alphaTest = 0.25;
+    fireInnerMat.map = textures.atlasTexture;
+    fireInnerMat.color.setHex(0xffe082);
+    fireInnerMat.alphaTest = 0.25;
+  }
+  const f1 = new THREE.Mesh(firePlaneGeo, fireOuterMat);
+  f1.position.set(0, 0.78, 0);
+  f1.rotation.y = Math.PI * 0.25;
+  const f2 = new THREE.Mesh(firePlaneGeo, fireInnerMat);
+  f2.position.set(0, 0.76, 0);
+  f2.rotation.y = -Math.PI * 0.25;
+  group.add(f1, f2);
+  group.visible = false;
+  return group;
 }
 
 function resolveArmorTier(item) {
@@ -353,48 +614,14 @@ export class Player {
     this.sleeveMesh.position.set(0, 0, 0.2);
     this.handPivot.add(this.armMesh, this.sleeveMesh);
 
-    this.heldBlockMat = textures
-      ? new THREE.MeshLambertMaterial({ map: textures.atlasTexture, alphaTest: 0.35 })
-      : new THREE.MeshLambertMaterial({ color: 0xc9b393 });
-    this.heldBlockMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.24), this.heldBlockMat);
-    this.heldBlockMesh.position.set(-0.04, 0.08, -0.14);
-    this.heldBlockMesh.rotation.set(0.2, 0.65, 0.05);
-    this.heldBlockMesh.visible = false;
-    this._lastHeldBlockId = null;
-    this.handPivot.add(this.heldBlockMesh);
+    // Unified Detailed 3D Held-Item Rig (true 3D blocks, stairs, fences, beds, ladders, torches & voxel-extruded tools/items!)
+    this.heldRig = createHeldItemRig(textures, true);
+    this.handPivot.add(this.heldRig);
 
-    // Crisp pixel-art held item/food/tool sprite!
-    this.heldSpriteMat = new THREE.MeshBasicMaterial({
-      transparent: true,
-      alphaTest: 0.45,
-      side: THREE.DoubleSide
-    });
-    this.heldSpriteMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), this.heldSpriteMat);
-    this.heldSpriteMesh.position.set(-0.04, 0.12, -0.14);
-    this.heldSpriteMesh.rotation.set(0.08, -0.35, 0.12);
-    this.heldSpriteMesh.visible = false;
-    this._lastHeldSpriteId = null;
-    this.handPivot.add(this.heldSpriteMesh);
-
-    // Sculpted 3D First-Person Held Torch Model!
-    this.heldTorchGroup = new THREE.Group();
-    const htWoodMat = new THREE.MeshLambertMaterial({ color: 0x9c6e3b });
-    const htCollarMat = new THREE.MeshLambertMaterial({ color: 0x2c2826 });
-    const htHeadMat = new THREE.MeshBasicMaterial({ color: 0xffa62b });
-    const htFlameMat = new THREE.MeshBasicMaterial({ color: 0xfff099 });
-    const htShaft = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.24, 0.062), htWoodMat);
-    htShaft.position.set(0, -0.02, 0);
-    const htCollar = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.042, 0.072), htCollarMat);
-    htCollar.position.set(0, 0.11, 0);
-    const htHead = new THREE.Mesh(new THREE.BoxGeometry(0.068, 0.062, 0.068), htHeadMat);
-    htHead.position.set(0, 0.16, 0);
-    const htTip = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.054, 0.044), htFlameMat);
-    htTip.position.set(0, 0.215, 0);
-    this.heldTorchGroup.add(htShaft, htCollar, htHead, htTip);
-    this.heldTorchGroup.position.set(-0.04, 0.08, -0.14);
-    this.heldTorchGroup.rotation.set(0.18, -0.22, 0.12);
-    this.heldTorchGroup.visible = false;
-    this.handPivot.add(this.heldTorchGroup);
+    // Reusable scratch vectors to avoid per-frame GC allocations in camera & physics loops
+    this._camPosScratch = new THREE.Vector3();
+    this._eyeTmp = new THREE.Vector3();
+    this._dirTmp = new THREE.Vector3();
 
     // Dynamic Torch / Glowstone PointLight (+100% brighter & wider reach!)
     this.heldLight = new THREE.PointLight(0xffb64f, 0, 42, 0.85);
@@ -411,49 +638,7 @@ export class Player {
     this.playerModel.root.visible = false;
 
     // 3D Animated Burning Flames wrapping Steve when on fire (visible in 3rd-person views!)
-    this.playerFireGroup = new THREE.Group();
-    const firePlaneGeo = new THREE.PlaneGeometry(0.95, 1.35);
-    const fireOuterMat = new THREE.MeshBasicMaterial({
-      color: 0xff6a14,
-      transparent: true,
-      opacity: 0.82,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const fireInnerMat = new THREE.MeshBasicMaterial({
-      color: 0xffd23f,
-      transparent: true,
-      opacity: 0.78,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    if (textures && textures.atlasTexture && textures.getUV) {
-      const fuv = textures.getUV('fire');
-      const uvAttr = firePlaneGeo.attributes.uv;
-      uvAttr.setXY(0, fuv.u0, fuv.v1);
-      uvAttr.setXY(1, fuv.u1, fuv.v1);
-      uvAttr.setXY(2, fuv.u0, fuv.v0);
-      uvAttr.setXY(3, fuv.u1, fuv.v0);
-      uvAttr.needsUpdate = true;
-      fireOuterMat.map = textures.atlasTexture;
-      fireOuterMat.color.setHex(0xffffff);
-      fireOuterMat.alphaTest = 0.25;
-      fireInnerMat.map = textures.atlasTexture;
-      fireInnerMat.color.setHex(0xffe082);
-      fireInnerMat.alphaTest = 0.25;
-    }
-    const f1 = new THREE.Mesh(firePlaneGeo, fireOuterMat);
-    f1.position.set(0, 0.78, 0.26);
-    const f2 = new THREE.Mesh(firePlaneGeo, fireOuterMat);
-    f2.position.set(0, 0.78, -0.26);
-    const f3 = new THREE.Mesh(firePlaneGeo, fireInnerMat);
-    f3.position.set(0.28, 0.72, 0);
-    f3.rotation.y = Math.PI * 0.5;
-    const f4 = new THREE.Mesh(firePlaneGeo, fireInnerMat);
-    f4.position.set(-0.28, 0.72, 0);
-    f4.rotation.y = Math.PI * 0.5;
-    this.playerFireGroup.add(f1, f2, f3, f4);
-    this.playerFireGroup.visible = false;
+    this.playerFireGroup = createSteveFireGroup(textures);
     this.playerModel.root.add(this.playerFireGroup);
 
     // Callbacks wired by main.js
@@ -682,7 +867,11 @@ export class Player {
     const feetBlock = this.world.getBlock(this.pos.x, this.pos.y + 0.2, this.pos.z);
     const waistBlock = this.world.getBlock(this.pos.x, this.pos.y + 0.85, this.pos.z);
     const headBlock = this.world.getBlock(this.pos.x, this.pos.y + EYE_HEIGHT, this.pos.z);
-    const nowInWater = feetBlock === BLOCK.WATER;
+    const isWaterOrLogged = (wx, wy, wz, bid) => (
+      bid === BLOCK.WATER ||
+      (bid === BLOCK.LADDER && this.world.isLadderWaterlogged && this.world.isLadderWaterlogged(wx, wy, wz))
+    );
+    const nowInWater = isWaterOrLogged(this.pos.x, this.pos.y + 0.2, this.pos.z, feetBlock);
     const nowInLava = feetBlock === BLOCK.LAVA || waistBlock === BLOCK.LAVA || headBlock === BLOCK.LAVA;
     const nowInFire = feetBlock === BLOCK.FIRE || waistBlock === BLOCK.FIRE;
     if (nowInWater && !this.wasInWater && this.sound.playSplash) {
@@ -690,7 +879,7 @@ export class Player {
     }
     this.wasInWater = nowInWater;
     this.inWater = nowInWater;
-    this.headInWater = headBlock === BLOCK.WATER;
+    this.headInWater = isWaterOrLogged(this.pos.x, this.pos.y + EYE_HEIGHT, this.pos.z, headBlock);
     this.inLava = nowInLava;
     this.headInLava = headBlock === BLOCK.LAVA;
     this.inFire = nowInFire;
@@ -963,7 +1152,7 @@ export class Player {
     }
 
     // Update Camera (0 = 1st person, 1 = 3rd person back, 2 = 3rd person front)
-    const eye = this.getEyePosition();
+    const eye = this.getEyePosition(this._eyeTmp);
     const targetFov = this.baseFov + (this.sprinting ? 8 : 0);
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1, dt * 10));
@@ -979,7 +1168,7 @@ export class Player {
     };
 
     if (this.cameraMode === 1 || this.cameraMode === 2) {
-      const dir = this.getLookDirection();
+      const dir = this.getLookDirection(this._dirTmp);
       const sign = this.cameraMode === 1 ? -1 : 1;
       const maxDist = this.cameraMode === 1 ? 3.8 : 3.6;
       // Ray-step 3rd-person camera against solid walls so it NEVER clips inside blocks!
@@ -993,7 +1182,7 @@ export class Player {
           break;
         }
       }
-      const camPos = eye.clone().addScaledVector(dir, sign * safeDist);
+      const camPos = this._camPosScratch.copy(eye).addScaledVector(dir, sign * safeDist);
       camPos.y += (this.cameraMode === 1 ? 0.42 : 0.32) * (safeDist / maxDist);
       this.camera.position.copy(camPos);
       if (this.cameraMode === 1) {
@@ -1024,40 +1213,11 @@ export class Player {
       this.playerModel.root.visible = false;
     }
 
-    // Held item shape, pixel-art texture & dynamic torch/glowstone light!
+    // Detailed 3D Held Item Model (1st-person hand + 3rd-person Steve) & dynamic torch/glowstone light!
     const held = this.inventory.getHeldDef();
-    const heldCol = held
-      ? (held.id.includes('diamond') ? 0x4de3e8 :
-         held.id.includes('gold') ? 0xf5d033 :
-         held.id.includes('iron') ? 0xdde2e8 :
-         held.id.includes('stone') || held.id.includes('cobble') ? 0x8e939c :
-         held.id.includes('grass') || held.id.includes('leaves') ? 0x5da135 :
-         held.id.includes('wood') || held.id.includes('oak') || held.id.includes('spruce') ? 0xa87c46 :
-         held.id.includes('birch') ? 0xd9cfa8 :
-         held.id.includes('tnt') ? 0xc9382b :
-         held.id.includes('torch') || held.id.includes('glowstone') ? 0xffc65c :
-         held.id.includes('sand') ? 0xdfd09c :
-         held.id.includes('snow') ? 0xf0f6fc :
-         held.id.includes('apple') || held.id.includes('pork') || held.id.includes('beef') || held.id.includes('venison') || held.id.includes('salmon') ? 0xe05555 : 0xc9b393)
-      : 0xdba882;
-
-    const isTorchHeld = !!(held && held.id === 'torch');
-    const isBlockHeld = !!(held && held.isBlock && !held.cross && held.id !== 'bed' && !isTorchHeld);
-    const isSpriteHeld = !!(held && !isBlockHeld && !isTorchHeld);
-    this.heldTorchGroup.visible = isTorchHeld;
-    this.heldBlockMesh.visible = isBlockHeld;
-    this.heldSpriteMesh.visible = isSpriteHeld;
-    this.armMesh.visible = !isBlockHeld && !isSpriteHeld && !isTorchHeld;
-    this.sleeveMesh.visible = !isBlockHeld && !isSpriteHeld && !isTorchHeld;
-
-    if (isBlockHeld && this.textures && this._lastHeldBlockId !== held.id) {
-      this._lastHeldBlockId = held.id;
-      this.heldBlockMesh.geometry = this.textures.createBlockDropGeometry(held, 0.26);
-    } else if (isSpriteHeld && this.textures && this._lastHeldSpriteId !== held.id) {
-      this._lastHeldSpriteId = held.id;
-      this.heldSpriteMat.map = this.textures.getItemTexture(held.id);
-      this.heldSpriteMat.needsUpdate = true;
-    }
+    updateHeldItemRig(this.heldRig, held, this.textures, true);
+    this.armMesh.visible = !held;
+    this.sleeveMesh.visible = !held;
 
     // Dynamic Torch / Glowstone Light flicker (+100% brighter & wider reach!)
     const emitsLight = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
@@ -1100,9 +1260,10 @@ export class Player {
       0.08 + swingArc * 0.22 + 0.26 * eb + eatChompX * 2.2
     );
 
-    // Animate 3D Player Model (for 3rd-person views) + sync visible 3D Armor!
+    // Animate 3D Player Model (for 3rd-person views) + sync visible 3D Armor & 3D Held Item!
     const pm = this.playerModel;
     updateSteveArmor(pm, this.inventory.armor);
+    updateHeldItemRig(pm.heldRig, held, this.textures, false);
     pm.root.position.copy(this.pos);
     pm.root.rotation.y = this.yaw;
 
@@ -1128,14 +1289,10 @@ export class Player {
       ? (1.28 + Math.sin(this.eatTime * 19.0) * 0.22)
       : (this.swingAnim > 0
           ? (1.45 - swingArc * 1.9)
-          : (legSwing * 0.85 + (held ? 0.25 : 0)));
+          : (legSwing * 0.85 + (held ? 0.28 : 0)));
     pm.rightArm.rotation.x = THREE.MathUtils.lerp(pm.rightArm.rotation.x, rightArmTarget, Math.min(1, dt * 20));
     const rightArmZTarget = this.isEating ? -0.32 : 0;
     pm.rightArm.rotation.z = THREE.MathUtils.lerp(pm.rightArm.rotation.z, rightArmZTarget, Math.min(1, dt * 16));
-
-    // Held item on 3D player model
-    pm.heldItem.visible = !!held;
-    if (held) pm.heldItem.material.color.setHex(heldCol);
 
     // Animate 3rd-person flames when Steve is burning!
     if (this.playerFireGroup) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'blockcraft-v42';
+const CACHE_NAME = 'blockcraft-v44';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './js/main.js',
+  './js/multiplayer.js',
   './js/panorama.js',
   './js/blocks.js',
   './js/textures.js',

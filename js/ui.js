@@ -5,6 +5,7 @@ import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
 import { DEFAULT_KEYBINDS } from './storage.js';
 import { createSteveModel, updateSteveArmor } from './player.js';
+import { formatRoomCode, getRecentRoomCodes, getSavedPlayerName, savePlayerName } from './multiplayer.js';
 
 // Smooth 24-stop non-linear Render Distance scale (2..1024 chunks — easy touch precision on iPad!)
 const RD_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
@@ -63,13 +64,13 @@ function formatKeyCode(code) {
 }
 
 const SPLASH_TEXTS = [
-  'Lots of truthiness!',
-  '40x Better Villagers!',
-  'Reforge Pixel-Art Food!',
+  'MULTIPLAYER UPDATE!',
+  'Play With Friends via Room Code!',
+  '3D Held Pickaxes & Tools!',
+  'Ultra-Fast Voxel Engine!',
+  'Underground Villages & Deepslate!',
   'BSL Shaders & Mirror Water!',
-  'Wild Deer, Foxes & Songbirds!',
-  'Alpine Mountains & Villages!',
-  '100% WebGL Voxel Engine!'
+  '100% WebGL Multiplayer!'
 ];
 
 export class UIManager {
@@ -161,7 +162,9 @@ export class UIManager {
     this.renderKeybindsUI(game.settings.keybinds);
     this.syncCheatUI(game.areCheatsAllowed());
     const splash = document.getElementById('title-splash');
-    if (splash) splash.textContent = SPLASH_TEXTS[Math.floor(Math.random() * SPLASH_TEXTS.length)];
+    if (splash) splash.textContent = SPLASH_TEXTS[0];
+    this.syncMultiplayerHubInputs();
+    this.renderRecentRoomCodes();
   }
 
   showLoadingScreen(show, progress = 0, status = 'Generating terrain...', worldName = '') {
@@ -204,6 +207,10 @@ export class UIManager {
       this.syncCreateWorldUI();
     }
     if (viewName === 'mods') this.renderModsUI();
+    if (viewName === 'multiplayer') {
+      this.syncMultiplayerHubInputs();
+      this.renderRecentRoomCodes();
+    }
     if (viewName === 'settings' && this.game) {
       this.syncSettingsUI(this.game.settings);
       this.syncCheatUI(this.game.areCheatsAllowed());
@@ -449,34 +456,99 @@ export class UIManager {
       });
     }
 
-    // Placeholder Multiplayer Server Browser interactions
-    const mpList = document.getElementById('mp-server-list');
-    const mpMsg = document.getElementById('mp-status-msg');
-    if (mpList) {
-      mpList.querySelectorAll('.mp-server-row').forEach((row) => {
-        row.addEventListener('click', () => {
-          mpList.querySelectorAll('.mp-server-row').forEach((r) => r.classList.remove('selected'));
-          row.classList.add('selected');
-          if (mpMsg) mpMsg.textContent = `Selected "${row.dataset.server}" — Multiplayer servers are a placeholder (coming soon!).`;
-        });
-      });
-    }
-    const setMpMsg = (txt) => {
-      if (mpMsg) mpMsg.textContent = txt;
-      this.toast(txt);
+    // Live Multiplayer Hub & Join World Popup Modal bindings
+    const syncPlayerNameValue = (val) => {
+      const clean = savePlayerName(val);
+      if (this.game?.multiplayer) this.game.multiplayer.playerName = clean;
+      const a = document.getElementById('mp-player-name');
+      const b = document.getElementById('join-name-input');
+      if (a && a.value !== clean) a.value = clean;
+      if (b && b.value !== clean) b.value = clean;
     };
-    document.getElementById('btn-mp-join')?.addEventListener('click', () => {
-      const sel = mpList?.querySelector('.mp-server-row.selected')?.dataset.server || 'Server';
-      setMpMsg(`Cannot connect to ${sel} yet — Multiplayer is coming in a future update!`);
+    document.getElementById('mp-player-name')?.addEventListener('change', (e) => syncPlayerNameValue(e.target.value));
+    document.getElementById('join-name-input')?.addEventListener('change', (e) => syncPlayerNameValue(e.target.value));
+
+    const openJoinWorld = (prefillCode = '') => this.openJoinWorldModal(prefillCode);
+    document.getElementById('btn-open-join-world')?.addEventListener('click', () => openJoinWorld(''));
+    document.getElementById('btn-mp-join-footer')?.addEventListener('click', () => openJoinWorld(''));
+    document.getElementById('btn-cancel-join-world')?.addEventListener('click', () => this.closeJoinWorldModal());
+    document.getElementById('btn-close-join-modal')?.addEventListener('click', () => this.closeJoinWorldModal());
+
+    const joinCodeInput = document.getElementById('join-code-input');
+    const submitJoinWorld = async () => {
+      if (!this.game || this._joiningWorld) return;
+      const rawCode = joinCodeInput?.value || '';
+      const nameVal = document.getElementById('join-name-input')?.value || document.getElementById('mp-player-name')?.value || getSavedPlayerName();
+      const statusEl = document.getElementById('join-world-status');
+      const confirmBtn = document.getElementById('btn-confirm-join-world');
+      const setStatus = (txt, isError = false) => {
+        if (!statusEl) return;
+        statusEl.textContent = txt;
+        statusEl.classList.remove('hidden');
+        statusEl.classList.toggle('error', isError);
+      };
+      this._joiningWorld = true;
+      if (confirmBtn) confirmBtn.disabled = true;
+      setStatus('Connecting...', false);
+      try {
+        await this.game.joinMultiplayerWorld(rawCode, nameVal, (msg) => setStatus(msg, false));
+        this.closeJoinWorldModal();
+      } catch (err) {
+        setStatus(err?.message || 'Could not join world. Check the code and try again.', true);
+      } finally {
+        this._joiningWorld = false;
+        if (confirmBtn) confirmBtn.disabled = false;
+      }
+    };
+    document.getElementById('btn-confirm-join-world')?.addEventListener('click', submitJoinWorld);
+    joinCodeInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitJoinWorld();
+      if (e.key === 'Escape') this.closeJoinWorldModal();
     });
-    document.getElementById('btn-mp-direct')?.addEventListener('click', () => {
-      setMpMsg('Direct Connection is a placeholder — online servers coming soon!');
+    joinCodeInput?.addEventListener('input', () => {
+      const clean = joinCodeInput.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 8);
+      if (joinCodeInput.value !== clean) joinCodeInput.value = clean;
     });
-    document.getElementById('btn-mp-add')?.addEventListener('click', () => {
-      setMpMsg('Add Server is a placeholder — custom servers coming soon!');
+
+    // In-Game Pause/Settings -> "Multiplayer World" Host, Copy Code & Stop controls
+    document.getElementById('btn-mp-world')?.addEventListener('click', async () => {
+      if (!this.game) return;
+      const mp = this.game.multiplayer;
+      if (mp && mp.isActive()) {
+        const panel = document.getElementById('pause-mp-panel');
+        if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        this.toast(`World Code: ${formatRoomCode(mp.roomCode)}`);
+        return;
+      }
+      const btn = document.getElementById('btn-mp-world');
+      const lbl = document.getElementById('btn-mp-world-label');
+      if (btn) btn.disabled = true;
+      if (lbl) lbl.textContent = 'Starting Multiplayer...';
+      try {
+        const res = await this.game.startMultiplayerWorld();
+        this.toast(`Multiplayer World Ready! Code: ${formatRoomCode(res.code)}`);
+      } catch (err) {
+        this.toast(err?.message || 'Could not start Multiplayer World');
+      } finally {
+        if (btn) btn.disabled = false;
+        if (this.game?.multiplayer) this.syncMultiplayerUI(this.game.multiplayer);
+      }
     });
-    document.getElementById('btn-mp-refresh')?.addEventListener('click', () => {
-      setMpMsg('Refreshed placeholder server list (0 online — coming soon!).');
+
+    const copyActiveRoomCode = () => {
+      const code = this.game?.multiplayer?.roomCode;
+      if (!code) return;
+      const formatted = formatRoomCode(code);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).catch(() => {});
+      }
+      this.sound.playPop();
+      this.toast(`Copied World Code: ${formatted}`);
+    };
+    document.getElementById('btn-mp-copy-code')?.addEventListener('click', copyActiveRoomCode);
+    document.getElementById('hud-mp-pill')?.addEventListener('click', copyActiveRoomCode);
+    document.getElementById('btn-mp-stop')?.addEventListener('click', () => {
+      if (this.game) this.game.stopMultiplayerWorld();
     });
 
     // HUD buttons
@@ -2248,6 +2320,9 @@ export class UIManager {
           this.sound.playPop();
           this.renderChestModal();
           this.updateHotbar();
+          if (this.game?.multiplayer?.isActive()) {
+            this.game.multiplayer.sendChest(this.activeChestPos, chest);
+          }
         }
       });
       cGrid.appendChild(el);
@@ -2286,6 +2361,9 @@ export class UIManager {
         this.sound.playPop();
         this.renderChestModal();
         this.updateHotbar();
+        if (this.game?.multiplayer?.isActive()) {
+          this.game.multiplayer.sendChest(this.activeChestPos, chest);
+        }
       });
       parent.appendChild(el);
     };
@@ -2552,6 +2630,21 @@ export class UIManager {
       ctx.fillRect(mx - 2, my - 2, 4, 4);
     }
 
+    // Draw connected Multiplayer friends as bright emerald-cyan circles on the minimap!
+    if (this.game?.multiplayer?.remotePlayers?.size > 0) {
+      for (const rp of this.game.multiplayer.remotePlayers.values()) {
+        const mx = Math.max(5, Math.min(w - 5, half + (rp.pos.x - px) / scale));
+        const my = Math.max(5, Math.min(h - 5, half + (rp.pos.z - pz) / scale));
+        ctx.fillStyle = '#4ade80';
+        ctx.strokeStyle = '#052e16';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(mx, my, 4.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
     // Player directional triangle in center
     ctx.save();
     ctx.translate(half, half);
@@ -2568,5 +2661,99 @@ export class UIManager {
     ctx.fill();
     ctx.stroke();
     ctx.restore();
+  }
+
+  // --- MULTIPLAYER UI HELPERS ---
+  syncMultiplayerHubInputs() {
+    const saved = getSavedPlayerName();
+    const hubInput = document.getElementById('mp-player-name');
+    const modalInput = document.getElementById('join-name-input');
+    if (hubInput && !hubInput.value) hubInput.value = saved;
+    if (modalInput && !modalInput.value) modalInput.value = saved;
+  }
+
+  renderRecentRoomCodes() {
+    const wrap = document.getElementById('mp-recent-list');
+    if (!wrap) return;
+    const recent = getRecentRoomCodes();
+    if (!recent.length) {
+      wrap.innerHTML = '<div class="mp-recent-empty">No recent room codes yet. Click <strong>Join World</strong> above to enter a code!</div>';
+      return;
+    }
+    wrap.innerHTML = '';
+    for (const item of recent) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mp-recent-chip';
+      btn.innerHTML = `<code>${formatRoomCode(item.code)}</code><span>${item.worldName || 'Multiplayer World'}</span>`;
+      btn.addEventListener('click', () => this.openJoinWorldModal(item.code));
+      wrap.appendChild(btn);
+    }
+  }
+
+  openJoinWorldModal(prefillCode = '') {
+    this.syncMultiplayerHubInputs();
+    const modal = document.getElementById('join-world-modal');
+    const codeInp = document.getElementById('join-code-input');
+    const statusEl = document.getElementById('join-world-status');
+    if (statusEl) {
+      statusEl.textContent = '';
+      statusEl.classList.add('hidden');
+      statusEl.classList.remove('error');
+    }
+    if (codeInp) {
+      codeInp.value = prefillCode ? formatRoomCode(prefillCode) : '';
+    }
+    if (modal) modal.classList.remove('hidden');
+    setTimeout(() => {
+      codeInp?.focus();
+      codeInp?.select();
+    }, 40);
+  }
+
+  closeJoinWorldModal() {
+    document.getElementById('join-world-modal')?.classList.add('hidden');
+  }
+
+  syncMultiplayerUI(mp) {
+    const active = Boolean(mp && mp.isActive());
+    const panel = document.getElementById('pause-mp-panel');
+    const btnLbl = document.getElementById('btn-mp-world-label');
+    const codeEl = document.getElementById('pause-mp-code');
+    const countEl = document.getElementById('pause-mp-count');
+    const playersEl = document.getElementById('pause-mp-players');
+    const titleEl = document.getElementById('pause-mp-status-title');
+    const modeTag = document.getElementById('pause-mp-mode-tag');
+    const stopBtn = document.getElementById('btn-mp-stop');
+    const hudPill = document.getElementById('hud-mp-pill');
+    const hudTxt = document.getElementById('hud-mp-text');
+
+    if (panel) panel.classList.toggle('hidden', !active);
+    if (hudPill) hudPill.classList.toggle('hidden', !active);
+
+    if (!active) {
+      if (btnLbl) btnLbl.textContent = 'Multiplayer World';
+      return;
+    }
+
+    const formatted = formatRoomCode(mp.roomCode);
+    const count = mp.getPlayerCount();
+    if (btnLbl) btnLbl.textContent = mp.role === 'host' ? `Multiplayer Active (${formatted})` : `Connected (${formatted})`;
+    if (titleEl) titleEl.textContent = mp.role === 'host' ? 'Hosting Multiplayer World' : 'Connected to Multiplayer World';
+    if (modeTag) modeTag.textContent = mp.onlineMode === 'online' ? 'ONLINE + LOCAL' : 'LOCAL CO-OP';
+    if (codeEl) codeEl.textContent = formatted;
+    if (countEl) countEl.textContent = String(count);
+    if (stopBtn) stopBtn.textContent = mp.role === 'host' ? 'Stop Multiplayer World' : 'Leave Multiplayer World';
+    if (hudTxt) hudTxt.textContent = `${formatted} • ${count}P`;
+
+    if (playersEl) {
+      playersEl.innerHTML = '';
+      for (const p of mp.getPlayerRoster()) {
+        const chip = document.createElement('span');
+        chip.className = `pause-mp-player-chip${p.isHost ? ' host' : ''}`;
+        chip.textContent = `${p.isHost ? '★ ' : ''}${p.name}${p.isLocal ? ' (You)' : ''}`;
+        playersEl.appendChild(chip);
+      }
+    }
   }
 }

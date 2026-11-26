@@ -2551,28 +2551,57 @@ export class TextureManager {
     return tex;
   }
 
-  // True 3D Voxel-Extruded Pixel-Art Geometry for Dropped Items, Foods, Tools & Beds!
+  // Shared cached Lambert material for 3D voxel-extruded held/dropped items (zero duplicate GPU materials!)
+  getExtrudedItemMaterial(itemKey) {
+    if (!this.itemMatCache) this.itemMatCache = {};
+    if (this.itemMatCache[itemKey]) return this.itemMatCache[itemKey];
+    const tex = this.getItemTexture(itemKey);
+    const mat = new THREE.MeshLambertMaterial({
+      map: tex,
+      transparent: false,
+      alphaTest: 0.45
+    });
+    this.itemMatCache[itemKey] = mat;
+    return mat;
+  }
+
+  // Shared cached Lambert material for 3D held blocks/stairs/fences/beds/ladders
+  getBlockAtlasMaterial() {
+    if (!this._sharedBlockAtlasMat) {
+      this._sharedBlockAtlasMat = new THREE.MeshLambertMaterial({
+        map: this.atlasTexture,
+        alphaTest: 0.35
+      });
+    }
+    return this._sharedBlockAtlasMat;
+  }
+
+  // True 3D Voxel-Extruded Pixel-Art Geometry for Held & Dropped Items, Tools, Foods & Doors!
   createExtrudedItemGeometry(itemKey, size = 0.36) {
-    if (this.extrudedGeoCache[itemKey]) return this.extrudedGeoCache[itemKey];
+    const cacheKey = `${itemKey}:${size}`;
+    if (this.extrudedGeoCache[cacheKey]) return this.extrudedGeoCache[cacheKey];
 
     const tex = this.getItemTexture(itemKey);
     const imgCanvas = tex.image;
     const ctx = imgCanvas.getContext('2d');
     const imgData = ctx.getImageData(0, 0, 32, 32).data;
 
-    // Sample the 16x16 logical pixel grid (center of each 2x2 texel block)
+    // Sample the 16x16 logical pixel grid (check all 4 sub-texels so crisp 1px details never drop)
     const solid = new Uint8Array(256);
     for (let py = 0; py < 16; py++) {
       for (let px0 = 0; px0 < 16; px0++) {
-        const a = imgData[((py * 2) * 32 + (px0 * 2)) * 4 + 3];
-        if (a > 128) solid[py * 16 + px0] = 1;
+        const a0 = imgData[((py * 2) * 32 + (px0 * 2)) * 4 + 3];
+        const a1 = imgData[((py * 2) * 32 + (px0 * 2 + 1)) * 4 + 3];
+        const a2 = imgData[((py * 2 + 1) * 32 + (px0 * 2)) * 4 + 3];
+        const a3 = imgData[((py * 2 + 1) * 32 + (px0 * 2 + 1)) * 4 + 3];
+        if (Math.max(a0, a1, a2, a3) > 120) solid[py * 16 + px0] = 1;
       }
     }
 
     const pos = [], norm = [], uv = [], idx = [];
     const cell = size / 16;
     const half = size * 0.5;
-    const halfD = cell * 0.65; // authentic chunky Minecraft 3D item slab thickness!
+    const halfD = cell * 0.72; // authentic chunky 3D Minecraft voxel item thickness!
 
     const pushQuad = (p0, p1, p2, p3, n, u0, v0, u1, v1) => {
       const base = pos.length / 3;
@@ -2624,30 +2653,32 @@ export class TextureManager {
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     geo.setIndex(idx);
-    this.extrudedGeoCache[itemKey] = geo;
+    this.extrudedGeoCache[cacheKey] = geo;
     return geo;
   }
 
-  // Real 3D pixel-art mini-block geometry mapped to exact atlas top/side/bottom UVs!
+  // Real 3D pixel-art mini-block geometry mapped to exact atlas top/side/front/bottom UVs (cubes, stairs, fences, gates, beds, ladders)!
   createBlockDropGeometry(blockDef, size = 0.28) {
     const cacheKey = `${blockDef.id}:${size}`;
     if (this.blockDropGeoCache[cacheKey]) return this.blockDropGeoCache[cacheKey];
 
     const h = size * 0.5;
-    const topUV = this.getUV(blockDef.faces.top || blockDef.faces.all || blockDef.faces.side);
-    const botUV = this.getUV(blockDef.faces.bottom || blockDef.faces.all || blockDef.faces.side);
-    const sideUV = this.getUV(blockDef.faces.side || blockDef.faces.all || blockDef.faces.top);
+    const faces = blockDef.faces || {};
+    const topUV = this.getUV(faces.top || faces.all || faces.side || 'stone');
+    const botUV = this.getUV(faces.bottom || faces.all || faces.side || 'stone');
+    const sideUV = this.getUV(faces.side || faces.all || faces.top || 'stone');
+    const frontUV = faces.front ? this.getUV(faces.front) : sideUV;
 
     const pos = [], norm = [], uv = [], idx = [];
     let base = 0;
-    const pushBox = (x0, y0, z0, x1, y1, z1) => {
+    const pushBox = (x0, y0, z0, x1, y1, z1, tU = topUV, bU = botUV, sU = sideUV, fU = frontUV) => {
       const boxFaces = [
-        { uv: topUV, n: [0, 1, 0], v: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
-        { uv: botUV, n: [0, -1, 0], v: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
-        { uv: sideUV, n: [1, 0, 0], v: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
-        { uv: sideUV, n: [-1, 0, 0], v: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
-        { uv: sideUV, n: [0, 0, 1], v: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
-        { uv: sideUV, n: [0, 0, -1], v: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] }
+        { uv: tU, n: [0, 1, 0], v: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]] },
+        { uv: bU, n: [0, -1, 0], v: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]] },
+        { uv: sU, n: [1, 0, 0], v: [[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]] },
+        { uv: sU, n: [-1, 0, 0], v: [[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]] },
+        { uv: fU, n: [0, 0, 1], v: [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]] },
+        { uv: sU, n: [0, 0, -1], v: [[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]] }
       ];
       for (const f of boxFaces) {
         const u = f.uv;
@@ -2665,6 +2696,51 @@ export class TextureManager {
       // Authentic 3D stepped-L stair model for held item & dropped stair items!
       pushBox(-h, -h, -h, h, 0, h);
       pushBox(-h, 0, -h, h, h, 0);
+    } else if (blockDef.isFence) {
+      // Authentic 3D 2-post + double-rail Minecraft Fence model!
+      const pw = size * 0.14;
+      const pz = size * 0.14;
+      const rw = size * 0.08;
+      pushBox(-h * 0.68 - pw, -h, -pz, -h * 0.68 + pw, h, pz);
+      pushBox(h * 0.68 - pw, -h, -pz, h * 0.68 + pw, h, pz);
+      pushBox(-h * 0.96, h * 0.20, -rw, h * 0.96, h * 0.56, rw);
+      pushBox(-h * 0.96, -h * 0.44, -rw, h * 0.96, -h * 0.08, rw);
+    } else if (blockDef.isFenceGate) {
+      // Authentic 3D double-slat Minecraft Fence Gate model!
+      const pw = size * 0.11;
+      const rw = size * 0.08;
+      pushBox(-h * 0.92, -h * 0.72, -pw, -h * 0.64, h * 0.85, pw);
+      pushBox(h * 0.64, -h * 0.72, -pw, h * 0.92, h * 0.85, pw);
+      pushBox(-h * 0.64, h * 0.34, -rw, h * 0.64, h * 0.66, rw);
+      pushBox(-h * 0.64, -h * 0.32, -rw, h * 0.64, 0.0, rw);
+      pushBox(-h * 0.14, -h * 0.32, -rw, h * 0.14, h * 0.66, rw);
+    } else if (blockDef.id === 'bed') {
+      // Authentic 3D miniature Minecraft Bed (oak legs/frame + red blanket + white pillow!)
+      const plankUV = this.getUV('oak_planks');
+      const blanketUV = this.getUV('bed_top_foot');
+      const pillowUV = this.getUV('bed_top_head');
+      const sideBedUV = this.getUV('bed_side_foot');
+      const bx0 = -h * 0.62, bx1 = h * 0.62;
+      const bz0 = -h * 1.15, bz1 = h * 1.15;
+      const leg = size * 0.13;
+      // 4 Wooden corner legs
+      pushBox(bx0, -h * 0.55, bz0, bx0 + leg, -h * 0.18, bz0 + leg, plankUV, plankUV, plankUV, plankUV);
+      pushBox(bx1 - leg, -h * 0.55, bz0, bx1, -h * 0.18, bz0 + leg, plankUV, plankUV, plankUV, plankUV);
+      pushBox(bx0, -h * 0.55, bz1 - leg, bx0 + leg, -h * 0.18, bz1, plankUV, plankUV, plankUV, plankUV);
+      pushBox(bx1 - leg, -h * 0.55, bz1 - leg, bx1, -h * 0.18, bz1, plankUV, plankUV, plankUV, plankUV);
+      // Mattress base (red blanket lower half + pillow head section)
+      pushBox(bx0, -h * 0.22, bz0 + size * 0.35, bx1, h * 0.30, bz1, blanketUV, plankUV, sideBedUV, sideBedUV);
+      pushBox(bx0, -h * 0.22, bz0, bx1, h * 0.34, bz0 + size * 0.36, pillowUV, plankUV, pillowUV, pillowUV);
+    } else if (blockDef.id === 'ladder') {
+      // Authentic 3D wooden Ladder (two vertical side rails + 4 horizontal rungs!)
+      const plankUV = this.getUV('oak_planks');
+      const railW = size * 0.11;
+      const railD = size * 0.08;
+      pushBox(-h * 0.78, -h, -railD, -h * 0.78 + railW * 2, h, railD, plankUV, plankUV, plankUV, plankUV);
+      pushBox(h * 0.78 - railW * 2, -h, -railD, h * 0.78, h, railD, plankUV, plankUV, plankUV, plankUV);
+      for (const ry of [-0.65, -0.22, 0.22, 0.65]) {
+        pushBox(-h * 0.72, h * ry - railW * 0.65, -railD * 0.85, h * 0.72, h * ry + railW * 0.65, railD * 0.85, plankUV, plankUV, plankUV, plankUV);
+      }
     } else {
       pushBox(-h, -h, -h, h, h, h);
     }

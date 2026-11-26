@@ -395,6 +395,7 @@ export class World {
     this.doorStates = new Map(); // "x,y,z" (bottom block) -> { facing: 0..3, open: boolean }
     this.gateStates = new Map(); // "x,y,z" -> { facing: 0..3, open: boolean }
     this.ladderStates = new Map(); // "x,y,z" -> facing (0=-Z wall, 1=+X wall, 2=+Z wall, 3=-X wall)
+    this.waterloggedLadders = new Set(); // "x,y,z" of ladders overlapping with water
     this.stairStates = new Map(); // "x,y,z" -> { facing: 0..3, half: 'bottom'|'top' }
     this.villageChunks = new Map(); // numeric chunkKey -> { x, y, z, biome, spawned: bool }
     this.persistentLeaves = new Set(); // "x,y,z" of player-placed leaves that should not decay
@@ -3184,8 +3185,9 @@ export class World {
           for (let dy = 1; dy <= 4; dy++) setLocal(lx, baseY + dy, lz, BLOCK.AIR);
         }
       }
-      setLocal(5, baseY + 3, 12, BLOCK.TORCH);
-      setLocal(9, baseY + 3, 12, BLOCK.TORCH);
+      // Mount corridor torches flush against the solid stairwell exit wall (lz=10) at lx=4 and lx=10!
+      setLocal(4, baseY + 3, 11, BLOCK.TORCH);
+      setLocal(10, baseY + 3, 11, BLOCK.TORCH);
       addCavernLamp(3, 13);
       addCavernLamp(12, 13);
     } else if (udz === 0) {
@@ -3483,15 +3485,17 @@ export class World {
           }
         }
       }
-      // Grand front doorway & interior torch sconces + sandstone pillars
+      // Grand front doorway & interior sandstone torch sconces (never floating!)
       for (let dy = 1; dy <= 3; dy++) {
         setLocal(x0 + 5, th + dy, z0, BLOCK.AIR);
         setLocal(x0 + 6, th + dy, z0, BLOCK.AIR);
         setLocal(x0 + 5, th + dy, z0 + 1, BLOCK.AIR);
         setLocal(x0 + 6, th + dy, z0 + 1, BLOCK.AIR);
       }
-      setLocal(x0 + 4, th + 3, z0 + 4, BLOCK.TORCH);
-      setLocal(x0 + 7, th + 3, z0 + 7, BLOCK.TORCH);
+      setLocal(x0 + 4, th + 1, z0 + 4, BLOCK.SANDSTONE);
+      setLocal(x0 + 4, th + 2, z0 + 4, BLOCK.TORCH);
+      setLocal(x0 + 7, th + 1, z0 + 7, BLOCK.SANDSTONE);
+      setLocal(x0 + 7, th + 2, z0 + 7, BLOCK.TORCH);
       setLocal(x0 + 5, th + 1, z0 + 5, BLOCK.TERRACOTTA_ORANGE);
       setLocal(x0 + 6, th + 1, z0 + 6, BLOCK.TERRACOTTA_ORANGE);
       placeChest(x0 + 5, th + 1, z0 + 6, [
@@ -3561,7 +3565,7 @@ export class World {
       }
       setLocal(x0 + 3, th + 3, z0 + 1, BLOCK.TORCH);
       setLocal(x0 + 6, th + 3, z0 + 1, BLOCK.TORCH);
-      setLocal(x0 + 4, th + 3, z0 + 7, BLOCK.TORCH);
+      setLocal(x0 + 4, th + 3, z0 + 8, BLOCK.TORCH);
       placeChest(x0 + 5, th + 1, z0 + 7, [
         { id: 'diamond', count: 3 },
         { id: 'emerald', count: 6 },
@@ -3608,7 +3612,7 @@ export class World {
       setLocal(x0 + 2, th + 1, z0 + 5, BLOCK.FURNACE);
       setLocal(x0 + 5, th + 1, z0 + 3, BLOCK.BED_HEAD_N);
       setLocal(x0 + 5, th + 1, z0 + 4, BLOCK.BED);
-      setLocal(x0 + 3, th + 3, z0 + 4, BLOCK.TORCH);
+      setLocal(x0 + 2, th + 2, z0 + 5, BLOCK.TORCH);
       placeChest(x0 + 4, th + 1, z0 + 5, [
         { id: 'apple', count: 5 },
         { id: 'coal', count: 10 },
@@ -4556,8 +4560,9 @@ export class World {
     }
   }
 
-  // Deterministic Inter-Landmark Connecting Dirt Path Network (Villages <-> Castles <-> Pyramids <-> Underground Villages!)
-  // Connects directly to each structure's exact entrance coordinates & terraced baseY so roads NEVER hit cliffs or walls!
+  // Deterministic Single-Entrance Trunk-and-Split Road Network (Clean Minimum Spanning Tree + Slope-Clamped Elevation Profiles!)
+  // Every Village, Castle, Pyramid & Underground Village has ONE clean path leaving ONE entrance, which splits at junctions!
+  // Every segment precomputes a guaranteed-walkable slope-clamped profileY so bridges & roads NEVER hit walls or cut off!
   _getRoadSegmentsForChunk(cx, cz) {
     if (this.worldType === 'flat' || !this.generateStructures) return null;
     const rgx = Math.floor(cx / 32);
@@ -4566,18 +4571,22 @@ export class World {
     let cached = this._roadRegionCache.get(rKey);
     if (cached) return cached;
 
-    const segs = [];
-    const villages = [];
-    const megas = [];
-    const ugEntrances = [];
-
-    // Collect villages, mega-structures & underground village entrances across a wide 3x3 super-region window
+    const nodes = [];
+    const seenNode = new Set();
     const minVcx = (rgx - 2) * 32;
     const maxVcx = (rgx + 3) * 32;
     const minVcz = (rgz - 2) * 32;
     const maxVcz = (rgz + 3) * 32;
 
-    const makeVillageHub = (vcx, vcz) => {
+    const pushNode = (node) => {
+      if (!node) return;
+      const nk = `${node.kind}:${Math.round(node.x)},${Math.round(node.z)}`;
+      if (seenNode.has(nk)) return;
+      seenNode.add(nk);
+      nodes.push(node);
+    };
+
+    const makeVillageNode = (vcx, vcz) => {
       const vInfo = this.getVillageForChunk(vcx, vcz);
       if (!vInfo || vInfo.dx !== 0 || vInfo.dz !== 0) return null;
       const r = vInfo.radius || 1;
@@ -4588,15 +4597,15 @@ export class World {
         kind: 'village',
         x: cxW, z: czW, y,
         entrances: [
-          { x: cxW, z: (vcz - r) * 16 - 1, y },                 // North Avenue
-          { x: cxW, z: (vcz + r + 1) * 16, y },                 // South Avenue
-          { x: (vcx - r) * 16 - 1, z: czW, y },                 // West Avenue
-          { x: (vcx + r + 1) * 16, z: czW, y }                  // East Avenue
+          { x: cxW, z: (vcz - r) * 16 - 1, y, dx: 0, dz: -1 },
+          { x: cxW, z: (vcz + r + 1) * 16, y, dx: 0, dz: 1 },
+          { x: (vcx - r) * 16 - 1, z: czW, y, dx: -1, dz: 0 },
+          { x: (vcx + r + 1) * 16, z: czW, y, dx: 1, dz: 0 }
         ]
       };
     };
 
-    const makeMegaHub = (originCx, originCz) => {
+    const makeMegaNode = (originCx, originCz) => {
       const mInfo = this.getMegaStructureForChunk(originCx, originCz);
       if (!mInfo || mInfo.dx !== 0 || mInfo.dz !== 0) return null;
       const cxW = originCx * 16 + 31.5;
@@ -4606,15 +4615,15 @@ export class World {
         kind: mInfo.type,
         x: cxW, z: czW, y,
         entrances: [
-          { x: cxW, z: originCz * 16 - 1, y },                  // North Grand Gate
-          { x: cxW, z: (originCz + 4) * 16, y },                // South Grand Gate
-          { x: originCx * 16 - 1, z: czW, y },                  // West Grand Gate
-          { x: (originCx + 4) * 16, z: czW, y }                 // East Grand Gate
+          { x: cxW, z: originCz * 16 - 1, y, dx: 0, dz: -1 },
+          { x: cxW, z: (originCz + 4) * 16, y, dx: 0, dz: 1 },
+          { x: originCx * 16 - 1, z: czW, y, dx: -1, dz: 0 },
+          { x: (originCx + 4) * 16, z: czW, y, dx: 1, dz: 0 }
         ]
       };
     };
 
-    const makeUgHub = (ucx, ucz) => {
+    const makeUgNode = (ucx, ucz) => {
       const uInfo = this.getUndergroundVillageForChunk(ucx, ucz);
       if (!uInfo || uInfo.dx !== 0 || uInfo.dz !== 0) return null;
       const ex = ucx * 16 + 7;
@@ -4623,31 +4632,24 @@ export class World {
       return {
         kind: 'ug_village',
         x: ex, z: ez, y,
-        entrances: [{ x: ex, z: ez, y }]
+        entrances: [{ x: ex, z: ez, y, dx: 0, dz: 1 }]
       };
     };
 
     // Starter landmarks near spawn
     if (rgx >= -2 && rgx <= 2 && rgz >= -2 && rgz <= 2) {
-      const sv = makeVillageHub(5, 4);
-      if (sv) villages.push(sv);
-      const sp = makeMegaHub(-15, -13);
-      if (sp) megas.push(sp);
-      const sc = makeMegaHub(16, -14);
-      if (sc) megas.push(sc);
-      const su = makeUgHub(-5, 6);
-      if (su) ugEntrances.push(su);
+      pushNode(makeVillageNode(5, 4));
+      pushNode(makeMegaNode(-15, -13));
+      pushNode(makeMegaNode(16, -14));
+      pushNode(makeUgNode(-5, 6));
     }
 
-    // Repeating Villages on 32x32 grid (offset 11)
+    // Repeating Villages on 32x32 grid
     for (let gx = Math.floor(minVcx / 32) - 1; gx <= Math.floor(maxVcx / 32) + 1; gx++) {
       const vcx = gx * 32 + 11;
       for (let gz = Math.floor(minVcz / 32) - 1; gz <= Math.floor(maxVcz / 32) + 1; gz++) {
         const vcz = gz * 32 + 11;
-        if (this.isVillageCenter(vcx, vcz)) {
-          const vh = makeVillageHub(vcx, vcz);
-          if (vh) villages.push(vh);
-        }
+        if (this.isVillageCenter(vcx, vcz)) pushNode(makeVillageNode(vcx, vcz));
       }
     }
 
@@ -4667,8 +4669,7 @@ export class World {
         const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, this.seed + 1931) * (GRID - 18));
         const ocx = gx * GRID - HALF_GRID + offX;
         const ocz = gz * GRID - HALF_GRID + offZ;
-        const mh = makeMegaHub(ocx, ocz);
-        if (mh) megas.push(mh);
+        pushNode(makeMegaNode(ocx, ocz));
       }
     }
 
@@ -4677,131 +4678,166 @@ export class World {
       const ucx = gx * 28 + 21;
       for (let gz = Math.floor(minVcz / 28) - 1; gz <= Math.floor(maxVcz / 28) + 1; gz++) {
         const ucz = gz * 28 + 17;
-        if (this.isUndergroundVillageCenter(ucx, ucz)) {
-          const uh = makeUgHub(ucx, ucz);
-          if (uh) ugEntrances.push(uh);
-        }
+        if (this.isUndergroundVillageCenter(ucx, ucz)) pushNode(makeUgNode(ucx, ucz));
       }
     }
 
-    const seenPair = new Set();
-    const pickBestEntrancePair = (hubA, hubB) => {
-      let bestA = hubA.entrances[0], bestB = hubB.entrances[0], bestD = Infinity;
-      for (const ea of hubA.entrances) {
-        for (const eb of hubB.entrances) {
-          const d = Math.hypot(eb.x - ea.x, eb.z - ea.z);
-          if (d < bestD) { bestD = d; bestA = ea; bestB = eb; }
+    // Helper: Build a slope-clamped, guaranteed-walkable 1D elevation profile along a road/bridge segment!
+    const buildSegment = (ax, ay, az, bx, by, bz, bend) => {
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 6) return null;
+      const dx = bx - ax, dz = bz - az;
+      const nx = -dz / len, nz = dx / len;
+      const N = Math.max(4, Math.min(480, Math.ceil(len / 2.0)));
+      const stepDist = len / N;
+      const prof = new Float32Array(N + 1);
+      const isWaterArr = new Uint8Array(N + 1);
+      prof[0] = ay;
+      prof[N] = by;
+      for (let i = 1; i < N; i++) {
+        const t = i / N;
+        const curve = Math.sin(t * Math.PI) * bend;
+        const px = ax + dx * t + nx * curve;
+        const pz = az + dz * t + nz * curve;
+        const th = this.getTerrainHeight(px, pz);
+        if (th <= SEA_LEVEL) {
+          isWaterArr[i] = 1;
+          prof[i] = SEA_LEVEL + 1;
+        } else {
+          prof[i] = th;
         }
       }
-      return [bestA, bestB, bestD];
-    };
-
-    const addSegBetweenHubs = (hubA, hubB) => {
-      const idA = `${Math.round(hubA.x)},${Math.round(hubA.z)}`;
-      const idB = `${Math.round(hubB.x)},${Math.round(hubB.z)}`;
-      const key = idA < idB ? `${idA}-${idB}` : `${idB}-${idA}`;
-      if (seenPair.has(key)) return;
-      seenPair.add(key);
-
-      const [a, b, len] = pickBestEntrancePair(hubA, hubB);
-      if (len < 24 || len > 1350) return;
-      // Gentle natural bend (zero bend near endpoints because sin(t*PI) -> 0 at t=0 and t=1, lining up straight into gates!)
-      const bend = (coordHash(Math.round(a.x + b.x), Math.round(a.z - b.z), this.seed + 4441) - 0.5) * Math.min(46, len * 0.14);
+      // Strict bidirectional slope-clamping (max ~0.42 vertical blocks per horizontal block -> NEVER a 2+ block cliff!)
+      const maxStep = Math.max(0.45, stepDist * 0.44);
+      for (let pass = 0; pass < 4; pass++) {
+        prof[0] = ay;
+        prof[N] = by;
+        for (let i = 1; i < N; i++) {
+          const lo = prof[i - 1] - maxStep;
+          const hi = prof[i - 1] + maxStep;
+          if (prof[i] < lo) prof[i] = lo;
+          else if (prof[i] > hi) prof[i] = hi;
+          if (isWaterArr[i] && prof[i] < SEA_LEVEL + 1) prof[i] = SEA_LEVEL + 1;
+        }
+        for (let i = N - 1; i >= 1; i--) {
+          const lo = prof[i + 1] - maxStep;
+          const hi = prof[i + 1] + maxStep;
+          if (prof[i] < lo) prof[i] = lo;
+          else if (prof[i] > hi) prof[i] = hi;
+          if (isWaterArr[i] && prof[i] < SEA_LEVEL + 1) prof[i] = SEA_LEVEL + 1;
+        }
+        if (pass < 3) {
+          for (let i = 1; i < N; i++) {
+            const avg = prof[i - 1] * 0.25 + prof[i] * 0.5 + prof[i + 1] * 0.25;
+            prof[i] = isWaterArr[i] ? Math.max(SEA_LEVEL + 1, avg) : avg;
+          }
+        }
+      }
+      prof[0] = ay;
+      prof[N] = by;
       const pad = Math.abs(bend) + 14;
-      segs.push({
-        ax: a.x, ay: a.y, az: a.z,
-        bx: b.x, by: b.y, bz: b.z,
-        bend, len,
-        minX: Math.min(a.x, b.x) - pad,
-        maxX: Math.max(a.x, b.x) + pad,
-        minZ: Math.min(a.z, b.z) - pad,
-        maxZ: Math.max(a.z, b.z) + pad
-      });
+      return {
+        ax, ay, az, bx, by, bz, bend, len,
+        profileY: prof,
+        minX: Math.min(ax, bx) - pad,
+        maxX: Math.max(ax, bx) + pad,
+        minZ: Math.min(az, bz) - pad,
+        maxZ: Math.max(az, bz) + pad
+      };
     };
 
-    // 1. Connect every Village to its closest Great Pyramid / Mega Castle (up to 2), closest Neighbor Village, and closest Underground Village!
-    for (const v of villages) {
-      const sortedMegas = megas
-        .map((m) => ({ m, d: Math.hypot(m.x - v.x, m.z - v.z) }))
-        .filter((e) => e.d > 48 && e.d <= 1250)
-        .sort((a, b) => a.d - b.d);
-      if (sortedMegas[0]) addSegBetweenHubs(v, sortedMegas[0].m);
-      if (sortedMegas[1] && sortedMegas[1].d <= 780) addSegBetweenHubs(v, sortedMegas[1].m);
-
-      let bestV = null, bestVd = 820;
-      for (const v2 of villages) {
-        if (v2 === v) continue;
-        const d = Math.hypot(v2.x - v.x, v2.z - v.z);
-        if (d > 64 && d < bestVd) { bestVd = d; bestV = v2; }
-      }
-      if (bestV) addSegBetweenHubs(v, bestV);
-
-      let bestU = null, bestUd = 420;
-      for (const u of ugEntrances) {
-        const d = Math.hypot(u.x - v.x, u.z - v.z);
-        if (d > 40 && d < bestUd) { bestUd = d; bestU = u; }
-      }
-      if (bestU) addSegBetweenHubs(v, bestU);
-    }
-
-    // 2. Also link Mega Castles <-> Great Pyramids directly when within range so royal highways span the map!
-    for (const m of megas) {
-      let bestM = null, bestMd = 960;
-      for (const m2 of megas) {
-        if (m2 === m) continue;
-        const d = Math.hypot(m2.x - m.x, m2.z - m.z);
-        if (d > 80 && d < bestMd) { bestMd = d; bestM = m2; }
-      }
-      if (bestM) addSegBetweenHubs(m, bestM);
-    }
-
-    // 3. Detect Bridge/Path Intersection Points -> Road-Aligned Center Crossroads Outpost Hubs!
-    const hubs = [];
-    const evalSeg = (s, t) => {
-      const dx = s.bx - s.ax, dz = s.bz - s.az;
-      const nx = -dz / s.len, nz = dx / s.len;
-      const curve = Math.sin(t * Math.PI) * s.bend;
-      return { x: s.ax + dx * t + nx * curve, z: s.az + dz * t + nz * curve };
-    };
-    for (let i = 0; i < segs.length; i++) {
-      for (let j = i + 1; j < segs.length; j++) {
-        const s1 = segs[i], s2 = segs[j];
-        if (s1.maxX < s2.minX || s1.minX > s2.maxX || s1.maxZ < s2.minZ || s1.minZ > s2.maxZ) continue;
-        let bestD = 5.5, bestPt = null;
-        const steps = 16;
-        for (let a = 1; a < steps; a++) {
-          const p1 = evalSeg(s1, a / steps);
-          for (let b = 1; b < steps; b++) {
-            const p2 = evalSeg(s2, b / steps);
-            const d = Math.hypot(p1.x - p2.x, p1.z - p2.z);
-            if (d < bestD) {
-              bestD = d;
-              bestPt = { x: Math.round((p1.x + p2.x) * 0.5), z: Math.round((p1.z + p2.z) * 0.5) };
+    // 1. Build a clean Minimum Spanning Tree (Prim's MST) over all landmarks (ZERO spiderweb redundant paths!)
+    const edges = [];
+    const nCount = nodes.length;
+    if (nCount >= 2) {
+      const visited = new Uint8Array(nCount);
+      const deg = new Uint16Array(nCount);
+      for (let start = 0; start < nCount; start++) {
+        if (visited[start]) continue;
+        visited[start] = 1;
+        while (true) {
+          let bestU = -1, bestV = -1, bestD = 1280;
+          for (let u = 0; u < nCount; u++) {
+            if (!visited[u]) continue;
+            for (let v = 0; v < nCount; v++) {
+              if (visited[v]) continue;
+              const d = Math.hypot(nodes[v].x - nodes[u].x, nodes[v].z - nodes[u].z);
+              if (d >= 36 && d < bestD) {
+                bestD = d;
+                bestU = u;
+                bestV = v;
+              }
             }
           }
-        }
-        if (bestPt) {
-          let nearEnd = false;
-          for (const ep of [
-            { x: s1.ax, z: s1.az }, { x: s1.bx, z: s1.bz },
-            { x: s2.ax, z: s2.az }, { x: s2.bx, z: s2.bz }
-          ]) {
-            if (Math.hypot(bestPt.x - ep.x, bestPt.z - ep.z) < 42) { nearEnd = true; break; }
-          }
-          if (!nearEnd && !hubs.some((h) => Math.hypot(h.x - bestPt.x, h.z - bestPt.z) < 26)) {
-            const rawH = this.getTerrainHeight(bestPt.x, bestPt.z);
-            bestPt.isWater = rawH <= SEA_LEVEL;
-            bestPt.y = bestPt.isWater ? (SEA_LEVEL + 1) : Math.max(SEA_LEVEL + 1, rawH);
-            hubs.push(bestPt);
-          }
+          if (bestV === -1) break;
+          visited[bestV] = 1;
+          edges.push([bestU, bestV]);
+          deg[bestU]++;
+          deg[bestV]++;
         }
       }
+
+      // 2. For EACH landmark, pick ONE SINGLE main entrance facing the average direction of its MST neighbors,
+      //    then extend ONE clean straight Trunk Road (~22 blocks out) to its Split Junction Point!
+      const junctions = new Array(nCount);
+      for (let i = 0; i < nCount; i++) {
+        const nd = nodes[i];
+        let avgDx = 0, avgDz = 0, cnt = 0;
+        for (const [u, v] of edges) {
+          if (u === i) { avgDx += nodes[v].x - nd.x; avgDz += nodes[v].z - nd.z; cnt++; }
+          else if (v === i) { avgDx += nodes[u].x - nd.x; avgDz += nodes[u].z - nd.z; cnt++; }
+        }
+        let bestEnt = nd.entrances[0];
+        if (nd.entrances.length > 1 && cnt > 0) {
+          const al = Math.hypot(avgDx, avgDz) || 1;
+          const ax = avgDx / al, az = avgDz / al;
+          let bestDot = -2;
+          for (const e of nd.entrances) {
+            const dot = e.dx * ax + e.dz * az;
+            if (dot > bestDot) { bestDot = dot; bestEnt = e; }
+          }
+        }
+        const spurLen = nd.kind === 'ug_village' ? 14 : 22;
+        const jx = Math.round(bestEnt.x + bestEnt.dx * spurLen);
+        const jz = Math.round(bestEnt.z + bestEnt.dz * spurLen);
+        const rawJH = this.getTerrainHeight(jx, jz);
+        const isWaterJ = rawJH <= SEA_LEVEL;
+        const maxDeltaJ = Math.floor(spurLen * 0.42);
+        const clampedJH = Math.max(bestEnt.y - maxDeltaJ, Math.min(bestEnt.y + maxDeltaJ, isWaterJ ? (SEA_LEVEL + 1) : rawJH));
+        const jy = Math.max(SEA_LEVEL + 1, clampedJH);
+        junctions[i] = { gate: bestEnt, x: jx, z: jz, y: jy, isWater: isWaterJ, deg: deg[i] };
+      }
+
+      const segs = [];
+      const hubs = [];
+      // Add ONE trunk spur per connected landmark + crossroads split plaza wherever a road splits (deg >= 2)!
+      for (let i = 0; i < nCount; i++) {
+        const jn = junctions[i];
+        if (!jn || jn.deg === 0) continue;
+        const spurSeg = buildSegment(jn.gate.x, jn.gate.y, jn.gate.z, jn.x, jn.y, jn.z, 0);
+        if (spurSeg) segs.push(spurSeg);
+        if (jn.deg >= 2) {
+          hubs.push({ x: jn.x, z: jn.z, y: jn.y, isWater: jn.isWater });
+        }
+      }
+      // Add the clean MST branch highways between junctions!
+      for (const [u, v] of edges) {
+        const ju = junctions[u], jv = junctions[v];
+        const len = Math.hypot(jv.x - ju.x, jv.z - ju.z);
+        const bend = (coordHash(ju.x + jv.x, ju.z - jv.z, this.seed + 4441) - 0.5) * Math.min(34, len * 0.10);
+        const seg = buildSegment(ju.x, ju.y, ju.z, jv.x, jv.y, jv.z, bend);
+        if (seg) segs.push(seg);
+      }
+
+      const bundle = { segs, hubs };
+      if (this._roadRegionCache.size > 48) this._roadRegionCache.clear();
+      this._roadRegionCache.set(rKey, bundle);
+      return bundle;
     }
 
-    const bundle = { segs, hubs };
-    if (this._roadRegionCache.size > 48) this._roadRegionCache.clear();
-    this._roadRegionCache.set(rKey, bundle);
-    return bundle;
+    const emptyBundle = { segs: [], hubs: [] };
+    this._roadRegionCache.set(rKey, emptyBundle);
+    return emptyBundle;
   }
 
   stampConnectingPaths(cx, cz, ox, oz, heights, biomes, setLocal, getLocal, noTreeMask) {
@@ -4822,7 +4858,7 @@ export class World {
     const nearHubs = [];
     for (let i = 0; i < hubs.length; i++) {
       const h = hubs[i];
-      if (cMaxX >= h.x - 14 && ox <= h.x + 14 && cMaxZ >= h.z - 14 && oz <= h.z + 14) nearHubs.push(h);
+      if (cMaxX >= h.x - 10 && ox <= h.x + 10 && cMaxZ >= h.z - 10 && oz <= h.z + 10) nearHubs.push(h);
     }
     if (hits.length === 0 && nearHubs.length === 0) return;
 
@@ -4840,7 +4876,7 @@ export class World {
         const px = s.ax + dx * t + nx * curve;
         const pz = s.az + dz * t + nz * curve;
         const d = Math.hypot(wx - px, wz - pz);
-        if (d <= 2.75) closeCount++;
+        if (d <= 2.85) closeCount++;
         if (d < minD) {
           minD = d;
           bestAlong = t * s.len;
@@ -4851,33 +4887,14 @@ export class World {
       return { minD, bestAlong, bestT, bestSeg, closeCount };
     };
 
-    const computeBlendedRoadY = (wx, wz, naturalH, seg, t) => {
-      let targetY = naturalH;
-      if (seg) {
-        const RAMP_DIST = 26.0;
-        const dA = t * seg.len;
-        const dB = (1 - t) * seg.len;
-        if (dA < RAMP_DIST && typeof seg.ay === 'number') {
-          const u = 1.0 - dA / RAMP_DIST;
-          const sm = u * u * (3 - 2 * u);
-          targetY = targetY + (seg.ay - targetY) * sm;
-        } else if (dB < RAMP_DIST && typeof seg.by === 'number') {
-          const u = 1.0 - dB / RAMP_DIST;
-          const sm = u * u * (3 - 2 * u);
-          targetY = targetY + (seg.by - targetY) * sm;
-        }
-      }
-      // Smoothly blend approaching road height into any nearby Crossroads Hub so there is ZERO step wall!
-      for (let hi = 0; hi < nearHubs.length; hi++) {
-        const hb = nearHubs[hi];
-        const dh = Math.hypot(wx - hb.x, wz - hb.z);
-        if (dh < 13.0) {
-          const u = Math.max(0, Math.min(1, (13.0 - dh) / 8.0));
-          const sm = u * u * (3 - 2 * u);
-          targetY = targetY + (hb.y - targetY) * sm;
-        }
-      }
-      return Math.max(SEA_LEVEL + 1, Math.min(CHUNK_HEIGHT - 12, Math.round(targetY)));
+    const sampleSegY = (seg, t) => {
+      if (!seg || !seg.profileY) return SEA_LEVEL + 1;
+      const prof = seg.profileY;
+      const fIdx = Math.max(0, Math.min(prof.length - 1, t * (prof.length - 1)));
+      const i0 = Math.floor(fIdx);
+      const i1 = Math.min(prof.length - 1, i0 + 1);
+      const frac = fIdx - i0;
+      return Math.max(SEA_LEVEL + 1, Math.min(CHUNK_HEIGHT - 12, Math.round(prof[i0] + (prof[i1] - prof[i0]) * frac)));
     };
 
     for (let lz = 0; lz < 16; lz++) {
@@ -4894,6 +4911,7 @@ export class World {
         noTreeMask[idx2] = 1;
 
         const h = heights[idx2];
+        const roadY = sampleSegY(bestSeg, bestT);
         const isDesertRoad = biome === 'Desert' || biome === 'Badlands';
         let distToNearestHub = 999;
         for (let hi = 0; hi < nearHubs.length; hi++) {
@@ -4901,105 +4919,139 @@ export class World {
           if (dHub < distToNearestHub) distToNearestHub = dHub;
         }
 
-        if (h <= SEA_LEVEL) {
-          // Wide Unobstructed Wooden Plank Bridge across Rivers, Lakes & Oceans!
-          // - Generous walkable deck (minDist <= 1.62) — NEVER has fences!
-          // - Outer fence rail ONLY on true open-water outer edge (1.62 < minDist <= 2.38), NEVER at intersections,
-          //   NEVER near Crossroads Hubs, and NEVER at bridge-to-land transitions so fences NEVER block the path!
-          const by = SEA_LEVEL + 1;
+        const isWaterBridge = h <= SEA_LEVEL;
+        const isViaductBridge = !isWaterBridge && (roadY >= h + 3);
+
+        if (isWaterBridge || isViaductBridge) {
+          // Continuous Slope-Clamped Wooden Bridge / Stone Viaduct (follows exact roadY so it NEVER hits a shoreline cliff!)
+          const by = roadY;
           const onPostPeriod = Math.abs((bestAlong % 12) - 6) < 0.72;
           if (minDist <= 2.38) {
-            // Check if this column is right beside dry land (bridge abutment) -> keep railings open so nothing blocks the road!
-            let nearLand = false;
-            for (let dz = -2; dz <= 2 && !nearLand; dz++) {
-              for (let dx = -2; dx <= 2 && !nearLand; dx++) {
-                const nlx = lx + dx, nlz = lz + dz;
-                if (nlx >= 0 && nlx < 16 && nlz >= 0 && nlz < 16) {
-                  if (heights[nlx + (nlz << 4)] > SEA_LEVEL) nearLand = true;
-                } else {
-                  if (this.getTerrainHeight(wx + dx, wz + dz) > SEA_LEVEL) nearLand = true;
+            let nearLand = !isWaterBridge;
+            if (isWaterBridge) {
+              for (let dz = -2; dz <= 2 && !nearLand; dz++) {
+                for (let dx = -2; dx <= 2 && !nearLand; dx++) {
+                  const nlx = lx + dx, nlz = lz + dz;
+                  if (nlx >= 0 && nlx < 16 && nlz >= 0 && nlz < 16) {
+                    if (heights[nlx + (nlz << 4)] > SEA_LEVEL) nearLand = true;
+                  } else if (this.getTerrainHeight(wx + dx, wz + dz) > SEA_LEVEL) {
+                    nearLand = true;
+                  }
                 }
               }
             }
-            const isRail = minDist > 1.62 && closeCount < 2 && distToNearestHub > 6.8 && !nearLand;
-            setLocal(lx, by, lz, isRail && onPostPeriod ? BLOCK.OAK_LOG : BLOCK.OAK_PLANKS);
+            const isRail = minDist > 1.65 && closeCount < 2 && distToNearestHub > 7.0 && !nearLand;
+            const deckBlk = isViaductBridge ? (minDist > 1.65 ? BLOCK.STONE_BRICKS : BLOCK.COBBLESTONE) : (isRail && onPostPeriod ? BLOCK.OAK_LOG : BLOCK.OAK_PLANKS);
+            setLocal(lx, by, lz, deckBlk);
             if (isRail) {
-              // Leave opening at top of ladder post so players climb cleanly onto the bridge!
               setLocal(lx, by + 1, lz, onPostPeriod ? BLOCK.AIR : BLOCK.OAK_FENCE);
             } else {
               setLocal(lx, by + 1, lz, BLOCK.AIR);
             }
-            setLocal(lx, by + 2, lz, BLOCK.AIR);
-            setLocal(lx, by + 3, lz, BLOCK.AIR);
-            setLocal(lx, by + 4, lz, BLOCK.AIR);
+            for (let cy = 2; cy <= 5; cy++) setLocal(lx, by + cy, lz, BLOCK.AIR);
 
-            // Full-depth Oak Log support post all the way down to the bottom of the river/lake/ocean!
-            if (isRail && onPostPeriod) {
+            // Sturdy full-depth Support Pier reaching down to riverbed/valley floor + waterlogged climbable Ladder!
+            if ((isRail || (isViaductBridge && minDist > 1.65)) && onPostPeriod) {
+              const pierBlk = isViaductBridge ? BLOCK.STONE_BRICKS : BLOCK.OAK_LOG;
               for (let py = Math.max(1, h - 1); py < by; py++) {
-                setLocal(lx, py, lz, BLOCK.OAK_LOG);
+                setLocal(lx, py, lz, pierBlk);
               }
-              // Attach a climbable 3D Wooden Ladder column directly onto the outer water-facing side of this post!
-              const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-              let bestDir = null, bestD = minDist;
-              for (const [ddx, ddz] of dirs) {
-                const nlx = lx + ddx, nlz = lz + ddz;
-                if (nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) continue;
-                const d2 = evalDistToHits(ox + nlx, oz + nlz).minD;
-                if (d2 > bestD) { bestD = d2; bestDir = [nlx, nlz]; }
-              }
-              if (bestDir) {
-                const [llx, llz] = bestDir;
-                const nh = heights[llx + (llz << 4)];
-                const ladBottom = Math.max(Math.max(2, nh + 1), SEA_LEVEL - 4);
-                for (let ly = ladBottom; ly <= by; ly++) {
-                  const existing = getLocal(llx, ly, llz);
-                  if (existing === BLOCK.AIR || existing === BLOCK.WATER) {
-                    setLocal(llx, ly, llz, BLOCK.LADDER);
+              if (isWaterBridge && isRail) {
+                const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+                let bestDir = null, bestD = minDist;
+                for (const [ddx, ddz] of dirs) {
+                  const nlx = lx + ddx, nlz = lz + ddz;
+                  if (nlx < 0 || nlx >= 16 || nlz < 0 || nlz >= 16) continue;
+                  const d2 = evalDistToHits(ox + nlx, oz + nlz).minD;
+                  if (d2 > bestD) { bestD = d2; bestDir = [nlx, nlz]; }
+                }
+                if (bestDir) {
+                  const [llx, llz] = bestDir;
+                  const nh = heights[llx + (llz << 4)];
+                  const ladBottom = Math.max(Math.max(2, nh + 1), SEA_LEVEL - 4);
+                  for (let ly = ladBottom; ly <= by; ly++) {
+                    const existing = getLocal(llx, ly, llz);
+                    if (existing === BLOCK.AIR || existing === BLOCK.WATER) {
+                      setLocal(llx, ly, llz, BLOCK.LADDER);
+                      if (existing === BLOCK.WATER || ly <= SEA_LEVEL) {
+                        this.waterloggedLadders.add(`${ox + llx},${ly},${oz + llz}`);
+                      }
+                    }
                   }
                 }
               }
             }
           }
         } else {
-          // Land Highway with Smooth Ramp Embankments & Road Cuts straight into Castle/Pyramid/Village Entrances!
-          if (minDist > 1.95) {
-            // Rustic roadside torch post strictly OUTSIDE the road & never inside a second road or hub!
-            if (minDist >= 2.65 && minDist <= 3.15 && closeCount < 2 && distToNearestHub > 7.5 && Math.abs((bestAlong % 32) - 16) < 0.72) {
+          // Land Highway with Embankments, Open Cuts & Arched Stone Mountain Tunnels through Massive Walls!
+          const overburden = h - roadY;
+          const isTunnel = overburden > 8;
+          if (minDist > 2.05) {
+            if (isTunnel && minDist <= 3.0) {
+              // Solid stone-brick tunnel walls & ceiling arch lining!
+              for (let ty = roadY; ty <= roadY + 6; ty++) {
+                const curB = getLocal(lx, ty, lz);
+                if (curB === BLOCK.AIR || curB === BLOCK.DIRT || curB === BLOCK.GRASS) {
+                  setLocal(lx, ty, lz, BLOCK.STONE_BRICKS);
+                }
+              }
+            } else if (!isTunnel && minDist >= 2.75 && minDist <= 3.25 && closeCount < 2 && distToNearestHub > 7.5 && Math.abs((bestAlong % 36) - 18) < 0.72) {
+              // Rustic roadside lantern post strictly outside road & grounded on solid terrain!
               const postY = h;
-              setLocal(lx, postY + 1, lz, BLOCK.OAK_FENCE);
-              setLocal(lx, postY + 2, lz, BLOCK.OAK_FENCE);
-              setLocal(lx, postY + 3, lz, BLOCK.TORCH);
+              if (getLocal(lx, postY, lz) !== BLOCK.AIR) {
+                setLocal(lx, postY + 1, lz, BLOCK.OAK_FENCE);
+                setLocal(lx, postY + 2, lz, BLOCK.OAK_FENCE);
+                setLocal(lx, postY + 3, lz, BLOCK.TORCH);
+              }
             }
             continue;
           }
-          const roadY = computeBlendedRoadY(wx, wz, h, bestSeg, bestT);
-          const roadBlk = isDesertRoad ? BLOCK.SANDSTONE : BLOCK.DIRT_PATH;
+
+          const roadBlk = isTunnel ? BLOCK.COBBLESTONE : (isDesertRoad ? BLOCK.SANDSTONE : BLOCK.DIRT_PATH);
           const fillBlk = isDesertRoad ? BLOCK.SANDSTONE : BLOCK.COBBLESTONE;
 
-          // If road ramps ABOVE terrain (e.g. up to a raised castle/village terrace), build solid embankment!
+          // Build solid embankment up to roadY if road is above terrain
           if (roadY > h) {
             for (let py = Math.max(1, h); py < roadY; py++) {
               setLocal(lx, py, lz, py === roadY - 1 ? BLOCK.DIRT : fillBlk);
             }
           }
           setLocal(lx, roadY, lz, roadBlk);
-          // Clear 4+ blocks of open headroom (carving cleanly through hillsides when descending into lower entrances!)
-          const clearTop = Math.min(CHUNK_HEIGHT - 2, Math.max(h + 3, roadY + 4));
-          for (let py = roadY + 1; py <= clearTop; py++) {
-            setLocal(lx, py, lz, BLOCK.AIR);
+          // Always guarantee a solid base directly beneath the roadbed (no cave holes under roads!)
+          if (getLocal(lx, roadY - 1, lz) === BLOCK.AIR || getLocal(lx, roadY - 1, lz) === BLOCK.WATER) {
+            setLocal(lx, roadY - 1, lz, fillBlk);
           }
-          heights[idx2] = roadY;
+
+          if (isTunnel) {
+            // Massive Mountain Wall -> Carve a grand 5-block-high illuminated Mountain Tunnel straight through!
+            const tunnelH = minDist <= 1.35 ? 5 : 4;
+            for (let py = roadY + 1; py <= roadY + tunnelH; py++) {
+              setLocal(lx, py, lz, BLOCK.AIR);
+            }
+            // Reinforce tunnel roof arch so sand/gravel/water never drops into the tunnel!
+            setLocal(lx, roadY + tunnelH + 1, lz, BLOCK.STONE_BRICKS);
+            // Warm glowstone ceiling lanterns every 10 blocks along tunnel center (zero floating torches!)
+            if (minDist <= 0.65 && Math.abs((bestAlong % 10) - 5) < 0.75) {
+              setLocal(lx, roadY + tunnelH + 1, lz, BLOCK.GLOWSTONE);
+            }
+          } else {
+            // Open Road Cut: clear ALL terrain/cliffs above roadY up to natural top so you NEVER hit a wall!
+            const clearTop = Math.min(CHUNK_HEIGHT - 2, Math.max(h + 4, roadY + 5));
+            for (let py = roadY + 1; py <= clearTop; py++) {
+              setLocal(lx, py, lz, BLOCK.AIR);
+            }
+            heights[idx2] = roadY;
+          }
         }
       }
     }
 
-    // Stamp Road-Aligned Crossroads Center Outpost Pavilion wherever two bridges or paths intersect!
-    // Automatically aligns open wide gateways to EVERY intersecting road angle (cardinal OR diagonal!) so paths are NEVER blocked!
+    // Stamp Road-Aligned Crossroads Split Plaza wherever a single entrance road splits into 2+ branches!
     for (let hi = 0; hi < nearHubs.length; hi++) {
       const hub = nearHubs[hi];
       const hubY = hub.y;
       const isWaterHub = hub.isWater;
-      const R = 5; // Spacious 11x11 open crossroads plaza!
+      const R = 5; // Spacious 11x11 open split junction plaza!
 
       for (let lz = 0; lz < 16; lz++) {
         const wz = oz + lz;
@@ -5014,11 +5066,9 @@ export class World {
 
           const isCorner = adx === R && adz === R;
           const isEdge = adx === R || adz === R;
-          // Evaluate exact distance from this perimeter tile to ANY road/bridge crossing this hub!
           const roadDistHere = evalDistToHits(wx, wz).minD;
-          const isRoadOpening = roadDistHere <= 2.65;
+          const isRoadOpening = roadDistHere <= 2.75;
 
-          // Solid floor deck & sturdy support pilings down to ground/riverbed!
           const curH = heights[lx + (lz << 4)];
           setLocal(lx, hubY, lz, (isEdge && !isRoadOpening) ? BLOCK.COBBLESTONE : (((dx + dz) & 1) ? BLOCK.OAK_PLANKS : BLOCK.DIRT_PATH));
           if (isCorner || (!isWaterHub && curH < hubY) || (isWaterHub && isEdge && (dx === 0 || dz === 0))) {
@@ -5026,22 +5076,17 @@ export class World {
               setLocal(lx, py, lz, isCorner ? BLOCK.OAK_LOG : BLOCK.COBBLESTONE);
             }
           }
-          // Clear generous open walk-through headroom across the entire crossroads plaza!
           const clearTop = Math.min(CHUNK_HEIGHT - 2, Math.max(curH + 4, hubY + 6));
           for (let py = hubY + 1; py <= clearTop; py++) setLocal(lx, py, lz, BLOCK.AIR);
 
-          // Place corner roof pillars & railings STRICTLY where NO road passes (zero blocked paths/bridges!)
+          // Place corner roof pillars & railings STRICTLY where NO splitting road passes!
           if (isCorner && !isRoadOpening) {
             for (let py = 1; py <= 4; py++) setLocal(lx, hubY + py, lz, BLOCK.OAK_LOG);
             setLocal(lx, hubY + 5, lz, BLOCK.TORCH);
-          } else if (isEdge && !isRoadOpening) {
-            // Only place railing fence on non-road segments AND never directly beside an opening if it pinches a diagonal!
-            if (roadDistHere > 3.15) {
-              setLocal(lx, hubY + 1, lz, BLOCK.OAK_FENCE);
-            }
+          } else if (isEdge && !isRoadOpening && roadDistHere > 3.25) {
+            setLocal(lx, hubY + 1, lz, BLOCK.OAK_FENCE);
           }
 
-          // Elevated colorful overhead canopy roof (5-6 blocks up, completely above player head!) & hanging Glowstone lantern!
           if (adx <= 4 && adz <= 4) {
             const roofY = hubY + 5 + (adx <= 2 && adz <= 2 ? 1 : 0);
             setLocal(lx, roofY, lz, ((adx + adz) & 1) === 0 ? BLOCK.WOOL_RED : BLOCK.WOOL_WHITE);
@@ -5049,9 +5094,8 @@ export class World {
           if (dx === 0 && dz === 0) {
             setLocal(lx, hubY + 4, lz, BLOCK.GLOWSTONE);
           }
-          // Tucked corner Wayfarer Crafting Table & Supply Chest (only if not sitting in a road lane!)
-          if (dx === -4 && dz === -4 && roadDistHere > 2.6) setLocal(lx, hubY + 1, lz, BLOCK.CRAFTING_TABLE);
-          if (dx === 4 && dz === -4 && roadDistHere > 2.6) {
+          if (dx === -4 && dz === -4 && roadDistHere > 2.8) setLocal(lx, hubY + 1, lz, BLOCK.CRAFTING_TABLE);
+          if (dx === 4 && dz === -4 && roadDistHere > 2.8) {
             setLocal(lx, hubY + 1, lz, BLOCK.CHEST);
             const wKey = `${wx},${hubY + 1},${wz}`;
             if (!this.chests.has(wKey)) {
@@ -5117,7 +5161,8 @@ export class World {
           }
           setLocal(i, y0 + 3, 8, BLOCK.OAK_PLANKS);
           setLocal(8, y0 + 3, i, BLOCK.OAK_PLANKS);
-          setLocal(i, y0 + 2, 8, BLOCK.TORCH);
+          // Mount mineshaft torch flush on the solid oak log arch post (never floating in mid-air!)
+          if (i > 2 && i < 14) setLocal(i - 1, y0 + 2, 7, BLOCK.TORCH);
         }
       }
       // Exposed rich ore pocket on side wall
@@ -5471,9 +5516,9 @@ export class World {
     }
 
     // Inter-Landmark Connecting Dirt Paths linking Villages <-> Great Pyramids <-> Mega Castles <-> Underground Villages!
-    // Allow paths to cross non-gatehouse underground village surface chunks too!
+    // Never cut off a road/bridge because of a minor biome structure — carve cleanly through non-mega/village chunks!
     const isUgGatehouseChunk = !!(ugVillagePre && ugVillagePre.dx === 0 && ugVillagePre.dz === -1);
-    if (!isFlat && !megaPre && !vInfoPre && !structTypePre && !isUgGatehouseChunk) {
+    if (!isFlat && !megaPre && !vInfoPre && !isUgGatehouseChunk) {
       this.stampConnectingPaths(cx, cz, ox, oz, heights, biomes, setLocal, getLocal, noTreeMask);
     }
 
@@ -5652,6 +5697,37 @@ export class World {
       }
     }
 
+    // 2c. Universal Post-Generation Floating-Torch Sanitizer (guarantees ZERO floating torches in ANY structure!)
+    const isSolidTorchFloor = (bid) => (
+      bid !== 0 && bid !== BLOCK.TORCH && bid !== BLOCK.LADDER && bid !== BLOCK.FIRE &&
+      !isBedBlock(bid) && !isDoorBlock(bid) && !isWheatBlock(bid) && this._solidTable[bid] === 1
+    );
+    const isSolidTorchWall = (bid) => (
+      bid !== 0 && bid !== BLOCK.TORCH && bid !== BLOCK.LADDER && bid !== BLOCK.FIRE &&
+      !isBedBlock(bid) && !isDoorBlock(bid) && !isFenceOrGate(bid) && !isStairBlock(bid) &&
+      this._solidTable[bid] === 1 && this._transTable[bid] === 0
+    );
+    for (let y = 1; y <= maxY; y++) {
+      const yOff = y << 8;
+      for (let lz = 0; lz < 16; lz++) {
+        const zOff = lz << 4;
+        for (let lx = 0; lx < 16; lx++) {
+          if (data[lx + zOff + yOff] !== BLOCK.TORCH) continue;
+          const below = data[lx + zOff + ((y - 1) << 8)];
+          if (isSolidTorchFloor(below)) continue;
+          // Check 4 horizontal walls (if on chunk edge, keep conservatively if neighbor chunk could hold wall)
+          const edgeChunk = lx === 0 || lx === 15 || lz === 0 || lz === 15;
+          const wPX = lx < 15 ? isSolidTorchWall(data[(lx + 1) + zOff + yOff]) : false;
+          const wNX = lx > 0 ? isSolidTorchWall(data[(lx - 1) + zOff + yOff]) : false;
+          const wPZ = lz < 15 ? isSolidTorchWall(data[lx + ((lz + 1) << 4) + yOff]) : false;
+          const wNZ = lz > 0 ? isSolidTorchWall(data[lx + ((lz - 1) << 4) + yOff]) : false;
+          if (!wPX && !wNX && !wPZ && !wNZ && !edgeChunk) {
+            data[lx + zOff + yOff] = BLOCK.AIR;
+          }
+        }
+      }
+    }
+
     // 3. Apply player-modified blocks in this chunk in O(1)!
     const chunkMods = this.modsByChunk.get(key);
     if (chunkMods) {
@@ -5722,13 +5798,28 @@ export class World {
 
     // Clean up tile entities if broken
     const bKey = `${x},${y},${z}`;
+    const cxPre = x >> 4, czPre = z >> 4;
+    const chunkPre = this.chunks.get(this.chunkKey(cxPre, czPre));
+    const prevBlockPre = chunkPre ? chunkPre.data[(x & 15) + ((z & 15) << 4) + (y << 8)] : BLOCK.AIR;
     if (blockId === BLOCK.AIR) {
-      this.chests.delete(bKey);
-      this.furnaces.delete(bKey);
-      this.doorStates.delete(bKey);
-      this.gateStates.delete(bKey);
-      this.ladderStates.delete(bKey);
-      this.stairStates.delete(bKey);
+      // Breaking a waterlogged ladder restores the overlapping water block seamlessly!
+      if (prevBlockPre === BLOCK.LADDER && this.isLadderWaterlogged(x, y, z)) {
+        this.waterloggedLadders.delete(bKey);
+        this.ladderStates.delete(bKey);
+        blockId = BLOCK.WATER;
+        if (record) {
+          this.modifiedBlocks.set(bKey, BLOCK.WATER);
+          this.indexModifiedBlock(x, y, z, BLOCK.WATER);
+        }
+      } else {
+        this.chests.delete(bKey);
+        this.furnaces.delete(bKey);
+        this.doorStates.delete(bKey);
+        this.gateStates.delete(bKey);
+        this.ladderStates.delete(bKey);
+        this.waterloggedLadders.delete(bKey);
+        this.stairStates.delete(bKey);
+      }
     } else if (blockId === BLOCK.CHEST && !this.chests.has(bKey)) {
       this.chests.set(bKey, new Array(27).fill(null));
     } else if (blockId === BLOCK.FURNACE && !this.furnaces.has(bKey)) {
@@ -5808,6 +5899,16 @@ export class World {
           this.setBlock(x, y + 1, z, BLOCK.AIR, record);
         }
       }
+      // Breaking a solid block pops any adjacent Torch that no longer has floor or wall support!
+      if (this._solidTable[prevId] === 1 && this._solidTable[blockId] === 0) {
+        for (const [tdx, tdy, tdz] of [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+          const tx = x + tdx, ty = y + tdy, tz = z + tdz;
+          if (this.getBlock(tx, ty, tz) === BLOCK.TORCH && !this.hasTorchSupport(tx, ty, tz)) {
+            this.setBlock(tx, ty, tz, BLOCK.AIR, record);
+            if (this.onTorchPop) this.onTorchPop(tx, ty, tz);
+          }
+        }
+      }
       // Placing/removing water immediately refreshes nearby farmland hydration within 4 blocks!
       if (blockId === BLOCK.WATER || prevId === BLOCK.WATER) {
         for (const f of this.activeFarmlands.values()) {
@@ -5877,6 +5978,14 @@ export class World {
     if (fluidBlockId === BLOCK.LAVA && cur === BLOCK.WATER) {
       this.setBlock(x, y, z, BLOCK.COBBLESTONE, true);
       if (this.onFluidMix) this.onFluidMix(x, y, z, BLOCK.COBBLESTONE);
+      return;
+    }
+    // Placing Water with a bucket onto a Ladder waterlogs the ladder instead of destroying it!
+    if (fluidBlockId === BLOCK.WATER && cur === BLOCK.LADDER) {
+      this.waterloggedLadders.add(`${x},${y},${z}`);
+      this._markFluidDirty(x, z);
+      this.scheduleFluid(x, y, z, BLOCK.WATER);
+      this.scheduleNeighborFluids(x, y, z);
       return;
     }
     this.fluidLevels.set(`${x},${y},${z}`, 0);
@@ -6093,6 +6202,15 @@ export class World {
             this.fluidLevels.delete(`${nx},${y},${nz}`);
             this.setBlock(nx, y, nz, res, true);
             if (this.onFluidMix) this.onFluidMix(nx, y, nz, res);
+            continue;
+          }
+          if (!isLava && nb === BLOCK.LADDER) {
+            // Water flows smoothly into & overlaps with ladders (waterlogging them instead of breaking them!)
+            const lk = `${nx},${y},${nz}`;
+            if (!this.waterloggedLadders.has(lk)) {
+              this.waterloggedLadders.add(lk);
+              this._markFluidDirty(nx, nz);
+            }
             continue;
           }
           if (canFlowInto(nb)) {
@@ -6589,6 +6707,12 @@ export class World {
     };
 
     const calcSkyLight = (nlx, ny, nlz) => giVol.getSky(nlx, ny, nlz);
+    const isWaterLike = (nlx, ny, nlz) => {
+      const b = fastGet(nlx, ny, nlz);
+      if (b === BLOCK.WATER) return true;
+      if (b === BLOCK.LADDER) return this.isLadderWaterlogged(ox + nlx, ny, oz + nlz, fastGet, nlx, nlz);
+      return false;
+    };
 
     let hasWater = false;
 
@@ -6805,6 +6929,38 @@ export class World {
             for (const ry of [0.09, 0.34, 0.59, 0.84]) {
               addLadBox(0.06, ry, 0.015, 0.94, ry + 0.11, 0.095);
             }
+            // Waterlogged Ladder: overlap full water surface/sides seamlessly inside the same voxel!
+            if (this.isLadderWaterlogged(wx, y, wz, fastGet, lx, lz)) {
+              hasWater = true;
+              const wUV = uvTable[BLOCK.WATER][0];
+              const aboveW = isWaterLike(lx, y + 1, lz);
+              const topY = aboveW ? (y + 1.0) : (y + 0.88);
+              if (!aboveW) {
+                bWater.pushQuad(
+                  wx,     topY, wz + 1, wUV.u0, wUV.v0, 1.0,
+                  wx + 1, topY, wz + 1, wUV.u1, wUV.v0, 1.0,
+                  wx + 1, topY, wz,     wUV.u1, wUV.v1, 1.0,
+                  wx,     topY, wz,     wUV.u0, wUV.v1, 1.0,
+                  0, 1, 0
+                );
+              }
+              for (let fi = 1; fi < 6; fi++) {
+                const face = FACES[fi];
+                const dx0 = face.dir[0], dy0 = face.dir[1], dz0 = face.dir[2];
+                const nlx = lx + dx0, ny = y + dy0, nlz = lz + dz0;
+                const nbr = fastGet(nlx, ny, nlz);
+                if (isWaterLike(nlx, ny, nlz) || (nbr !== 0 && transTable[nbr] === 0)) continue;
+                const c0 = face.corners[0], c1 = face.corners[1], c2 = face.corners[2], c3 = face.corners[3];
+                const cy = (c) => c[1] === 1 ? topY : y;
+                bWater.pushQuad(
+                  wx + c0[0], cy(c0), wz + c0[2], c0[3] ? wUV.u1 : wUV.u0, c0[4] ? wUV.v1 : wUV.v0, face.shade,
+                  wx + c1[0], cy(c1), wz + c1[2], c1[3] ? wUV.u1 : wUV.u0, c1[4] ? wUV.v1 : wUV.v0, face.shade,
+                  wx + c2[0], cy(c2), wz + c2[2], c2[3] ? wUV.u1 : wUV.u0, c2[4] ? wUV.v1 : wUV.v0, face.shade,
+                  wx + c3[0], cy(c3), wz + c3[2], c3[3] ? wUV.u1 : wUV.u0, c3[4] ? wUV.v1 : wUV.v0, face.shade,
+                  dx0, dy0, dz0
+                );
+              }
+            }
             continue;
           }
 
@@ -6841,13 +6997,16 @@ export class World {
 
           // Sculpted 3D Voxel Torch Model (wooden shaft + charred ember collar + blazing emissive flame tip + auto wall-mount tilt!)
           if (id === BLOCK.TORCH) {
-            const hasFloor = solidTable[fastGet(lx, y - 1, lz)] === 1;
+            const belowB = fastGet(lx, y - 1, lz);
+            const hasFloor = belowB !== 0 && belowB !== BLOCK.TORCH && belowB !== BLOCK.LADDER && !isBedBlock(belowB) && !isDoorBlock(belowB) && solidTable[belowB] === 1;
+            const isTorchWall = (bid) => bid !== 0 && bid !== BLOCK.TORCH && bid !== BLOCK.LADDER && !isBedBlock(bid) && !isDoorBlock(bid) && !isFenceOrGate(bid) && !isStairBlock(bid) && solidTable[bid] === 1 && transTable[bid] === 0;
             let tiltX = 0, tiltZ = 0, offX = 0, offY = 0, offZ = 0;
             if (!hasFloor) {
-              if (solidTable[fastGet(lx - 1, y, lz)] === 1) { offX = -0.34; offY = 0.16; tiltX = 0.34; }
-              else if (solidTable[fastGet(lx + 1, y, lz)] === 1) { offX = 0.34; offY = 0.16; tiltX = -0.34; }
-              else if (solidTable[fastGet(lx, y, lz - 1)] === 1) { offZ = -0.34; offY = 0.16; tiltZ = 0.34; }
-              else if (solidTable[fastGet(lx, y, lz + 1)] === 1) { offZ = 0.34; offY = 0.16; tiltZ = -0.34; }
+              if (isTorchWall(fastGet(lx - 1, y, lz))) { offX = -0.34; offY = 0.16; tiltX = 0.34; }
+              else if (isTorchWall(fastGet(lx + 1, y, lz))) { offX = 0.34; offY = 0.16; tiltX = -0.34; }
+              else if (isTorchWall(fastGet(lx, y, lz - 1))) { offZ = -0.34; offY = 0.16; tiltZ = 0.34; }
+              else if (isTorchWall(fastGet(lx, y, lz + 1))) { offZ = 0.34; offY = 0.16; tiltZ = -0.34; }
+              else continue; // Never render an unsupported floating torch!
             }
 
             const addTorchBox = (x0, y0, z0, x1, y1, z1, uv, sTop, sSide, sBot) => {
@@ -7026,9 +7185,9 @@ export class World {
             if (isWater || isLava) {
               if (fi === 0) {
                 // Keep water/lava top face visible even when a solid block sits directly above (water top is at y+0.88, zero Z-fighting!)
-                if (neighbor === id) continue;
+                if (isWater ? isWaterLike(nlx, ny, nlz) : neighbor === id) continue;
               } else {
-                if (neighbor === id || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
+                if ((isWater ? isWaterLike(nlx, ny, nlz) : neighbor === id) || (neighbor !== 0 && transTable[neighbor] === 0)) continue;
               }
             } else {
               if (neighbor === id && isStaticCutout) continue;
@@ -7432,8 +7591,7 @@ export class World {
           const zOff = lz << 4;
           for (let lx = 0; lx < 16; lx++) {
             if (data[lx + zOff + yOff] !== BLOCK.WATER) continue;
-            const above = fastGet(lx, y + 1, lz);
-            if (above === BLOCK.WATER) continue;
+            if (isWaterLike(lx, y + 1, lz)) continue;
             if (chunkHasFlow && this.fluidLevels.size > 0) {
               const wxW = ox + lx, wzW = oz + lz;
               if (
@@ -8089,47 +8247,39 @@ export class World {
     }
   }
 
-  // Smooth Frame-Sliced Spawn Preload (generates 5x5 data + meshes inner 3x3 with ZERO freezes!)
+  // Ultra-Fast Frame-Sliced Spawn Preload (generates & meshes immediate 3x3 spawn chunks in ~2.5x less time; outer ring streams smoothly at 60 FPS!)
   async preloadSpawnAsync(px, pz, onProgress = null) {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
 
-    const dataCoords = [];
-    for (let dz = -2; dz <= 2; dz++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        dataCoords.push([pcx + dx, pcz + dz, dx * dx + dz * dz]);
-      }
-    }
-    dataCoords.sort((a, b) => a[2] - b[2]);
-
-    const meshCoords = [];
+    const coords = [];
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        meshCoords.push([pcx + dx, pcz + dz, dx * dx + dz * dz]);
+        coords.push([pcx + dx, pcz + dz, dx * dx + dz * dz]);
       }
     }
-    meshCoords.sort((a, b) => a[2] - b[2]);
+    coords.sort((a, b) => a[2] - b[2]);
 
-    const total = dataCoords.length + meshCoords.length;
+    const total = coords.length * 2;
     let done = 0;
     const yieldFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
     let t = performance.now();
-    for (const [cx, cz] of dataCoords) {
+    for (const [cx, cz] of coords) {
       this.generateChunk(cx, cz);
       done++;
-      if (performance.now() - t > 10) {
-        if (onProgress) onProgress(done / total, 'Generating terrain...');
+      if (performance.now() - t > 22) {
+        if (onProgress) onProgress(done / total, 'Generating spawn terrain...');
         await yieldFrame();
         t = performance.now();
       }
     }
 
-    for (const [cx, cz] of meshCoords) {
+    for (const [cx, cz] of coords) {
       const c = this.chunks.get(this.chunkKey(cx, cz));
       if (c) this.buildChunkMesh(c);
       done++;
-      if (performance.now() - t > 10) {
+      if (performance.now() - t > 22) {
         if (onProgress) onProgress(done / total, 'Building world meshes...');
         await yieldFrame();
         t = performance.now();
@@ -8483,8 +8633,46 @@ export class World {
     return st.open;
   }
 
+  isLadderWaterlogged(wx, wy, wz, fastGet = null, lx = 0, lz = 0) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    if (this.waterloggedLadders.has(`${x},${y},${z}`)) return true;
+    // Automatically waterlog natural worldgen ladders submerged at/below sea level adjacent to water (e.g. bridge ladders!)
+    if (y <= SEA_LEVEL) {
+      const getB = (dx, dy, dz) => fastGet ? fastGet(lx + dx, y + dy, lz + dz) : this.getBlock(x + dx, y + dy, z + dz);
+      if (
+        getB(1, 0, 0) === BLOCK.WATER || getB(-1, 0, 0) === BLOCK.WATER ||
+        getB(0, 0, 1) === BLOCK.WATER || getB(0, 0, -1) === BLOCK.WATER ||
+        getB(0, 1, 0) === BLOCK.WATER
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  hasTorchSupport(wx, wy, wz) {
+    const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const below = this.getBlock(x, y - 1, z);
+    if (below !== 0 && below !== BLOCK.TORCH && below !== BLOCK.LADDER && below !== BLOCK.FIRE &&
+        !isBedBlock(below) && !isDoorBlock(below) && !isWheatBlock(below) && this._solidTable[below] === 1) {
+      return true;
+    }
+    const isWall = (bid) => (
+      bid !== 0 && bid !== BLOCK.TORCH && bid !== BLOCK.LADDER && bid !== BLOCK.FIRE &&
+      !isBedBlock(bid) && !isDoorBlock(bid) && !isFenceOrGate(bid) && !isStairBlock(bid) &&
+      this._solidTable[bid] === 1 && this._transTable[bid] === 0
+    );
+    return (
+      isWall(this.getBlock(x + 1, y, z)) ||
+      isWall(this.getBlock(x - 1, y, z)) ||
+      isWall(this.getBlock(x, y, z + 1)) ||
+      isWall(this.getBlock(x, y, z - 1))
+    );
+  }
+
   placeLadder(wx, wy, wz, nx = 0, ny = 0, nz = 0) {
     const x = Math.floor(wx), y = Math.floor(wy), z = Math.floor(wz);
+    const prev = this.getBlock(x, y, z);
     // Attach to the exact solid wall face clicked (0=-Z wall, 1=+X wall, 2=+Z wall, 3=-X wall)
     let facing = -1;
     if (nz === 1) facing = 0;       // clicked +Z face of wall at z-1 -> mounts to -Z wall
@@ -8492,7 +8680,13 @@ export class World {
     else if (nz === -1) facing = 2; // clicked -Z face of wall at z+1 -> mounts to +Z wall
     else if (nx === 1) facing = 3;  // clicked +X face of wall at x-1 -> mounts to -X wall
     if (facing < 0) facing = this.getLadderFacing(x, y, z);
-    this.ladderStates.set(`${x},${y},${z}`, facing);
+    const key = `${x},${y},${z}`;
+    this.ladderStates.set(key, facing);
+    if (prev === BLOCK.WATER) {
+      this.waterloggedLadders.add(key);
+    } else {
+      this.waterloggedLadders.delete(key);
+    }
     this.setBlock(x, y, z, BLOCK.LADDER, true);
   }
 
@@ -8559,6 +8753,7 @@ export class World {
     this.doorStates.clear();
     this.gateStates.clear();
     this.ladderStates.clear();
+    this.waterloggedLadders.clear();
     this.stairStates.clear();
     this.megaStructures.clear();
     this.scene.remove(this.group);

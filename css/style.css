@@ -4809,6 +4809,441 @@ body.mc-theme .setting-row input[type="text"] {
   }
 }
 
+/* =====================================================================
+   MULTIPLAYER UPDATE — UPGRADED TITLE BANNER, HUB, JOIN MODAL & HUD
+   ===================================================================== */
+.mp-update-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 22px !important;
+  background: linear-gradient(180deg, rgba(16, 36, 48, 0.94) 0%, rgba(10, 20, 32, 0.96) 100%) !important;
+  border: 2px solid #4ade80 !important;
+  color: #ecfdf5 !important;
+  letter-spacing: 3.5px !important;
+  text-indent: 0 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(134, 239, 172, 0.45),
+    0 0 22px rgba(74, 222, 128, 0.34),
+    0 8px 22px rgba(0, 0, 0, 0.56) !important;
+}
+
+.mp-banner-dot,
+.mp-live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 10px #4ade80, 0 0 4px #bbf7d0;
+  display: inline-block;
+  flex-shrink: 0;
+  animation: mpPulseDot 1.6s ease-in-out infinite;
+}
+
+@keyframes mpPulseDot {
+  0%, 100% { transform: scale(0.92); opacity: 0.85; }
+  50% { transform: scale(1.22); opacity: 1; }
+}
+
+.mp-highlight-btn {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 48%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(180deg, #3b82f6 0%, #2563eb 58%, #1d4ed8 100%) !important;
+}
+
+.mp-highlight-btn:hover {
+  background-image: linear-gradient(180deg, #60a5fa 0%, #3b82f6 100%) !important;
+}
+
+.java-new-pill {
+  position: absolute;
+  right: 12px;
+  padding: 2px 8px;
+  background: linear-gradient(180deg, #4ade80 0%, #16a34a 100%);
+  border: 2px solid #0b0d12;
+  color: #052e16;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: none !important;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* Multiplayer Hub Cards */
+.mp-hero-card,
+.mp-howto-card,
+.mp-recent-card {
+  background: linear-gradient(180deg, rgba(22, 29, 44, 0.92) 0%, rgba(14, 19, 31, 0.94) 100%);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  padding: 18px;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.12), 0 12px 30px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.mp-hero-card {
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.mp-hero-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.mp-hero-icon {
+  width: 54px;
+  height: 54px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(37, 99, 235, 0.24);
+  border: 2px solid rgba(96, 165, 250, 0.5);
+}
+
+.mp-hero-copy strong {
+  display: block;
+  font-size: 18px;
+  color: #ffffff;
+  text-shadow: 2px 2px 0 #000;
+  margin-bottom: 4px;
+}
+
+.mp-hero-copy span {
+  display: block;
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.mp-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mp-name-row label {
+  font-size: 13px;
+  font-weight: 800;
+  color: #e2e8f0;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.mp-name-input {
+  max-width: 260px !important;
+  flex: 1;
+}
+
+.mp-hero-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.mp-join-hero-btn {
+  width: 100%;
+  height: 54px;
+  font-size: 18px !important;
+}
+
+.mp-section-title {
+  font-size: 13px;
+  font-weight: 900;
+  color: #fde047;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.mp-steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.mp-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(8, 12, 20, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.mp-step-num {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #2563eb;
+  border: 2px solid #0b0d12;
+  color: #fff;
+  font-weight: 900;
+  font-size: 13px;
+}
+
+.mp-step strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.mp-step span {
+  display: block;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.mp-recent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mp-recent-empty {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.mp-recent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 2px solid rgba(96, 165, 250, 0.42);
+  color: #f8fafc;
+  font-family: 'Courier New', monospace;
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.1s ease, transform 0.08s ease;
+}
+
+.mp-recent-chip:hover {
+  border-color: #4ade80;
+  transform: translateY(-1px);
+}
+
+.mp-recent-chip code {
+  color: #4ade80;
+  font-size: 14px;
+  letter-spacing: 1.5px;
+}
+
+/* Join World Room-Code Popup Modal */
+.join-world-window {
+  width: min(460px, 92vw) !important;
+}
+
+.join-world-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.join-world-desc {
+  margin: 0;
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.join-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.join-field label {
+  font-size: 12px;
+  font-weight: 900;
+  color: #e2e8f0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.join-code-input {
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 14px;
+  background: #090d16;
+  border: 2px solid #4ade80;
+  color: #86efac;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 6px;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.65);
+}
+
+.join-code-input:focus {
+  border-color: #fde047;
+  box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.25), inset 0 2px 8px rgba(0, 0, 0, 0.65);
+}
+
+.join-world-status {
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 2px solid rgba(96, 165, 250, 0.45);
+  color: #bae6fd;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.join-world-status.error {
+  border-color: rgba(248, 113, 113, 0.7);
+  color: #fecaca;
+  background: rgba(69, 10, 10, 0.78);
+}
+
+.join-world-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* Pause / Settings Multiplayer World Button & Live Room Panel */
+.mp-world-btn {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 48%, rgba(0, 0, 0, 0.18) 100%),
+    linear-gradient(180deg, #3b82f6 0%, #2563eb 58%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
+}
+
+.pause-mp-panel {
+  background: linear-gradient(180deg, rgba(16, 30, 48, 0.94) 0%, rgba(10, 18, 30, 0.96) 100%);
+  border: 2px solid #4ade80;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: inset 0 1px 0 rgba(134, 239, 172, 0.3), 0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+.pause-mp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pause-mp-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 900;
+  color: #ecfdf5;
+}
+
+.pause-mp-mode-tag {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  background: rgba(74, 222, 128, 0.2);
+  border: 1px solid #4ade80;
+  color: #86efac;
+  letter-spacing: 0.8px;
+}
+
+.pause-mp-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(5, 9, 16, 0.78);
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  padding: 10px 12px;
+}
+
+.pause-mp-code-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pause-mp-code-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: #94a3b8;
+  letter-spacing: 1.2px;
+}
+
+.pause-mp-code {
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 4px;
+  color: #fde047;
+  text-shadow: 2px 2px 0 #000;
+}
+
+.pause-mp-players-lbl {
+  font-size: 12px;
+  font-weight: 800;
+  color: #cbd5e1;
+  margin-bottom: 6px;
+}
+
+.pause-mp-players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pause-mp-player-chip {
+  padding: 4px 10px;
+  background: rgba(30, 41, 59, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #f1f5f9;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pause-mp-player-chip.host {
+  border-color: rgba(253, 224, 71, 0.65);
+  color: #fef08a;
+}
+
+/* Live In-Game Online Players Pill in Top HUD */
+.hud-mp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 2px 9px;
+  background: rgba(16, 48, 32, 0.86);
+  border: 1px solid #4ade80;
+  color: #bbf7d0;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.hud-mp-pill:hover {
+  background: rgba(22, 101, 52, 0.92);
+  color: #ffffff;
+}
+
+
 
 
 

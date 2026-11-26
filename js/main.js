@@ -13,6 +13,7 @@ import { Player } from './player.js';
 import { EntityManager } from './mobs.js';
 import { ControlManager } from './controls.js';
 import { UIManager } from './ui.js';
+import { MultiplayerManager, formatRoomCode } from './multiplayer.js';
 import { TitlePanorama } from './panorama.js';
 import { loadSettings, saveSettings, listWorlds, loadWorld, saveWorld, deleteWorld, DEFAULT_KEYBINDS, isTouchDevice } from './storage.js';
 
@@ -25,6 +26,9 @@ class BlockCraftGame {
     this.sound.enabled = this.settings.sound;
     this.textures = new TextureManager();
     this.ui = new UIManager(this.textures, this.sound);
+    this.multiplayer = new MultiplayerManager(this);
+    this.multiplayer.onStateChange = (mp) => this.ui.syncMultiplayerUI(mp);
+    this._spawnBoostTimer = 0;
 
     // Three.js Renderer (10x GPU-tuned: smart DPR, skip redundant MSAA on HiDPI, throttled shadow updates!)
     this.container = document.getElementById('game-container');
@@ -133,6 +137,7 @@ class BlockCraftGame {
     window.addEventListener('pagehide', () => {
       saveSettings(this.settings);
       if (this.running) this.saveCurrentWorld(false);
+      if (this.multiplayer && this.multiplayer.isActive()) this.multiplayer.disconnect(true);
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
@@ -308,6 +313,7 @@ class BlockCraftGame {
   }
 
   cleanupScene() {
+    if (this.multiplayer) this.multiplayer.clearRemotePlayers();
     if (this.player && this.player.detachFromScene) this.player.detachFromScene(this.scene);
     while (this.camera.children.length > 0) {
       this.camera.remove(this.camera.children[0]);
@@ -522,6 +528,9 @@ class BlockCraftGame {
       this.world.onFireIgniteTnt = (tx, ty, tz) => {
         this.igniteTnt(tx, ty, tz, 2.6);
       };
+      this.world.onTorchPop = (tx, ty, tz) => {
+        if (this.entities) this.entities.spawnDrop('torch', 1, tx + 0.5, ty + 0.4, tz + 0.5);
+      };
 
       // Wire natural leaf decay particles & authentic apple/stick drops!
       this.world.onLeafDecay = (lx, ly, lz, leafBlockId) => {
@@ -563,6 +572,9 @@ class BlockCraftGame {
         }
         if (Array.isArray(saved.ladderStates)) {
           for (const [k, v] of saved.ladderStates) this.world.ladderStates.set(k, v);
+        }
+        if (Array.isArray(saved.waterloggedLadders)) {
+          for (const k of saved.waterloggedLadders) this.world.waterloggedLadders.add(k);
         }
         if (Array.isArray(saved.stairStates)) {
           for (const [k, v] of saved.stairStates) this.world.stairStates.set(k, v);
@@ -679,7 +691,6 @@ class BlockCraftGame {
       };
 
       this.ui.showLoadingScreen(true, 0.88, 'Spawning wildlife...', meta.name);
-      await yieldFrame();
       this.entities = new EntityManager(this.scene, this.world, this.sound, this.textures);
       this.entities.onPickup = () => {
         // Immediately refresh hotbar & any open container UI when collecting dropped blocks/items!
@@ -710,12 +721,14 @@ class BlockCraftGame {
       this.renderer.compile(this.scene, this.camera);
 
       this.running = true;
+      this._spawnBoostTimer = 2.8;
       this.controls.enabled = true;
       this.controls.setFlyingState(this.player.flying);
       this.settings.allowCheats = Boolean(meta.allowCheats);
       this.ui.syncSettingsUI(this.settings);
       this.ui.syncWorldRulesUI(this.worldMeta);
       this.ui.syncCheatUI(this.areCheatsAllowed());
+      this.ui.syncMultiplayerUI(this.multiplayer);
       this.ui.showTitleScreen(false);
       this.ui.updateHotbar();
       this.ui.updateStats(true);
@@ -731,8 +744,83 @@ class BlockCraftGame {
     }
   }
 
+  // --- MULTIPLAYER HOST / JOIN SESSION HANDLERS ---
+  async startMultiplayerWorld() {
+    if (!this.running || !this.world) {
+      throw new Error('Load a world first!');
+    }
+    const res = await this.multiplayer.hostWorld();
+    const formatted = formatRoomCode(res.code);
+    this.ui.addChatMessage(`Multiplayer World open! Share code: ${formatted}`);
+    this.ui.syncMultiplayerUI(this.multiplayer);
+    return res;
+  }
+
+  async joinMultiplayerWorld(code, playerName, onStatus) {
+    this.sound.unlock();
+    return await this.multiplayer.joinWorld(code, playerName, onStatus);
+  }
+
+  async loadMultiplayerWorld(snapshot) {
+    const meta = {
+      id: 'mp_' + Date.now(),
+      name: snapshot?.meta?.name || 'Multiplayer World',
+      mode: snapshot?.meta?.mode || 'survival',
+      worldType: snapshot?.meta?.worldType || 'infinite',
+      seed: snapshot?.meta?.seed ?? 12345,
+      allowCheats: Boolean(snapshot?.meta?.allowCheats),
+      difficulty: snapshot?.meta?.difficulty || 'normal',
+      mobSpawnRate: snapshot?.meta?.mobSpawnRate ?? 1.0,
+      hungerRate: snapshot?.meta?.hungerRate ?? 1.0,
+      farmSpeed: snapshot?.meta?.farmSpeed ?? 1.0,
+      generateStructures: snapshot?.meta?.generateStructures !== false,
+      bonusChest: false
+    };
+    this.worldMeta = meta;
+    const saved = {
+      time: snapshot.time,
+      dayCount: snapshot.dayCount,
+      modifiedBlocks: snapshot.modifiedBlocks || [],
+      chests: snapshot.chests || [],
+      furnaces: snapshot.furnaces || [],
+      doorStates: snapshot.doorStates || [],
+      gateStates: snapshot.gateStates || [],
+      ladderStates: snapshot.ladderStates || [],
+      waterloggedLadders: snapshot.waterloggedLadders || [],
+      stairStates: snapshot.stairStates || [],
+      player: snapshot.spawn ? {
+        x: snapshot.spawn.x,
+        y: snapshot.spawn.y,
+        z: snapshot.spawn.z,
+        sx: snapshot.spawn.x,
+        sy: snapshot.spawn.y,
+        sz: snapshot.spawn.z,
+        yaw: 0,
+        pitch: 0,
+        hp: 20,
+        hunger: 20,
+        xp: 0,
+        level: 0
+      } : null
+    };
+    await this.initGameSession(meta, saved);
+    if (snapshot.weather && this.sky) this.sky.weather = snapshot.weather;
+    this.ui.addChatMessage(`Joined ${snapshot.hostName || 'Host'}'s Multiplayer World (${formatRoomCode(this.multiplayer.roomCode)})!`);
+  }
+
+  stopMultiplayerWorld() {
+    if (!this.multiplayer || !this.multiplayer.isActive()) return;
+    const wasGuest = this.multiplayer.role === 'guest';
+    this.multiplayer.disconnect(false);
+    this.ui.syncMultiplayerUI(this.multiplayer);
+    if (wasGuest) {
+      this.quitToTitle();
+    }
+  }
+
   async saveCurrentWorld(showToast = false) {
     if (!this.running || !this.worldMeta || !this.world || !this.player) return;
+    if (this.multiplayer && this.multiplayer.role === 'guest') return;
     const record = {
       id: this.worldMeta.id,
       name: this.worldMeta.name,
@@ -769,6 +857,7 @@ class BlockCraftGame {
       doorStates: Array.from(this.world.doorStates.entries()),
       gateStates: Array.from(this.world.gateStates.entries()),
       ladderStates: Array.from(this.world.ladderStates.entries()),
+      waterloggedLadders: Array.from(this.world.waterloggedLadders),
       stairStates: Array.from(this.world.stairStates.entries())
     };
     await saveWorld(record);
@@ -777,11 +866,15 @@ class BlockCraftGame {
 
   async quitToTitle() {
     await this.saveCurrentWorld(false);
+    if (this.multiplayer && this.multiplayer.isActive()) {
+      this.multiplayer.disconnect(true);
+    }
     this.running = false;
     this.controls.enabled = false;
     this.controls.resetInputs();
     this.ui.closeModals();
     this.cleanupScene();
+    this.ui.syncMultiplayerUI(this.multiplayer);
     this.ui.showTitleScreen(true);
     await this.refreshWorldList();
   }
@@ -844,8 +937,22 @@ class BlockCraftGame {
       this.player.swingAnim = 1.0;
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
+      const remoteHit = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 4.6) : null;
       const mob = this.entities.raycastMob(eye, dir, 5.2);
       const blk = this.world ? this.world.raycast(eye, dir, 5.5) : null;
+      if (remoteHit && (!blk || remoteHit.dist <= blk.dist + 0.35) && (!mob || remoteHit.dist <= mob._hitDist)) {
+        this._attackCooldown = 0.38;
+        this._holdAttackTimer = 0.42;
+        const held = this.inventory.getHeldDef();
+        const dmg = held?.damage || 2;
+        this.multiplayer.sendPvpHit(remoteHit.player.id, dmg, dir);
+        this.sound.playPop();
+        if (this.player.mode === 'survival') {
+          this.inventory.damageSelectedTool(1);
+          this.ui.updateHotbar();
+        }
+        return;
+      }
       const mobCloser = !!(mob && (!blk || mob._hitDist <= blk.dist + 0.35));
       if (mobCloser) {
         // Lock out block-breaking briefly so attacking mobs NEVER breaks blocks behind them!
@@ -918,11 +1025,16 @@ class BlockCraftGame {
           }
           if (bdef.interactive === 'door') {
             const opened = this.world.toggleDoor(x, y, z);
+            const st = this.world.getDoorState(x, y, z);
+            const by = (blockId & 1) === 1 && bdef.isDoorTop ? y - 1 : y;
+            this.multiplayer?.sendDoor(x, by, z, 'toggle', blockId, st.facing, opened);
             if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
             return;
           }
           if (bdef.interactive === 'fence_gate') {
             const opened = this.world.toggleFenceGate(x, y, z, this.player.yaw);
+            const st = this.world.getFenceGateState(x, y, z);
+            this.multiplayer?.sendGate(x, y, z, 'toggle', blockId, st.facing, opened);
             if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
             return;
           }
@@ -965,6 +1077,7 @@ class BlockCraftGame {
         if (existing === BLOCK.AIR || existing === BLOCK.TALL_GRASS || existing === BLOCK.FLOWER_RED || existing === BLOCK.FLOWER_YELLOW) {
           this.player.swingAnim = 1.0;
           this.world.setBlock(fx, fy, fz, BLOCK.FIRE, true);
+          this.multiplayer?.sendBlock(fx, fy, fz, BLOCK.FIRE);
           if (this.sound.playFlintSteel) this.sound.playFlintSteel();
           if (this.player.mode === 'survival') {
             this.inventory.damageSelectedTool(1);
@@ -983,6 +1096,7 @@ class BlockCraftGame {
           const pz = this.currentTarget.z + this.currentTarget.nz;
           const fBlk = heldDef.bucketType === 'lava' ? BLOCK.LAVA : BLOCK.WATER;
           this.world.placeFluidSource(px, py, pz, fBlk);
+          this.multiplayer?.sendFluid(px, py, pz, 'place', fBlk);
           if (this.sound.playSplash) this.sound.playSplash();
           if (this.player.mode === 'survival') {
             this.inventory.slots[this.inventory.selected] = this.inventory.makeStack('bucket', 1);
@@ -994,6 +1108,7 @@ class BlockCraftGame {
           if ((blockId === BLOCK.WATER || blockId === BLOCK.LAVA) && this.world.getFluidLevel(x, y, z) === 0) {
             const scooped = this.world.pickupFluidSource(x, y, z);
             if (!scooped) return;
+            this.multiplayer?.sendFluid(x, y, z, 'pickup', scooped);
             if (this.sound.playSplash) this.sound.playSplash();
             const filledId = scooped === BLOCK.LAVA ? 'lava_bucket' : 'water_bucket';
             const selSlot = this.inventory.slots[this.inventory.selected];
@@ -1018,6 +1133,7 @@ class BlockCraftGame {
       if (!isRepeat && heldDef && heldDef.toolType === 'hoe' && this.currentTarget) {
         const { x, y, z } = this.currentTarget;
         if (this.world.tillBlock(x, y, z)) {
+          this.multiplayer?.sendBlock(x, y, z, this.world.getBlock(x, y, z));
           this.player.swingAnim = 1.0;
           if (this.sound.playTill) this.sound.playTill();
           if (this.player.mode === 'survival') {
@@ -1030,6 +1146,7 @@ class BlockCraftGame {
       if (!isRepeat && heldDef && heldDef.toolType === 'shovel' && this.currentTarget) {
         const { x, y, z } = this.currentTarget;
         if (this.world.makeDirtPath(x, y, z)) {
+          this.multiplayer?.sendBlock(x, y, z, BLOCK.DIRT_PATH);
           this.player.swingAnim = 1.0;
           if (this.sound.playTill) this.sound.playTill();
           if (this.player.mode === 'survival') {
@@ -1044,6 +1161,7 @@ class BlockCraftGame {
         if (isFarmlandBlock(blockId) && this.world.getBlock(x, y + 1, z) === BLOCK.AIR) {
           this.player.swingAnim = 1.0;
           this.world.setBlock(x, y + 1, z, BLOCK.WHEAT_0, true);
+          this.multiplayer?.sendBlock(x, y + 1, z, BLOCK.WHEAT_0);
           if (this.sound.playPlant) this.sound.playPlant();
           if (blockId !== BLOCK.FARMLAND_WET && !this.world.isFarmlandHydrated(x, y, z) && !this._shownWaterFarmTip) {
             this._shownWaterFarmTip = true;
@@ -1108,6 +1226,7 @@ class BlockCraftGame {
           if (Math.abs(fx) > Math.abs(fz)) facing = fx > 0 ? 3 : 1;
           else facing = fz > 0 ? 0 : 2;
           this.world.placeDoor(px, py, pz, heldDef.blockId, facing);
+          this.multiplayer?.sendDoor(px, py, pz, 'place', heldDef.blockId, facing, false);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1129,6 +1248,8 @@ class BlockCraftGame {
           }
           this.world.setBlock(px, py, pz, pair.foot, true);
           this.world.setBlock(hx, py, hz, pair.head, true);
+          this.multiplayer?.sendBlock(px, py, pz, pair.foot);
+          this.multiplayer?.sendBlock(hx, py, hz, pair.head);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1146,6 +1267,7 @@ class BlockCraftGame {
           if (Math.abs(fx) > Math.abs(fz)) facing = fx > 0 ? 1 : 3;
           else facing = fz > 0 ? 2 : 0;
           this.world.placeFenceGate(px, py, pz, heldDef.blockId, facing);
+          this.multiplayer?.sendGate(px, py, pz, 'place', heldDef.blockId, facing, false);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1157,6 +1279,9 @@ class BlockCraftGame {
         if (heldDef.blockId === BLOCK.LADDER) {
           if (isRepeat) return;
           this.world.placeLadder(px, py, pz, this.currentTarget.nx, this.currentTarget.ny, this.currentTarget.nz);
+          const lFacing = this.world.getLadderFacing(px, py, pz);
+          const lWl = this.world.waterloggedLadders.has(`${px},${py},${pz}`);
+          this.multiplayer?.sendLadder(px, py, pz, lFacing, lWl);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1176,6 +1301,7 @@ class BlockCraftGame {
           const half = this.currentTarget.ny === -1 ? 'top' : 'bottom';
           if (isRepeat) this.player.swingAnim = 1.0;
           this.world.placeStair(px, py, pz, heldDef.blockId, facing, half, true);
+          this.multiplayer?.sendStair(px, py, pz, heldDef.blockId, facing, half);
           this.sound.playBlock(heldDef.sound, true);
           if (this.player.mode === 'survival') {
             this.inventory.consumeSelected(1);
@@ -1184,10 +1310,15 @@ class BlockCraftGame {
           return;
         }
 
+        if (heldDef.blockId === BLOCK.TORCH && !this.world.hasTorchSupport(px, py, pz)) {
+          return;
+        }
+
         if (heldDef.solid && insidePlayer(px, py, pz)) return;
 
         if (isRepeat) this.player.swingAnim = 1.0;
         this.world.setBlock(px, py, pz, heldDef.blockId, true);
+        this.multiplayer?.sendBlock(px, py, pz, heldDef.blockId);
         this.sound.playBlock(heldDef.sound, true);
         if (this.player.mode === 'survival') {
           this.inventory.consumeSelected(1);
@@ -1199,6 +1330,7 @@ class BlockCraftGame {
 
   igniteTnt(x, y, z, fuse = 2.6, vx = null, vy = null, vz = null) {
     this.world.setBlock(x, y, z, BLOCK.AIR, true);
+    this.multiplayer?.sendTnt(x, y, z, fuse);
     if (this.sound.playFuse) this.sound.playFuse();
     if (this.effects && this.effects.spawnPrimedTnt) {
       this.effects.spawnPrimedTnt(x + 0.5, y + 0.5, z + 0.5, fuse, vx, vy, vz);
@@ -1276,7 +1408,9 @@ class BlockCraftGame {
 
   handleChatCommand(text) {
     if (!text.startsWith('/')) {
-      this.ui.addChatMessage(`Player: ${text}`);
+      const sender = (this.multiplayer && this.multiplayer.isActive()) ? this.multiplayer.playerName : 'Player';
+      this.ui.addChatMessage(`${sender}: ${text}`);
+      this.multiplayer?.sendChat(text);
       return true;
     }
     const parts = text.slice(1).trim().split(/\s+/);
@@ -1450,6 +1584,7 @@ class BlockCraftGame {
         const pz = z + info.dz;
         if (this.world.getBlock(px, y, pz) === info.partner) {
           this.world.setBlock(px, y, pz, BLOCK.AIR, true);
+          this.multiplayer?.sendBlock(px, y, pz, BLOCK.AIR);
         }
       }
     }
@@ -1508,6 +1643,7 @@ class BlockCraftGame {
     const autoSmelt = this.mods.isEnabled('auto_smelt');
     for (const [bx, by, bz] of toBreak) {
       this.world.setBlock(bx, by, bz, BLOCK.AIR, true);
+      this.multiplayer?.sendBlock(bx, by, bz, BLOCK.AIR);
       if (this.effects && toBreak.length <= 6) {
         this.effects.spawnBlockBreak(bx, by, bz, def);
       }
@@ -1721,12 +1857,14 @@ class BlockCraftGame {
       // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
+      const lookRemote = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 4.6) : null;
       const lookMob = this.entities.raycastMob(eye, dir, 5.2);
       const heldForRay = this.inventory.getHeldDef();
       const rayHitLiquids = !!(heldForRay && heldForRay.bucketType === 'empty');
       this.currentTarget = this.world.raycast(eye, dir, 5.5, rayHitLiquids);
 
-      const mobHit = !!(lookMob && (!this.currentTarget || (lookMob._hitDist ?? lookMob.pos.distanceTo(eye)) <= this.currentTarget.dist + 0.35));
+      const remotePlayerHit = !!(lookRemote && (!this.currentTarget || lookRemote.dist <= this.currentTarget.dist + 0.35));
+      const mobHit = !remotePlayerHit && !!(lookMob && (!this.currentTarget || (lookMob._hitDist ?? lookMob.pos.distanceTo(eye)) <= this.currentTarget.dist + 0.35));
       const targetDef = this.currentTarget ? getBlockDef(this.currentTarget.blockId) : null;
 
       // Dynamic context-aware buttons:
@@ -1770,10 +1908,15 @@ class BlockCraftGame {
       const useMode = isVillagerHover || (!mobHit && isInteractiveBlock);
       const eatMode = !useMode && !isPickupFluid && !!(heldDef && heldDef.food);
       const placeActionMode = isPickupFluid ? 'pickup' : (isTillHover ? 'till' : (isPathHover ? 'path' : (isPlantHover ? 'plant' : (useMode ? 'use' : (eatMode ? 'eat' : 'place')))));
-      const damageMode = mobHit;
+      const damageMode = mobHit || remotePlayerHit;
       this.ui.updateActionButtons(placeActionMode, damageMode);
 
-      if (isVillagerHover) {
+      if (remotePlayerHit) {
+        this.player.highlightMesh.visible = false;
+        const rp = lookRemote.player;
+        const heldLbl = rp.heldId && ITEMS[rp.heldId] ? ` • Holding ${ITEMS[rp.heldId].name}` : '';
+        this.ui.updateTargetTooltip(`${rp.name}${heldLbl}`);
+      } else if (isVillagerHover) {
         this.player.highlightMesh.visible = false;
         this.ui.updateTargetTooltip(`${lookMob.profession || 'Villager'} — Tap USE to Trade`);
       } else if (mobHit) {
@@ -1799,7 +1942,22 @@ class BlockCraftGame {
       if (this._attackCooldown > 0) this._attackCooldown = Math.max(0, this._attackCooldown - dt);
       if (this._holdAttackTimer > 0) this._holdAttackTimer = Math.max(0, this._holdAttackTimer - dt);
 
-      if (mobHit) {
+      if (remotePlayerHit) {
+        this.updateMining(dt, false);
+        if (input.breaking && this._holdAttackTimer <= 0) {
+          this._holdAttackTimer = 0.42;
+          this._attackCooldown = 0.38;
+          this.player.swingAnim = 1.0;
+          const held = this.inventory.getHeldDef();
+          const dmg = held?.damage || 2;
+          this.multiplayer.sendPvpHit(lookRemote.player.id, dmg, dir);
+          this.sound.playPop();
+          if (this.player.mode === 'survival') {
+            this.inventory.damageSelectedTool(1);
+            this.ui.updateHotbar();
+          }
+        }
+      } else if (mobHit) {
         // Never mine blocks while aiming at a mob; allow rhythmic attacks while holding DAMAGE
         this.updateMining(dt, false);
         if (input.breaking && this._holdAttackTimer <= 0) {
@@ -1818,9 +1976,12 @@ class BlockCraftGame {
         this.updateMining(dt, input.breaking && this._attackCooldown <= 0);
       }
       this.updateEating(dt, input.using && !input.breaking, useMode, eye, dir);
-      const maxBuilds = this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2);
-      const chunkBudgetMs = this.isTouch ? 3.5 : 4.2;
+      if (this._spawnBoostTimer > 0) this._spawnBoostTimer = Math.max(0, this._spawnBoostTimer - dt);
+      const boostExtra = this._spawnBoostTimer > 0 ? 2 : 0;
+      const maxBuilds = (this.isTouch ? 1 : (this.settings.renderDistance > 8 ? 3 : 2)) + boostExtra;
+      const chunkBudgetMs = (this.isTouch ? 3.5 : 4.2) + (this._spawnBoostTimer > 0 ? 2.5 : 0);
       this.world.updateChunksAround(this.player.pos.x, this.player.pos.z, maxBuilds, chunkBudgetMs, dir.x, dir.z);
+      if (this.multiplayer) this.multiplayer.update(dt);
       this.world.updateFurnaces(dt);
       this.world.updateLeafDecay(dt, this.player.pos);
       this.world.updateFluids(dt);
