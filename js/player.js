@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate } from './blocks.js';
 
-const PLAYER_RADIUS = 0.3;
+const PLAYER_RADIUS = 0.33;
 const PLAYER_HEIGHT = 1.75;
 const EYE_HEIGHT = 1.56;
 
@@ -271,6 +271,7 @@ export class Player {
     this.inWater = false;
     this.headInWater = false;
     this.inLava = false;
+    this.headInLava = false;
     this.inFire = false;
     this.burnTimer = 0;
     this._burnTick = 0;
@@ -580,6 +581,7 @@ export class Player {
     this.inWater = nowInWater;
     this.headInWater = headBlock === BLOCK.WATER;
     this.inLava = nowInLava;
+    this.headInLava = headBlock === BLOCK.LAVA;
     this.inFire = nowInFire;
     if (nowInWater) this.burnTimer = 0;
     const onLadder = feetBlock === BLOCK.LADDER || waistBlock === BLOCK.LADDER || headBlock === BLOCK.LADDER;
@@ -626,10 +628,22 @@ export class Player {
       else if (input.moveForward < -0.15) this.vel.y = -3.4;
       else this.vel.y = -1.6;
       this.fallStartY = null;
-    } else if (this.inWater || this.inLava) {
-      this.vel.y -= (this.inLava ? 6.5 : 9.5) * dt;
-      if (input.jump) this.vel.y = this.inLava ? 2.6 : 4.2;
-      this.vel.y = Math.max(-4.5, Math.min(4.5, this.vel.y));
+    } else if (this.inLava) {
+      // Thick viscous molten lava: falling through lava is MUCH slower, while pressing Jump swims up & hops cleanly onto banks!
+      if (this.vel.y < -1.15) {
+        this.vel.y = THREE.MathUtils.lerp(this.vel.y, -1.15, Math.min(1, dt * 9.0));
+      } else {
+        this.vel.y -= 2.4 * dt;
+      }
+      if (input.jump) {
+        this.vel.y = Math.max(this.vel.y, 4.35);
+      }
+      this.vel.y = Math.max(-1.15, Math.min(7.2, this.vel.y));
+      this.fallStartY = null;
+    } else if (this.inWater) {
+      this.vel.y -= 9.5 * dt;
+      if (input.jump) this.vel.y = Math.max(this.vel.y, 4.4);
+      this.vel.y = Math.max(-4.2, Math.min(7.0, this.vel.y));
       this.fallStartY = null;
     } else {
       const grav = moonGrav ? 9.5 : 25.0;
@@ -641,9 +655,10 @@ export class Player {
       }
     }
 
-    // Horizontal move with sneak edge-clamp
+    // Horizontal move with sneak edge-clamp & authentic Minecraft liquid-to-bank climb hop!
     const dx = this.vel.x * dt;
     const dz = this.vel.z * dt;
+    let horizBlocked = false;
 
     if (dx !== 0) {
       const nx = this.pos.x + dx;
@@ -651,6 +666,7 @@ export class Player {
       if (!this.collidesAt(nx, this.pos.y, this.pos.z) && safeEdge) {
         this.pos.x = nx;
       } else {
+        horizBlocked = true;
         this.vel.x = 0;
       }
     }
@@ -661,7 +677,17 @@ export class Player {
       if (!this.collidesAt(this.pos.x, this.pos.y, nz) && safeEdge) {
         this.pos.z = nz;
       } else {
+        horizBlocked = true;
         this.vel.z = 0;
+      }
+    }
+
+    // Authentic Minecraft shore-climb hop: pressing Jump while swimming against a block in Lava or Water cleanly vaults you onto the bank!
+    if ((this.inLava || this.inWater) && input.jump && horizBlocked) {
+      const stepX = this.pos.x + moveX * 0.48;
+      const stepZ = this.pos.z + moveZ * 0.48;
+      if (!this.collidesAt(stepX, this.pos.y + 1.06, stepZ)) {
+        this.vel.y = Math.max(this.vel.y, 6.85);
       }
     }
 
@@ -816,26 +842,51 @@ export class Player {
       this.camera.updateProjectionMatrix();
     }
 
-    if (this.cameraMode === 1) {
+    const isWallBlock = (wx, wy, wz) => {
+      const bid = this.world.getBlock(wx, wy, wz);
+      if (!isBlockSolid(bid)) return false;
+      if (isDoorBlock(bid) && this.world.isDoorOpenAt(wx, wy, wz)) return false;
+      if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(wx, wy, wz)) return false;
+      return true;
+    };
+
+    if (this.cameraMode === 1 || this.cameraMode === 2) {
       const dir = this.getLookDirection();
-      const camPos = eye.clone().addScaledVector(dir, -3.8);
-      camPos.y += 0.45;
+      const sign = this.cameraMode === 1 ? -1 : 1;
+      const maxDist = this.cameraMode === 1 ? 3.8 : 3.6;
+      // Ray-step 3rd-person camera against solid walls so it NEVER clips inside blocks!
+      let safeDist = maxDist;
+      for (let dStep = 0.4; dStep <= maxDist; dStep += 0.22) {
+        const cx = eye.x + dir.x * sign * dStep;
+        const cy = eye.y + dir.y * sign * dStep + 0.35 * (dStep / maxDist);
+        const cz = eye.z + dir.z * sign * dStep;
+        if (isWallBlock(cx, cy, cz)) {
+          safeDist = Math.max(0.45, dStep - 0.28);
+          break;
+        }
+      }
+      const camPos = eye.clone().addScaledVector(dir, sign * safeDist);
+      camPos.y += (this.cameraMode === 1 ? 0.42 : 0.32) * (safeDist / maxDist);
       this.camera.position.copy(camPos);
-      this.camera.rotation.order = 'YXZ';
-      this.camera.rotation.y = this.yaw;
-      this.camera.rotation.x = this.pitch;
-      this.camera.rotation.z = 0;
-      this.handGroup.visible = false;
-      this.playerModel.root.visible = true;
-    } else if (this.cameraMode === 2) {
-      const dir = this.getLookDirection();
-      const camPos = eye.clone().addScaledVector(dir, 3.6);
-      camPos.y += 0.35;
-      this.camera.position.copy(camPos);
-      this.camera.lookAt(eye.x, eye.y - 0.15, eye.z);
+      if (this.cameraMode === 1) {
+        this.camera.rotation.order = 'YXZ';
+        this.camera.rotation.y = this.yaw;
+        this.camera.rotation.x = this.pitch;
+        this.camera.rotation.z = 0;
+      } else {
+        this.camera.lookAt(eye.x, eye.y - 0.15, eye.z);
+      }
       this.handGroup.visible = false;
       this.playerModel.root.visible = true;
     } else {
+      // Anti-X-Ray Wall Guard: keep 1st-person eye safely padded from adjacent solid block faces!
+      const bx = Math.floor(eye.x), by = Math.floor(eye.y), bz = Math.floor(eye.z);
+      const pad = 0.22;
+      if (isWallBlock(bx + 1, by, bz) && eye.x > bx + 1 - pad) eye.x = bx + 1 - pad;
+      if (isWallBlock(bx - 1, by, bz) && eye.x < bx + pad) eye.x = bx + pad;
+      if (isWallBlock(bx, by, bz + 1) && eye.z > bz + 1 - pad) eye.z = bz + 1 - pad;
+      if (isWallBlock(bx, by, bz - 1) && eye.z < bz + pad) eye.z = bz + pad;
+      if (isWallBlock(bx, by + 1, bz) && eye.y > by + 1 - pad) eye.y = by + 1 - pad;
       this.camera.position.copy(eye);
       this.camera.rotation.order = 'YXZ';
       this.camera.rotation.y = this.yaw;

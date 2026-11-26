@@ -1188,6 +1188,11 @@ export class UIManager {
     document.getElementById('underwater-overlay').classList.toggle('hidden', !isUnder);
   }
 
+  setInLava(isLava) {
+    const el = document.getElementById('lava-overlay');
+    if (el) el.classList.toggle('hidden', !isLava);
+  }
+
   playSleepTransition() {
     const el = document.getElementById('sleep-overlay');
     if (!el) return;

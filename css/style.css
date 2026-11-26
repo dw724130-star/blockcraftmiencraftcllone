@@ -79,6 +79,10 @@ input, select, textarea {
   background: radial-gradient(circle, rgba(20, 95, 185, 0.20), rgba(10, 50, 120, 0.42));
 }
 
+#lava-overlay {
+  background: radial-gradient(circle, rgba(235, 62, 12, 0.72), rgba(175, 18, 4, 0.92));
+}
+
 #damage-overlay {
   background: radial-gradient(circle, rgba(220, 30, 30, 0.1), rgba(220, 20, 20, 0.55));
   animation: dmgFlash 0.25s ease-out;

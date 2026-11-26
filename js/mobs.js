@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate } from './blocks.js';
+import { BLOCK, ITEMS, isBlockSolid, isBlockLiquid, isBedBlock, getBedInfo, isDoorBlock, isDoorTop, isFenceGateBlock, isFenceOrGate } from './blocks.js';
 import { SEA_LEVEL } from './world.js';
 
 // Pre-allocated scratch vectors for zero-GC per-frame raycasts & pickups!
@@ -1897,6 +1897,12 @@ export class EntityManager {
 
   hitMob(mob, damage, knockDir, player) {
     if (!mob || mob.hurtCd > 0) return false;
+    // Wake sleeping villager immediately if attacked!
+    if (mob.sleeping) {
+      mob.sleeping = false;
+      mob.sleepBed = null;
+      mob.mesh.rotation.x = 0;
+    }
     mob.hp -= Math.max(1, damage || 2);
     mob.hurtFlash = 0.32;
     mob.hurtCd = 0.22;
@@ -2060,73 +2066,150 @@ export class EntityManager {
       }
     }
 
-    // 0. Stagger Village Population Spawning (1-2 per frame so approaching a village NEVER spikes!)
-    for (const v of this.world.villageChunks.values()) {
-      if (!v.spawned) {
-        const d = Math.hypot(player.pos.x - v.x, player.pos.z - v.z);
-        if (d < 84) {
-          v.spawned = true;
+    // Helper: check if target world (x, z) chunk is actually generated & loaded before spawning mobs!
+    const isChunkLoadedAt = (wx, wz) => {
+      const cx = Math.floor(wx) >> 4;
+      const cz = Math.floor(wz) >> 4;
+      return this.world.chunks.has(this.world.chunkKey(cx, cz));
+    };
+
+    // 0. Guaranteed Lively Village Population Spawning (waits for loaded chunks & cleanly respawns on return after distance despawn!)
+    for (const [vKey, v] of this.world.villageChunks.entries()) {
+      const d = Math.hypot(player.pos.x - v.x, player.pos.z - v.z);
+      if (d > 155 && v.spawned) {
+        // Player left village far behind -> allow clean re-population when returning!
+        v.spawned = false;
+      }
+      if (!v.spawned && d < 76 && isChunkLoadedAt(v.x, v.z)) {
+        // Count any already-living villagers/guards belonging to this village so we never duplicate
+        let liveVil = 0;
+        for (let mi = 0; mi < this.mobs.length; mi++) {
+          const mm = this.mobs[mi];
+          if ((mm.def.villager || mm.def.golem) && Math.hypot(mm.pos.x - v.x, mm.pos.z - v.z) < 48) liveVil++;
+        }
+        v.spawned = true;
+        if (liveVil < 10) {
           const spawns = [
             ['villager', -3.5, 3.5, VILLAGER_PROFESSIONS[0]],
             ['villager', 3.5, -3.5, VILLAGER_PROFESSIONS[1]],
             ['villager', -2.5, -4.0, VILLAGER_PROFESSIONS[2]],
             ['villager', 5.0, 2.5, VILLAGER_PROFESSIONS[3]],
-            ['villager', -6.0, 0.5, VILLAGER_PROFESSIONS[0]],
-            ['villager', 1.5, 5.5, VILLAGER_PROFESSIONS[1]],
-            ['villager_soldier', -5.0, 4.5, null],
+            ['villager', -6.5, 0.5, VILLAGER_PROFESSIONS[0]],
+            ['villager', 1.5, 6.0, VILLAGER_PROFESSIONS[1]],
+            ['villager', -12.0, 4.0, VILLAGER_PROFESSIONS[2]],
+            ['villager', 12.5, -3.0, VILLAGER_PROFESSIONS[3]],
+            ['villager', 4.0, -12.5, VILLAGER_PROFESSIONS[0]],
+            ['villager', -4.5, 13.0, VILLAGER_PROFESSIONS[1]],
+            ['villager', 10.5, 10.5, VILLAGER_PROFESSIONS[2]],
+            ['villager', -10.5, -10.5, VILLAGER_PROFESSIONS[3]],
+            ['villager_soldier', -5.5, 4.5, null],
             ['villager_soldier', 5.5, -4.5, null],
-            ['villager_soldier', 0.5, -6.0, null],
-            ['iron_golem', 0.5, 4.5, null],
-            ['iron_golem', -4.5, -2.5, null]
+            ['villager_soldier', 0.5, -7.5, null],
+            ['villager_soldier', -7.5, -2.5, null],
+            ['iron_golem', 0.5, 5.5, null],
+            ['iron_golem', -5.5, -4.5, null]
           ];
-          for (const [mType, ox, oz, prof] of spawns) {
-            this._pendingVillageSpawns.push({ mType, sx: v.x + ox, sz: v.z + oz, baseY: v.y, prof });
+          const needed = Math.max(0, spawns.length - liveVil);
+          for (let si = 0; si < needed; si++) {
+            const [mType, ox, oz, prof] = spawns[si];
+            this._pendingVillageSpawns.push({ mType, sx: v.x + ox, sz: v.z + oz, baseY: v.y, prof, settlement: v });
           }
         }
       }
     }
-    // 0b. Mega-Structure 200+ Villager Crowds & Interactive Plaza Villagers!
+
+    // 0b. Guaranteed Full-Physics Mega Castle & Great Pyramid Populations (waits for loaded center chunks, never falls into void!)
     if (this.world.megaStructures && this.world.megaStructures.size > 0) {
       for (const ms of this.world.megaStructures.values()) {
         const d = Math.hypot(player.pos.x - ms.x, player.pos.z - ms.z);
-        if (!ms.discovered && d < ms.radius + 16) {
+        if (!ms.discovered && d < ms.radius + 18) {
           ms.discovered = true;
           if (this.onDiscoverMega) this.onDiscoverMega(ms);
         }
-        if (!ms.crowdSpawned && d < 105) {
+        if (d > 160 && ms.crowdSpawned) {
+          ms.crowdSpawned = false;
+        }
+        // Only spawn once player is within loaded chunk radius (< 82m) AND center chunk is actually loaded!
+        if (!ms.crowdSpawned && d < 82 && isChunkLoadedAt(ms.x, ms.z)) {
+          let liveMega = 0;
+          for (let mi = 0; mi < this.mobs.length; mi++) {
+            const mm = this.mobs[mi];
+            if ((mm.def.villager || mm.def.golem) && Math.hypot(mm.pos.x - ms.x, mm.pos.z - ms.z) < (ms.radius + 12)) liveMega++;
+          }
           ms.crowdSpawned = true;
-          this._spawnMegaCrowd(ms);
+          if (liveMega < 16) {
+            this._spawnMegaCrowd(ms, liveMega);
+          }
         }
       }
       this._updateMegaCrowds(dt, player);
     }
 
     if (this._pendingVillageSpawns.length > 0) {
-      for (let k = 0; k < 2 && this._pendingVillageSpawns.length > 0; k++) {
+      let spawnedThisFrame = 0;
+      let checked = 0;
+      while (spawnedThisFrame < 3 && checked < this._pendingVillageSpawns.length && checked < 12) {
         const sp = this._pendingVillageSpawns.shift();
-        const yPos = sp.exactY ? sp.baseY : Math.max(sp.baseY, this.world.getSurfaceY(sp.sx, sp.sz));
-        this.spawnMob(sp.mType, sp.sx, yPos, sp.sz, sp.prof);
+        checked++;
+        if (!isChunkLoadedAt(sp.sx, sp.sz)) {
+          // Chunk still streaming in -> keep queued briefly if player is still nearby!
+          if (Math.hypot(player.pos.x - sp.sx, player.pos.z - sp.sz) < 110) {
+            this._pendingVillageSpawns.push(sp);
+          }
+          continue;
+        }
+        let spawnX = sp.sx;
+        let spawnZ = sp.sz;
+        let yPos = sp.exactY ? sp.baseY : this.world.getSurfaceY(spawnX, spawnZ);
+        // Find a guaranteed safe non-solid, non-water/lava spot so villagers NEVER suffocate in walls or fountains!
+        const isSafeAt = (tx, ty, tz) => {
+          const bF = this.world.getBlock(tx, ty, tz);
+          const bH = this.world.getBlock(tx, ty + 1, tz);
+          const bG = this.world.getBlock(tx, ty - 1, tz);
+          return !isBlockSolid(bF) && !isBlockLiquid(bF) && !isBlockSolid(bH) && isBlockSolid(bG);
+        };
+        if (!isSafeAt(spawnX, yPos, spawnZ)) {
+          for (let tries = 0; tries < 10; tries++) {
+            const ang = tries * 0.63;
+            const rad = 1.5 + (tries % 4) * 1.4;
+            const tx = sp.sx + Math.cos(ang) * rad;
+            const tz = sp.sz + Math.sin(ang) * rad;
+            if (!isChunkLoadedAt(tx, tz)) continue;
+            const ty = sp.exactY ? sp.baseY : this.world.getSurfaceY(tx, tz);
+            if (isSafeAt(tx, ty, tz)) {
+              spawnX = tx; spawnZ = tz; yPos = ty;
+              break;
+            }
+          }
+        }
+        this.spawnMob(sp.mType, spawnX, yPos, spawnZ, sp.prof);
+        spawnedThisFrame++;
       }
     }
 
-    // 1A. Dynamic Biome-Aware Passive Wildlife Herd Spawning (capped independently from Hostiles!)
+    // 1A. Dynamic Biome-Aware Passive Wildlife Herd Spawning (zero-GC single-pass counters!)
     const isNight = sky.isNight();
     let passiveCount = 0;
     let hostileCount = 0;
+    let birdCount = 0;
+    let waterMobCount = 0;
     for (let i = 0; i < this.mobs.length; i++) {
-      if (this.mobs[i].def.hostile) hostileCount++;
-      else passiveCount++;
+      const mm = this.mobs[i];
+      if (mm.def.hostile) hostileCount++;
+      else {
+        if (!mm.def.villager && !mm.def.golem) passiveCount++;
+        if (mm.type === 'bird') birdCount++;
+        else if (mm.type === 'fish' || mm.type === 'duck' || mm.type === 'frog') waterMobCount++;
+      }
     }
 
-    const passiveCap = Math.round(52 * moreMobsMul);
-    const totalPassiveCap = passiveCap + hostileCount;
+    const passiveCap = Math.round(44 * moreMobsMul);
+    const totalPassiveCap = this.mobs.length + Math.max(0, passiveCap - passiveCount);
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = (mods && mods.isEnabled('more_mobs')) ? 1.1 : 1.75;
+      this.spawnTimer = (mods && mods.isEnabled('more_mobs')) ? 1.2 : 1.9;
       if (passiveCount < passiveCap) {
-        const birdCount = this.mobs.filter((m) => m.type === 'bird').length;
-
-        if (!isNight && birdCount < 10 && Math.random() < 0.22) {
+        if (!isNight && birdCount < 8 && Math.random() < 0.22) {
           const ang = Math.random() * Math.PI * 2;
           const dist = 16 + Math.random() * 24;
           const bx = player.pos.x + Math.cos(ang) * dist;
@@ -2142,8 +2225,7 @@ export class EntityManager {
           const biome = this.world.getBiomeAt(sx, sz);
 
           if (ground === BLOCK.WATER) {
-            const waterMobs = this.mobs.filter((m) => m.type === 'fish' || m.type === 'duck' || m.type === 'frog').length;
-            if (waterMobs < 16) {
+            if (waterMobCount < 14) {
               const wType = biome === 'Swamp' ? (Math.random() < 0.55 ? 'frog' : 'duck') : (Math.random() < 0.65 ? 'fish' : 'duck');
               this.spawnHerd(wType, sx, sz, 3 + Math.floor(Math.random() * 3), biome, totalPassiveCap);
             }
@@ -2203,9 +2285,49 @@ export class EntityManager {
       }
     }
 
-    // 2. Update All Mobs & Wildlife (with full 3D AABB collision!)
+    // 2. Update All Mobs & Wildlife (with full 3D AABB collision + Villager Night Doors/Sleeping + Distance Throttling!)
     const nowSec = performance.now() * 0.001;
+    this._mobTickFrame = (this._mobTickFrame || 0) + 1;
     let anyMobBurning = false;
+    const isSleepNight = sky.time < 0.25 || sky.time > 0.78; // Exact same night/morning wake boundary as Player bed!
+
+    // Helper: automatically close doors behind villagers/soldiers after they walk through!
+    const tickPassedDoors = (mob, stepDt) => {
+      if (!mob._passedDoors || mob._passedDoors.length === 0) return;
+      for (let di = mob._passedDoors.length - 1; di >= 0; di--) {
+        const pd = mob._passedDoors[di];
+        pd.timer -= stepDt;
+        const farEnough = Math.hypot(mob.pos.x - (pd.x + 0.5), mob.pos.z - (pd.z + 0.5)) > 1.35;
+        if (pd.timer <= 0 && (farEnough || pd.timer < -1.5)) {
+          if (this.world.isDoorOpenAt && this.world.isDoorOpenAt(pd.x, pd.y, pd.z)) {
+            this.world.toggleDoor(pd.x, pd.y, pd.z);
+          }
+          mob._passedDoors.splice(di, 1);
+        }
+      }
+    };
+
+    // Helper: villagers & soldiers automatically open closed wooden doors in their path!
+    const tryOpenDoorAhead = (mob, dirX, dirZ) => {
+      const mag = Math.hypot(dirX, dirZ);
+      if (mag < 0.05) return;
+      const nx = dirX / mag, nz = dirZ / mag;
+      for (const probe of [0.68, 1.25]) {
+        const bx = Math.floor(mob.pos.x + nx * probe);
+        const by = Math.floor(mob.pos.y + 0.3);
+        const bz = Math.floor(mob.pos.z + nz * probe);
+        const bid = this.world.getBlock(bx, by, bz);
+        if (isDoorBlock(bid) && !this.world.isDoorOpenAt(bx, by, bz)) {
+          const baseY = isDoorTop(bid) ? by - 1 : by;
+          this.world.toggleDoor(bx, baseY, bz);
+          if (!mob._passedDoors) mob._passedDoors = [];
+          mob._passedDoors.push({ x: bx, y: baseY, z: bz, timer: 1.25 });
+          return;
+        }
+      }
+    };
+
+    const frameDt = dt;
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
       if (difficulty === 'peaceful' && m.def.hostile) {
@@ -2214,11 +2336,21 @@ export class EntityManager {
       }
       const distToPlayer = m.pos.distanceTo(player.pos);
 
-      const despawnDist = (m.def.villager || m.def.golem) ? 115 : 74;
+      const despawnDist = (m.def.villager || m.def.golem) ? 165 : 78;
       if (distToPlayer > despawnDist || m.pos.y < -5) {
         this.removeMob(m);
         continue;
       }
+
+      // Performance: throttle distant calm mobs (> 42m) to half update rate!
+      if (distToPlayer > 42 && !m.def.hostile && !m.hurtFlash && ((i + this._mobTickFrame) & 1) === 1) {
+        m._skipDt = (m._skipDt || 0) + frameDt;
+        continue;
+      }
+      const dt = Math.min(0.08, frameDt + (m._skipDt || 0));
+      m._skipDt = 0;
+
+      if (m.def.villager) tickPassedDoors(m, dt);
 
       if (m.hurtCd > 0) m.hurtCd = Math.max(0, m.hurtCd - dt);
       if (m.turnCd > 0) m.turnCd = Math.max(0, m.turnCd - dt);
@@ -2609,27 +2741,101 @@ export class EntityManager {
           moveX = Math.sin(m.yaw) * m.def.speed * 2.35;
           moveZ = Math.cos(m.yaw) * m.def.speed * 2.35;
         } else {
-          if (m.aiTimer <= 0) {
-            m.aiTimer = 2.4 + Math.random() * 4.2;
-            m.moving = Math.random() > 0.35;
-            if ((m.def.villager || m.def.golem) && m.pos.distanceTo(m.homePos) > 22) {
-              m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z) + (Math.random() - 0.5) * 0.5;
-              m.moving = true;
-            } else if (m.herdHome && !m.def.hostile && m.pos.distanceTo(m.herdHome) > 13) {
-              // Steer gently back toward herd only when choosing a new waypoint (never per-frame!)
-              m.wanderDir = Math.atan2(m.herdHome.x - m.pos.x, m.herdHome.z - m.pos.z) + (Math.random() - 0.5) * 0.9;
-              m.moving = true;
-            } else {
-              m.wanderDir = Math.random() * Math.PI * 2;
-            }
+          // Authentic Minecraft Villager Night Routine: Seek Bed -> Open/Close House Door -> Sleep Until Morning!
+          const isCivilianVillager = m.def.villager && !m.def.guard;
+          if (isCivilianVillager && !isSleepNight && m.sleeping) {
+            // Wake up at exact morning time (06:00) just like the player!
+            m.sleeping = false;
+            m.sleepBed = null;
+            m.mesh.rotation.x = 0;
+            m.aiTimer = 0.3;
+            // Head back outside through the door!
+            m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z) + (Math.random() - 0.5) * 0.8;
+            m.moving = true;
           }
-          if (m.moving) {
-            m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 6));
-            moveX = Math.sin(m.yaw) * m.def.speed * 0.65;
-            moveZ = Math.cos(m.yaw) * m.def.speed * 0.65;
-          } else if (m.def.villager && distToPlayer < 5.5) {
-            const lookYaw = Math.atan2(player.pos.x - m.pos.x, player.pos.z - m.pos.z);
-            m.yaw = lerpAngle(m.yaw, lookYaw, Math.min(1, dt * 6));
+
+          if (isCivilianVillager && isSleepNight && m.fleeTimer <= 0) {
+            if (m.sleeping && m.sleepBed) {
+              // Verify bed still exists!
+              if (!isBedBlock(this.world.getBlock(m.sleepBed.x, m.sleepBed.y, m.sleepBed.z))) {
+                m.sleeping = false;
+                m.sleepBed = null;
+                m.mesh.rotation.x = 0;
+              } else {
+                // Stay peacefully lying down on the bed mattress until morning!
+                m.pos.set(m.sleepBed.x + 0.5, m.sleepBed.y + 0.56, m.sleepBed.z + 0.5);
+                m.vel.set(0, 0, 0);
+                m.mesh.position.set(m.pos.x, m.pos.y, m.pos.z);
+                m.mesh.rotation.y = m.sleepBed.yaw || 0;
+                m.mesh.rotation.x = -Math.PI * 0.5;
+                if (m.headGroup) {
+                  m.headGroup.rotation.x = 0;
+                  m.headGroup.rotation.y = 0;
+                }
+                continue;
+              }
+            }
+            // Scan nearby houses/cottages/guildhouses for an unclaimed bed!
+            m._bedScanTimer = (m._bedScanTimer || 0) - dt;
+            if (!m.sleepBed && m._bedScanTimer <= 0) {
+              m._bedScanTimer = 2.2 + Math.random() * 1.5;
+              m.sleepBed = this._findAvailableBedForVillager(m);
+            }
+            if (m.sleepBed) {
+              const bdx = (m.sleepBed.x + 0.5) - m.pos.x;
+              const bdz = (m.sleepBed.z + 0.5) - m.pos.z;
+              const bdy = Math.abs(m.sleepBed.y - m.pos.y);
+              const bDist = Math.hypot(bdx, bdz);
+              if (bDist < 1.55 && bdy < 2.2) {
+                m.sleeping = true;
+                m.vel.set(0, 0, 0);
+                m.pos.set(m.sleepBed.x + 0.5, m.sleepBed.y + 0.56, m.sleepBed.z + 0.5);
+                m.mesh.position.set(m.pos.x, m.pos.y, m.pos.z);
+                m.mesh.rotation.y = m.sleepBed.yaw || 0;
+                m.mesh.rotation.x = -Math.PI * 0.5;
+                continue;
+              } else {
+                m.wanderDir = Math.atan2(bdx, bdz);
+                m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 9));
+                moveX = Math.sin(m.yaw) * m.def.speed * 1.05;
+                moveZ = Math.cos(m.yaw) * m.def.speed * 1.05;
+                tryOpenDoorAhead(m, moveX, moveZ);
+              }
+            } else {
+              // No bed in range yet -> walk toward village center/houses while opening any doors
+              if (m.aiTimer <= 0) {
+                m.aiTimer = 2.0 + Math.random() * 2.5;
+                m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z) + (Math.random() - 0.5) * 1.6;
+                m.moving = true;
+              }
+              m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 7));
+              moveX = Math.sin(m.yaw) * m.def.speed * 0.85;
+              moveZ = Math.cos(m.yaw) * m.def.speed * 0.85;
+              tryOpenDoorAhead(m, moveX, moveZ);
+            }
+          } else {
+            if (m.aiTimer <= 0) {
+              m.aiTimer = 2.4 + Math.random() * 4.2;
+              m.moving = Math.random() > 0.35;
+              if ((m.def.villager || m.def.golem) && m.pos.distanceTo(m.homePos) > 22) {
+                m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z) + (Math.random() - 0.5) * 0.5;
+                m.moving = true;
+              } else if (m.herdHome && !m.def.hostile && m.pos.distanceTo(m.herdHome) > 13) {
+                m.wanderDir = Math.atan2(m.herdHome.x - m.pos.x, m.herdHome.z - m.pos.z) + (Math.random() - 0.5) * 0.9;
+                m.moving = true;
+              } else {
+                m.wanderDir = Math.random() * Math.PI * 2;
+              }
+            }
+            if (m.moving) {
+              m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 6));
+              moveX = Math.sin(m.yaw) * m.def.speed * 0.65;
+              moveZ = Math.cos(m.yaw) * m.def.speed * 0.65;
+              if (m.def.villager) tryOpenDoorAhead(m, moveX, moveZ);
+            } else if (m.def.villager && distToPlayer < 5.5) {
+              const lookYaw = Math.atan2(player.pos.x - m.pos.x, player.pos.z - m.pos.z);
+              m.yaw = lerpAngle(m.yaw, lookYaw, Math.min(1, dt * 6));
+            }
           }
         }
       }
@@ -2987,13 +3193,58 @@ export class EntityManager {
     }
   }
 
-  _spawnMegaCrowd(ms) {
+  _findAvailableBedForVillager(mob) {
+    const cx = Math.floor(mob.pos.x);
+    const cy = Math.floor(mob.pos.y);
+    const cz = Math.floor(mob.pos.z);
+    const r = 20;
+    let best = null;
+    let bestD2 = Infinity;
+
+    // Collect beds already claimed by other villagers
+    const claimed = new Set();
+    for (let i = 0; i < this.mobs.length; i++) {
+      const o = this.mobs[i];
+      if (o !== mob && o.sleepBed) {
+        claimed.add(`${o.sleepBed.x},${o.sleepBed.y},${o.sleepBed.z}`);
+      }
+    }
+
+    for (let dy = -3; dy <= 4; dy++) {
+      const y = cy + dy;
+      if (y < 2 || y >= 500) continue;
+      for (let dz = -r; dz <= r; dz++) {
+        const z = cz + dz;
+        for (let dx = -r; dx <= r; dx++) {
+          const x = cx + dx;
+          const bid = this.world.getBlock(x, y, z);
+          if (!isBedBlock(bid)) continue;
+          const info = getBedInfo(bid);
+          // Prefer foot/head canonical tile so 2 villagers don't share the same 2-block bed!
+          const bx = (info && info.isHead) ? (x + info.dx) : x;
+          const bz = (info && info.isHead) ? (z + info.dz) : z;
+          const k = `${bx},${y},${bz}`;
+          if (claimed.has(k)) continue;
+          const d2 = (bx - mob.pos.x) ** 2 + (bz - mob.pos.z) ** 2 + dy * dy * 4;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            const yaw = info
+              ? (info.dir === 'N' ? 0 : (info.dir === 'S' ? Math.PI : (info.dir === 'E' ? Math.PI * 0.5 : -Math.PI * 0.5)))
+              : 0;
+            best = { x: bx, y, z: bz, yaw };
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  _spawnMegaCrowd(ms, existingCount = 0) {
     // Spawn ALL REAL full-physics Villagers, Villager Soldiers & Iron Golems inside Castles & Pyramids!
-    // Every single villager has full gravity, AABB collision, HP, damage, red hurt flash, trading & combat AI!
     const innerR = ms.innerRadius || 20;
-    const villagerTotal = 26;
-    const soldierTotal = 6;
-    const golemTotal = 3;
+    const villagerTotal = Math.max(0, 24 - Math.floor(existingCount * 0.7));
+    const soldierTotal = Math.max(0, 6 - Math.floor(existingCount * 0.2));
+    const golemTotal = Math.max(0, 3 - Math.floor(existingCount * 0.1));
 
     const pickSafeSpot = (idx, minRad = 4.0) => {
       for (let tries = 0; tries < 28; tries++) {
@@ -3016,7 +3267,7 @@ export class EntityManager {
         const bFoot = this.world.getBlock(tx, ms.y, tz);
         const bHead = this.world.getBlock(tx, ms.y + 1, tz);
         const bFloor = this.world.getBlock(tx, ms.y - 1, tz);
-        if (!isBlockSolid(bFoot) && bFoot !== BLOCK.WATER && !isBlockSolid(bHead) && isBlockSolid(bFloor)) {
+        if (!isBlockSolid(bFoot) && bFoot !== BLOCK.WATER && bFoot !== BLOCK.LAVA && !isBlockSolid(bHead) && isBlockSolid(bFloor)) {
           return { x: tx, z: tz };
         }
       }

@@ -220,6 +220,7 @@ export class PostFXPipeline {
         uSunsetFactor: { value: 0.0 },
         uDayFactor: { value: 1.0 },
         uUnderwater: { value: 0.0 },
+        uInLava: { value: 0.0 },
         uTime: { value: 0.0 }
       },
       depthTest: false,
@@ -243,6 +244,7 @@ export class PostFXPipeline {
         uniform float uSunsetFactor;
         uniform float uDayFactor;
         uniform float uUnderwater;
+        uniform float uInLava;
         uniform float uTime;
         varying vec2 vUv;
 
@@ -364,12 +366,21 @@ export class PostFXPipeline {
           vec3 bloomCol = bloomTight * 0.55 + bloomWide * 0.45;
           float rawDepth = uHasDepth > 0.5 ? texture2D(tDepth, vUv).r : 1.0;
 
-          if (uHasDepth > 0.5 && uContactShadowStrength > 0.01 && uDayFactor > 0.06 && uUnderwater < 0.5) {
+          if (uHasDepth > 0.5 && uContactShadowStrength > 0.01 && uDayFactor > 0.06 && uUnderwater < 0.5 && uInLava < 0.5) {
             float contactOcc = computeContactShadow(vUv, rawDepth);
             sceneCol *= 1.0 - contactOcc * uContactShadowStrength * uDayFactor;
           }
 
-          if (uUnderwater > 0.5) {
+          // Full Glowing Molten Red Vision when Swimming Submerged Inside Lava!
+          if (uInLava > 0.5) {
+            float lavaDist = uHasDepth > 0.5
+              ? (rawDepth >= 0.9998 ? 8.0 : max(0.0, -reconstructViewPos(vUv, rawDepth).z))
+              : 3.0;
+            float swirl = 0.92 + 0.08 * sin(vUv.x * 12.0 + uTime * 2.5) * cos(vUv.y * 10.0 - uTime * 2.0);
+            vec3 lavaFogCol = vec3(1.45, 0.22, 0.03) * swirl;
+            float lavaFog = 1.0 - exp(-lavaDist * 1.65);
+            sceneCol = mix(sceneCol * vec3(1.25, 0.32, 0.08), lavaFogCol, clamp(0.58 + lavaFog * 0.42, 0.58, 0.98));
+          } else if (uUnderwater > 0.5) {
             if (uHasDepth > 0.5) {
               float dist = rawDepth >= 0.9998 ? 48.0 : max(0.0, -reconstructViewPos(vUv, rawDepth).z);
               vec3 absorb = exp(-dist * vec3(0.085, 0.032, 0.020));
@@ -496,7 +507,7 @@ export class PostFXPipeline {
     this.compositeMat.uniforms.uSharpenStrength.value = q === 'ultra' ? 0.18 : (q === 'high' ? 0.12 : 0.0);
   }
 
-  render(scene, camera, sky, timeSec, underwater = false, world = null) {
+  render(scene, camera, sky, timeSec, underwater = false, world = null, inLava = false) {
     if (!this.enabled || !this.sceneRT) {
       camera.layers.enableAll();
       if (world && world.setWaterSplitPass) world.setWaterSplitPass(false);
@@ -515,7 +526,9 @@ export class PostFXPipeline {
     const prevTM = this.renderer.toneMapping;
     this.renderer.toneMapping = THREE.NoToneMapping;
 
-    const useSplitWater = !!(this.opaqueRT && this.copyColorDepthMat && world && world.syncWaterPass);
+    // Performance: skip extra full-screen opaque copy + water pass when NO water chunks exist in loaded world!
+    const hasWaterInWorld = !world || world._waterChunkCount === undefined || world._waterChunkCount > 0;
+    const useSplitWater = !!(hasWaterInWorld && this.opaqueRT && this.copyColorDepthMat && world && world.syncWaterPass);
     if (useSplitWater) {
       // Pass 1A: Layer 0 Opaque + Cutout + Entities + Sky -> opaqueRT
       camera.layers.set(0);
@@ -615,6 +628,7 @@ export class PostFXPipeline {
     this.compositeMat.uniforms.uSunsetFactor.value = sunsetF;
     this.compositeMat.uniforms.uDayFactor.value = dayF;
     this.compositeMat.uniforms.uUnderwater.value = underwater ? 1.0 : 0.0;
+    this.compositeMat.uniforms.uInLava.value = inLava ? 1.0 : 0.0;
     this.compositeMat.uniforms.uExposure.value = this.quality === 'ultra' ? 0.98 : 0.96;
     this.compositeMat.uniforms.uTime.value = timeSec;
 

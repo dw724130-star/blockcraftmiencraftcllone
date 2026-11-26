@@ -211,10 +211,9 @@ class BlockCraftGame {
     document.body.classList.toggle('mc-theme', this.settings.minecraftUI !== false);
     document.body.classList.toggle('large-ui', this.settings.largeUI !== false);
 
-    // Camera FOV, near & far planes — supports up to 1024-chunk Distant Horizons LOD (16,384 blocks!)
-    // Slightly raising near plane above 160/512 chunks preserves crisp 24-bit Z-buffer precision out to 16.4 km!
+    // Camera FOV, near & far planes — tight 0.055m near plane guarantees ZERO block X-ray clipping when standing next to walls!
     this.camera.fov = this.settings.fov;
-    this.camera.near = this.settings.renderDistance > 512 ? 0.24 : (this.settings.renderDistance > 160 ? 0.16 : 0.1);
+    this.camera.near = this.settings.renderDistance > 512 ? 0.075 : 0.055;
     this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 2000);
     this.camera.updateProjectionMatrix();
 
@@ -1681,6 +1680,7 @@ class BlockCraftGame {
 
       this.player.update(dt, input, this.mods, gameRules);
       this.ui.setUnderwater(this.player.headInWater);
+      if (this.ui.setInLava) this.ui.setInLava(this.player.headInLava);
 
       // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
       const eye = this.player.getEyePosition(this._eyeVec);
@@ -1789,7 +1789,7 @@ class BlockCraftGame {
       this.world.updateLeafDecay(dt, this.player.pos);
       this.world.updateFluids(dt);
       this.world.updateCrops(dt, !this.sky.isNight(), gameRules.farmSpeed);
-      this.world.updateFire(dt, this.sky.weather === 'rain');
+      this.world.updateFire(dt, this.sky.weather === 'rain', this.player.pos);
 
       // Spawn rising hot orange embers & soft smoke wisps from nearby active fires!
       if (this.effects && this.world.activeFires.size > 0) {
@@ -1927,7 +1927,7 @@ class BlockCraftGame {
       }
 
       if (this.postfx && this.postfx.enabled) {
-        this.postfx.render(this.scene, this.camera, this.sky, now * 0.001, this.player.headInWater, this.world);
+        this.postfx.render(this.scene, this.camera, this.sky, now * 0.001, this.player.headInWater, this.world, this.player.headInLava);
       } else {
         this.camera.layers.enableAll();
         if (this.world.setWaterSplitPass) this.world.setWaterSplitPass(false);
