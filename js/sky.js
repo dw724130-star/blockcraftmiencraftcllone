@@ -30,30 +30,75 @@ export class SkySystem {
     this.biomeEffects = true;
     this.cloudTime = 0;
 
-    // 1. Lighting Rig (Warm Sun + Cool Sky Hemisphere + Subtle Bounce Fill)
+    // 1. Lighting Rig (2-Cascade Texel-Snapped Sun/Moon Shadows + Cool Sky Hemisphere + Bounce Fill)
     this.hemiLight = new THREE.HemisphereLight(0xcbe8ff, 0x5c694b, 0.92);
     this.scene.add(this.hemiLight);
 
+    // Cascade 0: Near Hero Shadow Map (razor-sharp 2.5cm texels around player, trees, houses & mobs!)
     this.sunLight = new THREE.DirectionalLight(0xfff4dc, 1.35);
     this.sunLight.position.set(55, 85, 35);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(1024, 1024);
-    this.sunLight.shadow.camera.near = 10;
-    this.sunLight.shadow.camera.far = 200;
-    const d = 46;
-    this.sunLight.shadow.camera.left = -d;
-    this.sunLight.shadow.camera.right = d;
-    this.sunLight.shadow.camera.top = d;
-    this.sunLight.shadow.camera.bottom = -d;
-    this.sunLight.shadow.bias = -0.0012;
-    this.sunLight.shadow.normalBias = 0.075;
+    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.camera.near = 6;
+    this.sunLight.shadow.camera.far = 210;
+    this._nearExtent = 26;
+    this.sunLight.shadow.camera.left = -this._nearExtent;
+    this.sunLight.shadow.camera.right = this._nearExtent;
+    this.sunLight.shadow.camera.top = this._nearExtent;
+    this.sunLight.shadow.camera.bottom = -this._nearExtent;
+    this.sunLight.shadow.bias = -0.0005;
+    this.sunLight.shadow.normalBias = 0.045;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+
+    // Cascade 1: Far Landscape Shadow Map (±92m covering entire villages, castles & mountain slopes!)
+    // Tiny 0.0001 intensity keeps Three.js WebGLShadowMap updating it natively without double-lighting mobs!
+    this.sunLightFar = new THREE.DirectionalLight(0xffffff, 0.0001);
+    this.sunLightFar.position.set(55, 85, 35);
+    this.sunLightFar.castShadow = true;
+    this.sunLightFar.shadow.mapSize.set(1024, 1024);
+    this.sunLightFar.shadow.camera.near = 6;
+    this.sunLightFar.shadow.camera.far = 280;
+    this._farExtent = 92;
+    this.sunLightFar.shadow.camera.left = -this._farExtent;
+    this.sunLightFar.shadow.camera.right = this._farExtent;
+    this.sunLightFar.shadow.camera.top = this._farExtent;
+    this.sunLightFar.shadow.camera.bottom = -this._farExtent;
+    this.sunLightFar.shadow.bias = -0.0008;
+    this.sunLightFar.shadow.normalBias = 0.08;
+    this.scene.add(this.sunLightFar);
+    this.scene.add(this.sunLightFar.target);
 
     // Subtle cool fill light from opposite direction so shadows have rich atmospheric tint
     this.fillLight = new THREE.DirectionalLight(0x88b4ff, 0.24);
     this.fillLight.position.set(-40, 30, -30);
     this.scene.add(this.fillLight);
+
+    // Scratch vectors for texel-locked light-space shadow snapping (ZERO shadow swimming!)
+    this._shadowDir = new THREE.Vector3(0.6, 0.5, -0.25).normalize();
+    this._sUp = new THREE.Vector3(0, 1, 0);
+    this._sRight = new THREE.Vector3();
+    this._sOrthoUp = new THREE.Vector3();
+    this._sTarget = new THREE.Vector3();
+    this._shadowParams = {
+      nearMap: null,
+      farMap: null,
+      nearMatrix: this.sunLight.shadow.matrix,
+      farMatrix: this.sunLightFar.shadow.matrix,
+      nearTexelSize: 1 / 2048,
+      farTexelSize: 1 / 1024,
+      useShadows: true,
+      useFarCascade: true,
+      shadowSoftness: 1.45,
+      shadowDir: this._shadowDir,
+      sunLightColor: this.sunLight.color,
+      sunLightIntensity: 1.35,
+      hemiSkyColor: this.hemiLight.color,
+      hemiGroundColor: this.hemiLight.groundColor,
+      hemiIntensity: 0.92,
+      fillColor: this.fillLight.color,
+      fillIntensity: 0.24
+    };
 
     // 2. Sky Group — strictly centered on player/camera every frame so it never clips
     this.skyGroup = new THREE.Group();
@@ -74,11 +119,13 @@ export class SkySystem {
       uDayFactor: { value: 1.0 },
       uSunsetFactor: { value: 0.0 },
       uRainFactor: { value: 0.0 },
-      uCloudCover: { value: 1.0 }
+      uWetness: { value: 0.0 },
+      uCloudCover: { value: 1.0 },
+      uCloudSteps: { value: 4.0 }
     };
 
-    // Volumetric Atmospheric Sky Dome — GPU Early-Z Optimized (2800 radius for 128-chunk vistas!)
-    const domeGeo = new THREE.SphereGeometry(2800, 24, 18);
+    // Physically-Inspired Rayleigh + Mie Atmospheric Scattering & Ray-Marched Volumetric Cloud Sky Dome
+    const domeGeo = new THREE.SphereGeometry(2800, 28, 20);
     const domeMat = new THREE.ShaderMaterial({
       uniforms: this.skyUniforms,
       side: THREE.BackSide,
@@ -109,6 +156,7 @@ export class SkySystem {
         uniform float uSunsetFactor;
         uniform float uRainFactor;
         uniform float uCloudCover;
+        uniform float uCloudSteps;
         varying vec3 vDir;
 
         float hash21(vec2 p) {
@@ -129,13 +177,13 @@ export class SkySystem {
         }
 
         float fbmCloud(vec2 p) {
-          float v = 0.52 * noise2D(p);
-          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.03 + vec2(17.1, 31.7);
+          float v = 0.50 * noise2D(p);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(17.1, 31.7);
           v += 0.27 * noise2D(p);
-          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.04 + vec2(9.4, 21.3);
+          p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.03 + vec2(9.4, 21.3);
           v += 0.14 * noise2D(p);
           p = mat2(0.80, 0.60, -0.60, 0.80) * p * 2.05 + vec2(3.7, 11.9);
-          v += 0.07 * noise2D(p);
+          v += 0.09 * noise2D(p);
           return v;
         }
 
@@ -148,32 +196,45 @@ export class SkySystem {
           return v;
         }
 
+        // Henyey-Greenstein Mie forward-scattering phase function (true atmospheric aureole & cloud silver lining!)
+        float hgPhase(float cosTheta, float g) {
+          float g2 = g * g;
+          float denom = max(0.05, 1.0 + g2 - 2.0 * g * cosTheta);
+          return (1.0 - g2) / (4.0 * 3.14159 * pow(denom, 1.5));
+        }
+
         void main() {
           vec3 dir = normalize(vDir);
           vec3 sunDir = normalize(uSunDir);
           vec3 moonDir = normalize(uMoonDir);
           float h = clamp(dir.y, 0.0, 1.0);
-          float sunDot = max(0.0, dot(dir, sunDir));
+          float cosSun = dot(dir, sunDir);
+          float sunDot = max(0.0, cosSun);
           float moonDot = max(0.0, dot(dir, moonDir));
+          float clearAmt = 1.0 - uRainFactor * 0.82;
 
-          // 1. Multi-stop Atmospheric Rayleigh + Mie Scattering Sky Gradient
-          vec3 skyCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.32, h));
-          skyCol = mix(skyCol, uTopColor, smoothstep(0.20, 0.90, h));
+          // 1. Physically-Inspired Rayleigh Optical-Depth Sky Gradient + Mie Forward Scattering
+          float airMass = 1.0 / (h + 0.16);
+          float rayleighT = exp(-airMass * 0.42);
+          vec3 skyCol = mix(uHorizonColor, uMidColor, smoothstep(0.0, 0.34, h));
+          skyCol = mix(skyCol, uTopColor, clamp(rayleighT * 1.08, 0.0, 1.0));
 
-          // Rich Golden-Hour Mie horizon glow around sun (dramatic peach-amber-gold sunset & sunrise!)
-          float horizonBand = pow(1.0 - h, 3.0);
-          float sunSide = pow(sunDot, 2.0);
-          skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.34 + 0.66 * sunSide) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+          // Mie forward-scattering golden aureole & dramatic horizon glow at sunrise/sunset (Image 3!)
+          float sunVisible = smoothstep(-0.14, 0.06, sunDir.y) * clearAmt;
+          float mieWide = hgPhase(cosSun, 0.62) * (0.24 + 0.68 * uSunsetFactor);
+          float mieTight = hgPhase(cosSun, 0.88) * (0.09 + 0.24 * uSunsetFactor);
+          float horizonBand = pow(1.0 - h, 2.8);
+          skyCol = mix(skyCol, uSunsetColor, horizonBand * (0.34 + 0.66 * pow(sunDot, 1.8)) * uSunsetFactor * clearAmt);
+          skyCol += uSunColor * (mieWide * 0.72 + mieTight * 0.55) * (0.45 + 0.55 * horizonBand) * sunVisible;
 
-          // Dreamy rose-lavender twilight arc mid-sky at sunset/sunrise
-          float twilightArc = smoothstep(0.03, 0.28, h) * (1.0 - smoothstep(0.28, 0.72, h));
-          skyCol += vec3(0.28, 0.12, 0.25) * twilightArc * uSunsetFactor * (1.0 - uRainFactor * 0.8);
+          // Subtle Belt of Venus rose-violet twilight band opposite the setting/rising sun
+          float antiSun = clamp(-cosSun, 0.0, 1.0);
+          float twilightArc = smoothstep(0.02, 0.26, h) * (1.0 - smoothstep(0.26, 0.68, h));
+          skyCol += vec3(0.30, 0.13, 0.28) * twilightArc * (0.45 + 0.55 * antiSun) * uSunsetFactor * clearAmt;
 
-          // 2. Deep Sapphire Night Sky: Procedural Milky Way Galactic Nebula + Twinkling Multi-Color Stars!
-          float clearAmt = 1.0 - uRainFactor * 0.85;
+          // 2. Deep Sapphire Night Sky: Milky Way Galactic Nebula + Twinkling Multi-Color Stars
           float nightAmt = clamp(1.0 - uDayFactor * 1.85, 0.0, 1.0) * clearAmt;
           if (nightAmt > 0.01 && dir.y > 0.0) {
-            // Arching diagonal Milky Way nebula ribbon across the starry zenith
             float galCoord = dir.x * 0.62 + dir.z * 0.78 - dir.y * 0.35;
             float galBand = exp(-galCoord * galCoord * 11.0) * smoothstep(0.04, 0.35, dir.y);
             vec2 galUv = vec2(atan(dir.z, dir.x) * 2.2, dir.y * 4.5);
@@ -181,35 +242,27 @@ export class SkySystem {
             float neb2 = noise2D(galUv * 4.2 + vec2(3.1, 7.4));
             float dustLane = smoothstep(0.32, 0.68, neb1 * 0.72 + neb2 * 0.28);
             vec3 milkyCol = mix(vec3(0.09, 0.22, 0.56), vec3(0.26, 0.52, 0.95), dustLane);
-            skyCol += milkyCol * galBand * dustLane * 0.62 * nightAmt;
+            skyCol += milkyCol * galBand * dustLane * 0.64 * nightAmt;
 
-            // Crisp dense twinkling procedural starfield (warm gold, pure white & sapphire blue stars!)
-            vec2 starCell = floor(vec2(atan(dir.z, dir.x) * 62.0, asin(clamp(dir.y, 0.0, 1.0)) * 62.0));
+            vec2 starGrid = vec2(atan(dir.z, dir.x) * 64.0, asin(clamp(dir.y, 0.0, 1.0)) * 64.0);
+            vec2 starCell = floor(starGrid);
             float sRnd = hash21(starCell);
-            if (sRnd > 0.962) {
-              vec2 sFrac = fract(vec2(atan(dir.z, dir.x) * 62.0, asin(clamp(dir.y, 0.0, 1.0)) * 62.0)) - 0.5;
+            if (sRnd > 0.960) {
+              vec2 sFrac = fract(starGrid) - 0.5;
               float sDist = length(sFrac);
               float twinkle = 0.65 + 0.35 * sin(uTime * (2.5 + sRnd * 5.0) + sRnd * 90.0);
-              float sBright = smoothstep(0.24, 0.02, sDist) * (0.65 + (sRnd - 0.962) * 32.0) * twinkle;
+              float sBright = smoothstep(0.24, 0.02, sDist) * (0.65 + (sRnd - 0.960) * 32.0) * twinkle;
               vec3 sCol = sRnd > 0.988 ? vec3(1.1, 0.95, 0.78) : (sRnd > 0.975 ? vec3(0.75, 0.92, 1.25) : vec3(0.95, 0.98, 1.05));
               skyCol += sCol * sBright * 1.65 * smoothstep(0.04, 0.22, dir.y) * nightAmt;
             }
           }
 
-          // 3. Blazing HDR Sun Disc + Multi-Ring Golden Corona + Atmospheric Sunbeams!
-          float sunVisible = smoothstep(-0.12, 0.05, sunDir.y) * clearAmt;
-          float sunHaloWide = pow(sunDot, 5.5) * (0.36 + 0.72 * uSunsetFactor);
-          float sunHaloMid = pow(sunDot, 28.0) * (0.72 + 0.85 * uSunsetFactor);
+          // 3. Blazing HDR Sun Disc + Multi-Ring Golden Corona
           float sunHaloTight = pow(sunDot, 160.0) * 1.45;
-          float sunDisc = smoothstep(0.9980, 0.9993, sunDot) * 3.8;
-          skyCol += uSunColor * (sunHaloWide + sunHaloMid + sunHaloTight + sunDisc) * sunVisible;
+          float sunDisc = smoothstep(0.9982, 0.9994, sunDot) * 4.2;
+          skyCol += uSunColor * (sunHaloTight + sunDisc) * sunVisible;
 
-          // Subtle diagonal golden sunbeam rays fanning through sky near sun
-          float rayAngle = atan(dir.y - sunDir.y, dir.x - sunDir.x);
-          float rays = 0.5 + 0.5 * sin(rayAngle * 7.0 + uTime * 0.12) * cos(rayAngle * 4.0 - uTime * 0.08);
-          skyCol += uSunColor * pow(sunDot, 7.5) * rays * 0.36 * (0.50 + 0.75 * uSunsetFactor) * sunVisible;
-
-          // 4. Razor-Crisp Glowing CRESCENT MOON + Dreamy Sapphire-Cyan Lunar Halo (Image 4!)
+          // 4. Crisp Glowing Crescent Moon + Sapphire Lunar Halo
           float moonVisible = smoothstep(-0.08, 0.08, moonDir.y) * clearAmt * (1.0 - uDayFactor * 0.88);
           if (moonVisible > 0.005) {
             vec3 mUp = normalize(vec3(0.0, 1.0, 0.0) - moonDir * moonDir.y + vec3(0.0001, 0.001, 0.0));
@@ -218,63 +271,71 @@ export class SkySystem {
             float my = dot(dir - moonDir, mUp);
             float mR = length(vec2(mx, my));
             float outerDisc = smoothstep(0.045, 0.040, mR);
-            // Offset shadow disc carves an iconic luminous Crescent Moon!
             float cutR = length(vec2(mx - 0.017, my - 0.008));
             float shadowCut = smoothstep(0.036, 0.041, cutR);
             float crescent = outerDisc * shadowCut;
             float earthshine = outerDisc * (1.0 - shadowCut) * 0.14;
             float moonGlowTight = pow(moonDot, 48.0) * 0.78;
             float moonGlowWide = pow(moonDot, 8.0) * 0.34;
-            vec3 moonCol = vec3(0.76, 0.92, 1.15);
-            vec3 haloCol = vec3(0.28, 0.62, 1.15);
-            skyCol += moonCol * (crescent * 3.4 + earthshine) * moonVisible;
-            skyCol += haloCol * (moonGlowTight + moonGlowWide) * moonVisible;
+            skyCol += vec3(0.76, 0.92, 1.15) * (crescent * 3.4 + earthshine) * moonVisible;
+            skyCol += vec3(0.28, 0.62, 1.15) * (moonGlowTight + moonGlowWide) * moonVisible;
           }
 
-          // 5. Painterly Multi-Layer Volumetric Clouds (Warm Golden Sunlit Rims + Cool Lavender-Blue Undersides!)
-          if (dir.y > 0.008 && uCloudCover > 0.01) {
-            // High-altitude sweeping painterly cirrus wisps
-            vec2 cirrusUV = (dir.xz / (dir.y + 0.22)) * 0.52 + vec2(uTime * 0.0045, -uTime * 0.0022);
-            float cirrus = smoothstep(0.54, 0.86, fbmCloudFast(cirrusUV * vec2(1.9, 0.68)));
-            vec3 cirrusCol = mix(uCloudLitColor, uSunColor * 1.18, 0.32 + 0.58 * uSunsetFactor);
-            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.015, 0.24, dir.y) * 0.40 * (1.0 - uRainFactor * 0.65) * uCloudCover);
+          // 5. True Multi-Layer Ray-Marched Volumetric Cumulus + Painterly Cirrus Clouds (Image 3!)
+          if (dir.y > 0.006 && uCloudCover > 0.01) {
+            // High-altitude windswept cirrus streaks (catch sunrise/sunset gold first!)
+            vec2 cirrusUV = (dir.xz / (dir.y + 0.24)) * 0.48 + vec2(uTime * 0.0042, -uTime * 0.0018);
+            float cirrus = smoothstep(0.50, 0.84, fbmCloudFast(cirrusUV * vec2(2.1, 0.62)));
+            vec3 cirrusCol = mix(uCloudLitColor, uSunColor * 1.25, 0.35 + 0.60 * uSunsetFactor);
+            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.012, 0.22, dir.y) * 0.44 * (1.0 - uRainFactor * 0.6) * uCloudCover);
 
-            // Mid-altitude volumetric billowy cumulus layer with 2-step directional sun self-shadowing!
-            float projY = dir.y + 0.105;
-            vec2 cloudUV = (dir.xz / projY) * 0.38;
-            vec2 drift = vec2(uTime * 0.0075, uTime * 0.0028);
+            // Multi-slice 3D Volumetric Cumulus Slab with Beer-Powder Self-Shadowing & HG Silver Lining!
+            int steps = int(clamp(uCloudSteps, 1.0, 4.0));
+            vec2 drift = vec2(uTime * 0.0072, uTime * 0.0026);
+            vec2 lDirXZ = normalize((uDayFactor > 0.2 ? sunDir.xz : moonDir.xz) + vec2(0.0001));
+            float thresh = mix(0.41, 0.29, uRainFactor);
+            float hgCloud = hgPhase(cosSun, 0.65) * 0.85 + 0.22;
 
-            float rawDensity = fbmCloud(cloudUV * 1.12 + drift);
-            float billow = noise2D(cloudUV * 3.1 - drift * 0.55 + vec2(4.2, 9.1));
-            float density = rawDensity * 0.78 + billow * 0.22;
+            vec3 cloudAcc = vec3(0.0);
+            float transmittance = 1.0;
 
-            float thresh = mix(0.45, 0.33, uRainFactor);
-            float cloudAlpha = smoothstep(thresh, thresh + 0.22, density);
+            for (int i = 0; i < 4; i++) {
+              if (i >= steps) break;
+              float sliceFrac = (float(i) + 0.5) / float(steps);
+              float slabAlt = mix(0.32, 0.44, sliceFrac);
+              vec2 cUv = (dir.xz / (dir.y + 0.115)) * slabAlt;
+              // Vertical dome envelope: flat cloud base, billowy rounded tops!
+              float shapeEnv = 1.0 - abs(sliceFrac - 0.42) * 0.55;
+              float baseN = (i == 0 || i == 2) ? fbmCloud(cUv * 1.15 + drift + vec2(sliceFrac * 0.08, -sliceFrac * 0.05))
+                                               : fbmCloudFast(cUv * 1.15 + drift + vec2(sliceFrac * 0.08, -sliceFrac * 0.05));
+              float dSample = smoothstep(thresh, thresh + 0.24, baseN * shapeEnv);
+              if (dSample > 0.005) {
+                // Sun-direction optical thickness march for real 3D volumetric cloud self-shadowing
+                float sunOcc = fbmCloudFast((cUv + lDirXZ * 0.065) * 1.15 + drift);
+                float beer = exp(-max(0.0, sunOcc - thresh) * 3.8);
+                float powder = 1.0 - exp(-dSample * 2.4);
+                float litF = clamp(mix(0.28, 1.0, beer) * (0.65 + 0.45 * sliceFrac) + powder * 0.18, 0.0, 1.15);
 
-            float selfLight = 0.62;
-            float edgeGlow = 0.0;
-            if (cloudAlpha > 0.01) {
-              vec2 lDirXZ = normalize((uDayFactor > 0.2 ? sunDir.xz : moonDir.xz) + vec2(0.0001));
-              float dStep1 = fbmCloudFast((cloudUV + lDirXZ * 0.055) * 1.12 + drift);
-              float dStep2 = fbmCloudFast((cloudUV + lDirXZ * 0.13) * 1.12 + drift);
-              float occ = (dStep1 * 0.6 + dStep2 * 0.4);
-              selfLight = clamp((density - occ) * 4.2 + 0.54, 0.0, 1.0);
-              edgeGlow = (1.0 - cloudAlpha * 0.55) * smoothstep(0.0, 0.35, cloudAlpha);
+                vec3 sampleCol = mix(uCloudShadowColor, uCloudLitColor, clamp(litF, 0.0, 1.0));
+                // Dramatic golden-apricot silver lining around sun & cyan rim around crescent moon
+                float silver = hgCloud * (1.0 - dSample * 0.45) * sunVisible;
+                sampleCol += uSunColor * (0.48 + 0.92 * uSunsetFactor) * silver * 0.85;
+                sampleCol += vec3(0.45, 0.75, 1.18) * pow(moonDot, 6.0) * (1.0 - dSample * 0.4) * moonVisible * 0.75;
+
+                float stepAlpha = dSample * (0.58 / float(steps)) * 2.2;
+                cloudAcc += transmittance * sampleCol * stepAlpha;
+                transmittance *= (1.0 - clamp(stepAlpha, 0.0, 0.92));
+                if (transmittance < 0.04) break;
+              }
             }
 
-            // Dramatic warm golden-apricot silver lining around sun + cool silver-cyan moonlight rim at night!
-            float sunSilver = pow(sunDot, 5.5) * (0.45 + 0.75 * edgeGlow) * sunVisible;
-            float moonSilver = pow(moonDot, 7.0) * (0.35 + 0.65 * edgeGlow) * moonVisible;
-            vec3 cCol = mix(uCloudShadowColor, uCloudLitColor, selfLight);
-            cCol += uSunColor * (0.72 + 0.95 * uSunsetFactor) * sunSilver * 1.25;
-            cCol += vec3(0.45, 0.75, 1.18) * moonSilver * 0.85;
-
-            float horizonFade = smoothstep(0.008, 0.16, dir.y);
-            float finalAlpha = cloudAlpha * horizonFade * 0.95 * uCloudCover;
-            skyCol = mix(skyCol, cCol, finalAlpha);
+            float horizonFade = smoothstep(0.006, 0.15, dir.y);
+            float cloudWeight = (1.0 - transmittance) * horizonFade * uCloudCover;
+            // Atmospheric aerial perspective on distant horizon clouds so they melt naturally into sunrise/sunset!
+            vec3 finalCloud = mix(uHorizonColor, cloudAcc / max(1.0 - transmittance, 0.001), smoothstep(0.006, 0.18, dir.y));
+            skyCol = mix(skyCol, finalCloud, clamp(cloudWeight, 0.0, 0.96));
           }
 
-          // Smooth lower hemisphere reflection color (matches horizon for water/void)
           if (dir.y < 0.0) {
             vec3 groundFade = mix(uHorizonColor, uTopColor * 0.35, clamp(-dir.y * 2.2, 0.0, 1.0));
             skyCol = mix(skyCol, groundFade, smoothstep(0.0, -0.15, dir.y));
@@ -379,6 +440,7 @@ export class SkySystem {
       dayFactor: 1.0,
       sunsetFactor: 0.0,
       rainFactor: 0.0,
+      wetness: 0.0,
       cloudTime: 0.0
     };
   }
@@ -406,16 +468,85 @@ export class SkySystem {
     }
   }
 
-  setShaderMode(mode) {
-    this.shaderMode = mode;
-    this.sunLight.castShadow = mode === 'ultra';
-    this.skyUniforms.uCloudCover.value = mode === 'off' ? 0.55 : 1.0;
+  setShaderMode(mode, isTouch = false) {
+    const m = (mode === 'off') ? 'low' : (mode === 'enhanced' ? 'medium' : (mode || 'ultra'));
+    this.shaderMode = m;
+    const useShadows = m !== 'low';
+    const useFar = m === 'high' || m === 'ultra';
+    const nearSize = m === 'ultra' ? (isTouch ? 1536 : 2048) : 1024;
+    const nearExtent = m === 'medium' ? 38 : 26;
+
+    this.sunLight.castShadow = useShadows;
+    this.sunLightFar.castShadow = useFar;
+    this.sunLightFar.intensity = useFar ? 0.0001 : 0.0;
+
+    if (this.sunLight.shadow.mapSize.x !== nearSize) {
+      this.sunLight.shadow.mapSize.set(nearSize, nearSize);
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
+        this.sunLight.shadow.map = null;
+      }
+    }
+    if (this._nearExtent !== nearExtent) {
+      this._nearExtent = nearExtent;
+      this.sunLight.shadow.camera.left = -nearExtent;
+      this.sunLight.shadow.camera.right = nearExtent;
+      this.sunLight.shadow.camera.top = nearExtent;
+      this.sunLight.shadow.camera.bottom = -nearExtent;
+      this.sunLight.shadow.camera.updateProjectionMatrix();
+    }
+
+    this._shadowParams.useShadows = useShadows;
+    this._shadowParams.useFarCascade = useFar;
+    this._shadowParams.nearTexelSize = 1 / nearSize;
+    this._shadowParams.farTexelSize = 1 / 1024;
+    this._shadowParams.shadowSoftness = m === 'ultra' ? 1.55 : (m === 'high' ? 1.3 : 1.05);
+    this.skyUniforms.uCloudCover.value = m === 'low' ? 0.55 : 1.0;
+    this.skyUniforms.uCloudSteps.value = m === 'ultra' ? (isTouch ? 3.0 : 4.0) : (m === 'high' ? 3.0 : (m === 'medium' ? 2.0 : 1.0));
+  }
+
+  _positionShadowCascade(light, centerPos, dir, halfExtent, mapSize, lightDist) {
+    // Texel-locked light-space projection snapping eliminates shadow edge swimming completely!
+    const right = this._sRight;
+    const orthoUp = this._sOrthoUp;
+    right.crossVectors(this._sUp, dir);
+    if (right.lengthSq() < 1e-5) right.set(1, 0, 0);
+    else right.normalize();
+    orthoUp.crossVectors(dir, right).normalize();
+
+    const texelWorld = (halfExtent * 2) / mapSize;
+    const u = Math.round(centerPos.dot(right) / texelWorld) * texelWorld;
+    const v = Math.round(centerPos.dot(orthoUp) / texelWorld) * texelWorld;
+    const w = centerPos.dot(dir);
+
+    this._sTarget
+      .set(0, 0, 0)
+      .addScaledVector(right, u)
+      .addScaledVector(orthoUp, v)
+      .addScaledVector(dir, w);
+
+    light.target.position.copy(this._sTarget);
+    light.position.copy(this._sTarget).addScaledVector(dir, lightDist);
+    light.target.updateMatrixWorld();
+    light.updateMatrixWorld();
+  }
+
+  getShadowParams() {
+    this._shadowParams.nearMap = this.sunLight.shadow.map ? this.sunLight.shadow.map.texture : null;
+    this._shadowParams.farMap = this.sunLightFar.shadow.map ? this.sunLightFar.shadow.map.texture : null;
+    this._shadowParams.nearMatrix = this.sunLight.shadow.matrix;
+    this._shadowParams.farMatrix = this.sunLightFar.shadow.matrix;
+    this._shadowParams.sunLightIntensity = this.sunLight.intensity;
+    this._shadowParams.hemiIntensity = this.hemiLight.intensity;
+    this._shadowParams.fillIntensity = this.fillLight.intensity;
+    return this._shadowParams;
   }
 
   getShaderParams() {
     this._shaderParams.dayFactor = this.skyUniforms.uDayFactor.value;
     this._shaderParams.sunsetFactor = this.skyUniforms.uSunsetFactor.value;
     this._shaderParams.rainFactor = this.skyUniforms.uRainFactor.value;
+    this._shaderParams.wetness = this.skyUniforms.uWetness.value;
     this._shaderParams.cloudTime = this.cloudTime;
     return this._shaderParams;
   }
@@ -449,6 +580,9 @@ export class SkySystem {
     const rainTarget = isRain ? 1.0 : 0.0;
     const rainFactor = THREE.MathUtils.lerp(this.skyUniforms.uRainFactor.value, rainTarget, Math.min(1, dt * 1.8));
     this.skyUniforms.uRainFactor.value = rainFactor;
+    // Wetness rises smoothly during rain and slowly evaporates after rain clears (feeds Stage 5 PBR puddles!)
+    const wetRate = isRain ? 0.35 : 0.08;
+    this.skyUniforms.uWetness.value = THREE.MathUtils.lerp(this.skyUniforms.uWetness.value, rainTarget, Math.min(1, dt * wetRate));
     this.skyUniforms.uDayFactor.value = dayFactor;
     this.skyUniforms.uSunsetFactor.value = sunsetFactor;
 
@@ -507,23 +641,19 @@ export class SkySystem {
     this.fog.color.copy(horCol);
 
     const rainDim = 1.0 - rainFactor * 0.42;
-    const shaderBoost = this.shaderMode === 'ultra' ? 1.28 : (this.shaderMode === 'enhanced' ? 1.16 : 1.0);
-    this.sunLight.intensity = (0.16 + dayFactor * 1.12) * rainDim * shaderBoost;
-    this.sunLight.color.setHex(0x9ab8ff)
+    const shaderBoost = this.shaderMode === 'ultra' ? 1.32 : (this.shaderMode === 'high' ? 1.24 : (this.shaderMode === 'medium' ? 1.15 : 1.0));
+    this.sunLight.intensity = (0.16 + dayFactor * 1.18) * rainDim * shaderBoost;
+    this.sunLight.color.setHex(0x88aeff)
       .lerp(tmp.setHex(0xfff5e0), dayFactor)
-      .lerp(tmp.setHex(0xffa65c), clearSunset * 0.82);
+      .lerp(tmp.setHex(0xffa458), clearSunset * 0.86);
 
-    const snapX = Math.round(playerPos.x / 4) * 4;
-    const snapY = Math.round(playerPos.y / 4) * 4;
-    const snapZ = Math.round(playerPos.z / 4) * 4;
-    const lightDir = dayFactor > 0.08 ? this.skyUniforms.uSunDir.value : this.skyUniforms.uMoonDir.value;
-    this.sunLight.position.set(
-      snapX + lightDir.x * 80,
-      snapY + Math.max(26, lightDir.y * 80),
-      snapZ + lightDir.z * 80
-    );
-    this.sunLight.target.position.set(snapX, snapY, snapZ);
-    this.sunLight.target.updateMatrixWorld();
+    const rawLightDir = dayFactor > 0.08 ? this.skyUniforms.uSunDir.value : this.skyUniforms.uMoonDir.value;
+    // Keep shadow elevation >= 0.24 so golden-hour shadows are sweeping & dramatic without infinite horizon streaks!
+    this._shadowDir.set(rawLightDir.x, Math.max(0.24, rawLightDir.y), rawLightDir.z).normalize();
+    this._positionShadowCascade(this.sunLight, playerPos, this._shadowDir, this._nearExtent, this.sunLight.shadow.mapSize.x, 90);
+    if (this.sunLightFar.castShadow) {
+      this._positionShadowCascade(this.sunLightFar, playerPos, this._shadowDir, this._farExtent, this.sunLightFar.shadow.mapSize.x, 125);
+    }
 
     this._hemiSky.copy(midCol).lerp(tmp.setHex(0xe8f6ff), 0.45);
     // Luminous BSL bounced ground light so shadows & shaded vertical faces stay crisp & airy (never crushed black!)
@@ -534,7 +664,7 @@ export class SkySystem {
 
     // Opposite-side sky bounce fill light illuminates shaded +Z/-X faces cleanly!
     this.fillLight.color.copy(midCol).lerp(tmp.setHex(0xd8ecff), 0.5);
-    this.fillLight.position.set(-lightDir.x * 50, 34, 42);
+    this.fillLight.position.set(-rawLightDir.x * 50, 34, 42);
     this.fillLight.intensity = (0.14 + dayFactor * 0.36) * rainDim;
 
     // Stars twinkle gently at night (completely skipped during day for zero draw calls!)

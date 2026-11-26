@@ -43,22 +43,32 @@ export const DEFAULT_SETTINGS = {
   sound: true,
   minecraftUI: true,   // Classic Minecraft pixel bevel UI theme (revertable)
   largeUI: true,       // Larger iPad-friendly UI scale (revertable)
-  shaders: TOUCH_DEFAULT ? 'enhanced' : 'ultra',    // 'off' | 'enhanced' | 'ultra'
+  shaders: TOUCH_DEFAULT ? 'medium' : 'ultra',    // 'low' | 'medium' | 'high' | 'ultra'
+  adaptiveQuality: true, // Dynamic resolution scaling for Apple Silicon iPad smoothness
   biomeEffects: true,  // Biome ambient particles & atmosphere
   allowCheats: false,  // Enable / disable cheat commands & creative shortcuts
   keybinds: { ...DEFAULT_KEYBINDS }
 };
+
+export function normalizeShaderPreset(val) {
+  if (val === 'low' || val === 'medium' || val === 'high' || val === 'ultra') return val;
+  if (val === 'off') return 'low';
+  if (val === 'enhanced') return 'medium';
+  return TOUCH_DEFAULT ? 'medium' : 'ultra';
+}
 
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS, keybinds: { ...DEFAULT_KEYBINDS } };
     const parsed = JSON.parse(raw);
-    return {
+    const merged = {
       ...DEFAULT_SETTINGS,
       ...parsed,
       keybinds: { ...DEFAULT_KEYBINDS, ...(parsed.keybinds || {}) }
     };
+    merged.shaders = normalizeShaderPreset(merged.shaders);
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS, keybinds: { ...DEFAULT_KEYBINDS } };
   }

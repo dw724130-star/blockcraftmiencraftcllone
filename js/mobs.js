@@ -155,14 +155,19 @@ const MOB_TYPES = {
     color: 0xebe6dc, headColor: 0xf5f2eb, size: [0.76, 1.12, 1.08], drop: ['raw_mutton', 'wool_white'], xp: 3
   },
 
-  // Village NPCs
+  // Village NPCs & Settlement Defenders
   villager: {
     label: 'Villager', hostile: false, hp: 20, speed: 1.7, color: 0x8f6234, headColor: 0xd19f7b,
     size: [0.68, 1.92, 0.68], villager: true, drop: ['emerald'], xp: 3
   },
+  villager_soldier: {
+    label: 'Villager Soldier', hostile: false, hp: 22, speed: 2.75, dmg: 4, color: 0x7c8798, headColor: 0xd19f7b,
+    size: [0.68, 1.92, 0.68], villager: true, soldier: true, guard: true,
+    drop: ['iron_helmet', 'iron_chestplate', 'iron_sword'], xp: 6
+  },
   iron_golem: {
-    label: 'Iron Golem', hostile: false, hp: 60, speed: 1.5, color: 0xd8dce0, headColor: 0xc5cad1,
-    size: [1.15, 2.55, 0.95], golem: true, drop: ['iron_ingot', 'iron_ingot', 'flower_red'], xp: 8
+    label: 'Iron Golem', hostile: false, hp: 80, speed: 1.95, dmg: 9, color: 0xd8dce0, headColor: 0xc5cad1,
+    size: [1.15, 2.55, 0.95], golem: true, guard: true, drop: ['iron_ingot', 'iron_ingot', 'flower_red'], xp: 8
   },
 
   // Hostile Night Mobs (Upgraded Detailed 3D Models!)
@@ -711,19 +716,55 @@ function createMobMesh(type, options = {}) {
     // Tailored shoulder mantle & collar
     addShadowMesh(group, new THREE.BoxGeometry(0.60, 0.11, 0.38), trimMat, 0, 1.37, 0, false);
 
-    // 3. Authentic Angled Crossed Minecraft Villager Arms (diagonal upper sleeves -> folded forearm cuff!)
-    for (const sx of [-1, 1]) {
-      const upperArm = addShadowMesh(group, new THREE.BoxGeometry(0.20, 0.44, 0.20), robeSideMat, sx * 0.34, 1.15, 0.08);
-      upperArm.rotation.x = -0.78; // classic 45-degree villager arm fold!
-      upperArm.rotation.z = sx * 0.12;
-      // Embroidered shoulder sleeve cuff
-      const cuff = addShadowMesh(group, new THREE.BoxGeometry(0.22, 0.07, 0.22), trimMat, sx * 0.34, 1.29, -0.02, false);
-      cuff.rotation.x = -0.78;
+    // 3. Arms: Villager Soldiers wield a 3D Iron Sword & Iron Armor; regular Villagers have classic crossed arms!
+    if (def.soldier) {
+      const ironMat = new THREE.MeshLambertMaterial({ color: 0xc6ced9 });
+      const ironDark = new THREE.MeshLambertMaterial({ color: 0x8690a0 });
+      const ironHi = new THREE.MeshLambertMaterial({ color: 0xeaf0f8 });
+      const beltMat = new THREE.MeshLambertMaterial({ color: 0x452b17 });
+      const hiltMat = new THREE.MeshLambertMaterial({ color: 0x6b4423 });
+
+      // 3D Iron Chestplate + Backplate + Waist Belt!
+      addShadowMesh(group, new THREE.BoxGeometry(0.59, 0.66, 0.39), ironMat, 0, 1.04, 0);
+      addShadowMesh(group, new THREE.BoxGeometry(0.46, 0.10, 0.41), ironDark, 0, 1.24, 0, false);
+      addShadowMesh(group, new THREE.BoxGeometry(0.60, 0.10, 0.40), beltMat, 0, 0.72, 0, false);
+      addShadowMesh(group, new THREE.BoxGeometry(0.14, 0.10, 0.42), ironHi, 0, 0.72, 0, false);
+
+      // Articulated Left & Right Armored Arms (right arm holds gleaming 3D Iron Sword!)
+      for (const sx of [-1, 1]) {
+        const armPiv = new THREE.Group();
+        armPiv.position.set(sx * 0.38, 1.32, 0);
+        addShadowMesh(armPiv, new THREE.BoxGeometry(0.24, 0.18, 0.26), ironMat, 0, -0.02, 0);
+        addShadowMesh(armPiv, new THREE.BoxGeometry(0.20, 0.56, 0.20), robeSideMat, 0, -0.32, 0);
+        addShadowMesh(armPiv, new THREE.BoxGeometry(0.21, 0.16, 0.21), ironDark, 0, -0.48, 0, false);
+        if (sx === 1) {
+          // 3D Iron Sword held forward in the right hand!
+          const swordGrp = new THREE.Group();
+          swordGrp.position.set(0, -0.56, 0.14);
+          swordGrp.rotation.x = 0.62;
+          addShadowMesh(swordGrp, new THREE.BoxGeometry(0.055, 0.055, 0.20), hiltMat, 0, 0, -0.06, false);
+          addShadowMesh(swordGrp, new THREE.BoxGeometry(0.22, 0.06, 0.05), ironDark, 0, 0, 0.05, false);
+          addShadowMesh(swordGrp, new THREE.BoxGeometry(0.085, 0.032, 0.58), ironHi, 0, 0, 0.36, false);
+          addShadowMesh(swordGrp, new THREE.BoxGeometry(0.055, 0.034, 0.10), ironHi, 0, 0, 0.69, false);
+          armPiv.add(swordGrp);
+        }
+        group.add(armPiv);
+        arms.push(armPiv);
+      }
+    } else {
+      for (const sx of [-1, 1]) {
+        const upperArm = addShadowMesh(group, new THREE.BoxGeometry(0.20, 0.44, 0.20), robeSideMat, sx * 0.34, 1.15, 0.08);
+        upperArm.rotation.x = -0.78; // classic 45-degree villager arm fold!
+        upperArm.rotation.z = sx * 0.12;
+        // Embroidered shoulder sleeve cuff
+        const cuff = addShadowMesh(group, new THREE.BoxGeometry(0.22, 0.07, 0.22), trimMat, sx * 0.34, 1.29, -0.02, false);
+        cuff.rotation.x = -0.78;
+      }
+      // Folded central forearm bundle + peeking hands
+      addShadowMesh(group, new THREE.BoxGeometry(0.56, 0.21, 0.22), robeSideMat, 0, 0.96, 0.23);
+      addShadowMesh(group, new THREE.BoxGeometry(0.60, 0.22, 0.06), trimMat, 0, 0.96, 0.23, false);
+      addShadowMesh(group, new THREE.BoxGeometry(0.26, 0.17, 0.18), skinUnderMat, 0, 0.96, 0.26, false);
     }
-    // Folded central forearm bundle + peeking hands
-    addShadowMesh(group, new THREE.BoxGeometry(0.56, 0.21, 0.22), robeSideMat, 0, 0.96, 0.23);
-    addShadowMesh(group, new THREE.BoxGeometry(0.60, 0.22, 0.06), trimMat, 0, 0.96, 0.23, false);
-    addShadowMesh(group, new THREE.BoxGeometry(0.26, 0.17, 0.18), skinUnderMat, 0, 0.96, 0.26, false);
 
     // 4. Articulated 6-Face Pixel-Art Expressive Villager Head + Sculpted Textured Nose!
     headGroup = new THREE.Group();
@@ -735,8 +776,19 @@ function createMobMesh(type, options = {}) {
     // Raised 3D brow ridge for extra expressiveness
     addShadowMesh(headGroup, new THREE.BoxGeometry(0.38, 0.055, 0.04), new THREE.MeshLambertMaterial({ color: 0x472d1b }), 0, 0.40, 0.24, false);
 
-    // 5. Ultra-Detailed Profession 3D Gear & Headwear!
-    if (profName === 'Farmer') {
+    // 5. Ultra-Detailed Profession 3D Gear & Headwear (or Iron Helmet for Villager Soldier!)
+    if (def.soldier) {
+      const helmMat = new THREE.MeshLambertMaterial({ color: 0xc8d0dc });
+      const helmDark = new THREE.MeshLambertMaterial({ color: 0x828c9c });
+      const crestMat = new THREE.MeshLambertMaterial({ color: 0x3a78c9 });
+      // Classic Minecraft Iron Helmet shell leaving eyes & iconic nose visible!
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.52, 0.16, 0.52), helmMat, 0, 0.54, 0);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.52, 0.36, 0.10), helmMat, 0, 0.32, -0.22);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.32, 0.44), helmMat, -0.23, 0.34, -0.02);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.32, 0.44), helmMat, 0.23, 0.34, -0.02);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.54, 0.08, 0.10), helmDark, 0, 0.45, 0.23, false);
+      addShadowMesh(headGroup, new THREE.BoxGeometry(0.08, 0.10, 0.36), crestMat, 0, 0.65, -0.02, false);
+    } else if (profName === 'Farmer') {
       const strawMat = vTex ? new THREE.MeshLambertMaterial({ map: vTex.strawTex }) : trimMat;
       const ribbonMat = new THREE.MeshLambertMaterial({ color: 0xc9322c });
       const wheatMat = new THREE.MeshLambertMaterial({ color: 0xf2d152 });
@@ -1869,7 +1921,32 @@ export class EntityManager {
     mob.vel.z = kz * 7.4;
     mob.vel.y = Math.max(mob.vel.y, 5.4);
     this.setMobTint(mob, 'hurt');
-    if (!mob.def.hostile) {
+
+    // Authentic Minecraft Iron Golem & Villager Soldier Provocation:
+    // - Attacking an Iron Golem or Soldier directly -> immediately aggros that guard!
+    // - Attacking a Villager -> ONLY Iron Golems & Soldiers who have clear Line-of-Sight SEE it and attack you!
+    if (player) {
+      if (mob.def.guard) {
+        mob.aggroPlayer = true;
+        mob.aggroTimer = 45;
+      } else if (mob.def.villager && !mob.def.guard) {
+        for (let gi = 0; gi < this.mobs.length; gi++) {
+          const g = this.mobs[gi];
+          if (!g.def.guard || g === mob) continue;
+          const dG = g.pos.distanceTo(mob.pos);
+          if (dG > 26) continue;
+          const gEyeY = g.pos.y + g.height * 0.82;
+          const seesPlayer = this.hasLineOfSight(g.pos.x, gEyeY, g.pos.z, player.pos.x, player.pos.y + 1.25, player.pos.z);
+          const seesVictim = this.hasLineOfSight(g.pos.x, gEyeY, g.pos.z, mob.pos.x, mob.pos.y + 1.25, mob.pos.z);
+          if (seesPlayer || seesVictim) {
+            g.aggroPlayer = true;
+            g.aggroTimer = 38;
+          }
+        }
+      }
+    }
+
+    if (!mob.def.hostile && !mob.def.guard) {
       // Go haywire! Frantic high-speed zig-zagging + repeated jumps to escape!
       mob.fleeTimer = 5.5 + Math.random() * 2.5;
       mob.panicZigTimer = 0.22 + Math.random() * 0.28;
@@ -1947,6 +2024,8 @@ export class EntityManager {
       const below = this.world.getBlock(sx, cy - 1, sz);
       if (below === BLOCK.AIR || below === BLOCK.WATER || below === BLOCK.BEDROCK) continue;
       if (this.world.getBlock(sx, cy, sz) === BLOCK.AIR && this.world.getBlock(sx, cy + 1, sz) === BLOCK.AIR) {
+        // Never spawn hostile mobs near placed torches, glowstone, fire, or lava!
+        if (this.world.isPosLitByLightSource && this.world.isPosLitByLightSource(sx, cy, sz, 12)) continue;
         const hType = pool[Math.floor(Math.random() * pool.length)];
         const mob = this.spawnMob(hType, sx + 0.5, cy, sz + 0.5, null, biome);
         return mob ? 1 : 0;
@@ -1994,6 +2073,9 @@ export class EntityManager {
             ['villager', 5.0, 2.5, VILLAGER_PROFESSIONS[3]],
             ['villager', -6.0, 0.5, VILLAGER_PROFESSIONS[0]],
             ['villager', 1.5, 5.5, VILLAGER_PROFESSIONS[1]],
+            ['villager_soldier', -5.0, 4.5, null],
+            ['villager_soldier', 5.5, -4.5, null],
+            ['villager_soldier', 0.5, -6.0, null],
             ['iron_golem', 0.5, 4.5, null],
             ['iron_golem', -4.5, -2.5, null]
           ];
@@ -2100,6 +2182,8 @@ export class EntityManager {
             const sy = this.world.getSurfaceY(sx, sz);
             const ground = this.world.getBlock(sx, sy - 1, sz);
             if (ground !== BLOCK.AIR && ground !== BLOCK.WATER) {
+              // Respect torches & light sources: NEVER spawn hostile mobs near light at night!
+              if (this.world.isPosLitByLightSource && this.world.isPosLitByLightSource(sx, sy, sz, 12)) continue;
               const biome = this.world.getBiomeAt(sx, sz);
               const hType = pool[Math.floor(Math.random() * pool.length)];
               const packSize = hType === 'creeper'
@@ -2283,15 +2367,119 @@ export class EntityManager {
         m.fleeTimer = 2.6;
       }
 
-      // AI Movement
+      // AI Movement:
+      // A) Hostile Mobs attack Survival Players AND raid Villagers / Villager Soldiers / Iron Golems!
+      // B) Iron Golems & Villager Soldiers actively defend against Hostile Mobs AND punish Players who attack them or villagers in LOS!
       let moveX = 0, moveZ = 0;
       let creeperShakeX = 0, creeperShakeZ = 0;
-      if (m.def.hostile && player.mode === 'survival' && !player.dead && distToPlayer < 20) {
-        const dx = player.pos.x - m.pos.x;
-        const dz = player.pos.z - m.pos.z;
+      if (m.attackSwing > 0) m.attackSwing = Math.max(0, m.attackSwing - dt * 4.5);
+
+      let hostileTarget = null;
+      let hostileTargetIsPlayer = false;
+      let hostileTargetDist = 20;
+      if (m.def.hostile) {
+        if (player.mode === 'survival' && !player.dead && distToPlayer < hostileTargetDist) {
+          hostileTarget = player;
+          hostileTargetIsPlayer = true;
+          hostileTargetDist = distToPlayer;
+        }
+        // Scan for nearby Villagers, Villager Soldiers, or Iron Golems to raid!
+        for (let vi = 0; vi < this.mobs.length; vi++) {
+          const v = this.mobs[vi];
+          if (!v.def.villager && !v.def.guard) continue;
+          const dv = m.pos.distanceTo(v.pos);
+          if (dv < Math.min(18, hostileTargetDist)) {
+            hostileTarget = v;
+            hostileTargetIsPlayer = false;
+            hostileTargetDist = dv;
+          }
+        }
+      }
+
+      if (m.def.guard) {
+        // Decay player aggro timer cleanly
+        if (m.aggroTimer > 0) {
+          m.aggroTimer = Math.max(0, m.aggroTimer - dt);
+          if (m.aggroTimer <= 0 || player.dead || player.mode !== 'survival') m.aggroPlayer = false;
+        } else {
+          m.aggroPlayer = false;
+        }
+
+        // Priority 1: Provoked against Player (only if saw villager attack OR player hit this guard!)
+        // Priority 2: Closest Hostile Mob (Zombie, Skeleton, Creeper, Spider) within 22 blocks!
+        let guardTarget = null;
+        let guardTargetIsPlayer = false;
+        let guardTargetDist = 24;
+        if (m.aggroPlayer && player.mode === 'survival' && !player.dead && distToPlayer < 26) {
+          guardTarget = player;
+          guardTargetIsPlayer = true;
+          guardTargetDist = distToPlayer;
+        } else {
+          for (let hi = 0; hi < this.mobs.length; hi++) {
+            const hm = this.mobs[hi];
+            if (!hm.def.hostile) continue;
+            const dh = m.pos.distanceTo(hm.pos);
+            if (dh < 22 && dh < guardTargetDist) {
+              guardTarget = hm;
+              guardTargetIsPlayer = false;
+              guardTargetDist = dh;
+            }
+          }
+        }
+
+        if (guardTarget) {
+          const tx = guardTarget.pos.x;
+          const tz = guardTarget.pos.z;
+          const dx = tx - m.pos.x;
+          const dz = tz - m.pos.z;
+          m.yaw = lerpAngle(m.yaw, Math.atan2(dx, dz), Math.min(1, dt * 12));
+          const reach = m.def.golem ? 2.15 : 1.75;
+          if (guardTargetDist > reach) {
+            const chSpd = m.def.speed * (m.def.golem ? 1.25 : 1.15);
+            moveX = Math.sin(m.yaw) * chSpd;
+            moveZ = Math.cos(m.yaw) * chSpd;
+          } else if (m.attackCd <= 0) {
+            m.attackCd = m.def.golem ? 1.05 : 0.72;
+            m.attackSwing = 1.0;
+            const gDmg = m.def.dmg || (m.def.golem ? 9 : 4);
+            const hLen = Math.max(0.01, Math.hypot(dx, dz));
+            if (guardTargetIsPlayer) {
+              player.vel.x += (dx / hLen) * (m.def.golem ? 6.5 : 4.2);
+              player.vel.z += (dz / hLen) * (m.def.golem ? 6.5 : 4.2);
+              player.vel.y = Math.max(player.vel.y, m.def.golem ? 8.2 : 3.6);
+              player.takeDamage(gDmg, m.def.golem ? 'Flung by Iron Golem' : 'Slain by Villager Soldier');
+            } else {
+              const deadH = this.hitMob(guardTarget, gDmg, { x: dx / hLen, y: 0.6, z: dz / hLen }, null);
+              if (!deadH && m.def.golem) {
+                guardTarget.vel.y = Math.max(guardTarget.vel.y, 9.2); // Iconic Minecraft Iron Golem sky-launch!
+              }
+            }
+          }
+        } else {
+          // Calm guard patrol around home village / castle / pyramid
+          m.aiTimer -= dt;
+          if (m.aiTimer <= 0) {
+            m.aiTimer = 2.2 + Math.random() * 3.6;
+            m.moving = Math.random() > 0.30;
+            if (m.pos.distanceTo(m.homePos) > 20) {
+              m.wanderDir = Math.atan2(m.homePos.x - m.pos.x, m.homePos.z - m.pos.z) + (Math.random() - 0.5) * 0.5;
+              m.moving = true;
+            } else {
+              m.wanderDir = Math.random() * Math.PI * 2;
+            }
+          }
+          if (m.moving) {
+            m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 6));
+            moveX = Math.sin(m.yaw) * m.def.speed * 0.65;
+            moveZ = Math.cos(m.yaw) * m.def.speed * 0.65;
+          }
+        }
+      } else if (m.def.hostile && hostileTarget) {
+        const dx = hostileTarget.pos.x - m.pos.x;
+        const dz = hostileTarget.pos.z - m.pos.z;
         m.yaw = Math.atan2(dx, dz);
 
-        if (m.def.creeper && (distToPlayer < 3.4 || (m.fuseTimer > 0 && distToPlayer < 5.6))) {
+        if (m.def.creeper && (hostileTargetDist < 3.4 || (m.fuseTimer > 0 && hostileTargetDist < 5.6))) {
           // Dramatic Minecraft Creeper Prime & Swell Animation!
           const FUSE_MAX = 1.5;
           if (m.fuseTimer === 0 && this.sound && this.sound.playFuse) this.sound.playFuse();
@@ -2332,26 +2520,25 @@ export class EntityManager {
             continue;
           }
         } else if (m.type === 'skeleton') {
-          // Authentic Ranged Skeleton AI: keeps shooting distance, strafes, draws bow & shoots 3D arrows!
+          // Authentic Ranged Skeleton AI: shoots at Players, Villagers, Soldiers & Iron Golems!
           m.strafeTimer = (m.strafeTimer || 0) - dt;
           if (m.strafeTimer <= 0) {
             m.strafeTimer = 1.6 + Math.random() * 2.0;
             m.strafeDir = Math.random() < 0.5 ? 1 : -1;
           }
-          const hasLOS = distToPlayer < 17 && this.hasLineOfSight(
+          const tAimY = hostileTarget.pos.y + (hostileTargetIsPlayer ? 1.15 : (hostileTarget.height || 1.6) * 0.65);
+          const hasLOS = hostileTargetDist < 17 && this.hasLineOfSight(
             m.pos.x, m.pos.y + 1.5, m.pos.z,
-            player.pos.x, player.pos.y + 1.15, player.pos.z
+            hostileTarget.pos.x, tAimY, hostileTarget.pos.z
           );
 
-          if (!hasLOS || distToPlayer > 12.5) {
-            // Advance closer until in clear ranged firing position
+          if (!hasLOS || hostileTargetDist > 12.5) {
             moveX = Math.sin(m.yaw) * m.def.speed;
             moveZ = Math.cos(m.yaw) * m.def.speed;
             m.bowDraw = Math.max(0, (m.bowDraw || 0) - dt * 2.2);
           } else {
-            // Strafe & keep safe distance while drawing bow!
             const strafeYaw = m.yaw + (Math.PI * 0.5) * m.strafeDir;
-            const backMul = distToPlayer < 5.0 ? -0.75 : 0;
+            const backMul = hostileTargetDist < 5.0 ? -0.75 : 0;
             moveX = Math.sin(strafeYaw) * m.def.speed * 0.55 + Math.sin(m.yaw) * m.def.speed * backMul;
             moveZ = Math.cos(strafeYaw) * m.def.speed * 0.55 + Math.cos(m.yaw) * m.def.speed * backMul;
 
@@ -2360,13 +2547,12 @@ export class EntityManager {
               if (m.bowDraw >= 1) {
                 m.bowDraw = 0;
                 m.attackCd = 1.65;
-                // Aimed ballistic arrow shot toward player's torso with gravity compensation!
                 const sx = m.pos.x + Math.sin(m.yaw) * 0.45;
                 const sy = m.pos.y + 1.48;
                 const sz = m.pos.z + Math.cos(m.yaw) * 0.45;
-                const tx = player.pos.x - sx;
-                const ty = (player.pos.y + 1.05) - sy;
-                const tz = player.pos.z - sz;
+                const tx = hostileTarget.pos.x - sx;
+                const ty = tAimY - sy;
+                const tz = hostileTarget.pos.z - sz;
                 const hDist = Math.max(0.5, Math.hypot(tx, tz));
                 const speed = 19.5;
                 const flightT = hDist / speed;
@@ -2388,13 +2574,18 @@ export class EntityManager {
             if (m.hurtFlash <= 0) this.setMobTint(m, 'normal');
             if (m.fuseTimer <= 0) m.mesh.scale.setScalar(1.0);
           }
-          if (distToPlayer > 1.35) {
+          if (hostileTargetDist > 1.45) {
             moveX = Math.sin(m.yaw) * m.def.speed;
             moveZ = Math.cos(m.yaw) * m.def.speed;
           } else if (m.attackCd <= 0 && !m.def.creeper) {
             m.attackCd = 1.1;
             const scaledDmg = Math.max(1, Math.round((m.def.dmg || 3) * diffCfg.dmgMul));
-            player.takeDamage(scaledDmg, `Slain by ${m.label || m.type}`);
+            if (hostileTargetIsPlayer) {
+              player.takeDamage(scaledDmg, `Slain by ${m.label || m.type}`);
+            } else {
+              const hLen = Math.max(0.01, Math.hypot(dx, dz));
+              this.hitMob(hostileTarget, scaledDmg, { x: dx / hLen, y: 0.35, z: dz / hLen }, null);
+            }
           }
         }
       } else {
@@ -2626,9 +2817,14 @@ export class EntityManager {
           else leg.rotation.x *= 0.85;
         });
       }
-      // Articulated Hostile Zombie & Skeleton Arm Sway + Bow Draw Aiming!
+      // Articulated Arms: Villager Soldier Sword Slash, Skeleton Bow Draw, Zombie Reach!
       if (m.arms && m.arms.length === 2) {
-        if (m.type === 'skeleton' && m.bowDraw > 0.02) {
+        if (m.def.soldier) {
+          const march = speedMag > 0.1 ? Math.sin(m.walkPhase) * 0.42 : Math.sin(nowSec * 2.4 + m.walkPhase) * 0.05;
+          const slash = m.attackSwing > 0 ? Math.sin(m.attackSwing * Math.PI) * 1.55 : 0;
+          m.arms[0].rotation.x = march;
+          m.arms[1].rotation.x = -0.25 - march * 0.5 - slash;
+        } else if (m.type === 'skeleton' && m.bowDraw > 0.02) {
           const aimPitch = -Math.PI * 0.50 - m.bowDraw * 0.14;
           m.arms[0].rotation.x = aimPitch;
           m.arms[1].rotation.x = aimPitch - 0.06;
@@ -2711,6 +2907,24 @@ export class EntityManager {
         }
       }
 
+      // Check collision with Villagers, Villager Soldiers & Iron Golems (Skeleton raids!)
+      let hitNpc = false;
+      for (let mi = this.mobs.length - 1; mi >= 0; mi--) {
+        const tm = this.mobs[mi];
+        if (tm === a.owner || tm.def.hostile) continue;
+        if (!tm.def.villager && !tm.def.guard) continue;
+        if (Math.abs(nx - tm.pos.x) < tm.halfW + 0.25 && Math.abs(nz - tm.pos.z) < tm.halfW + 0.25 && ny >= tm.pos.y && ny <= tm.pos.y + tm.height) {
+          const hLen = Math.max(0.01, Math.hypot(a.vel.x, a.vel.z));
+          this.hitMob(tm, a.dmg, { x: a.vel.x / hLen, y: 0.35, z: a.vel.z / hLen }, null);
+          if (this.sound && this.sound.playArrowHit) this.sound.playArrowHit();
+          this.group.remove(a.mesh);
+          this.projectiles.splice(i, 1);
+          hitNpc = true;
+          break;
+        }
+      }
+      if (hitNpc) continue;
+
       // Check collision with solid terrain blocks (arrow sticks cleanly into walls/ground!)
       if (isBlockSolid(this.world.getBlock(nx, ny, nz))) {
         a.stuck = true;
@@ -2774,44 +2988,86 @@ export class EntityManager {
   }
 
   _spawnMegaCrowd(ms) {
-    // 1. Spawn 16 full interactive articulated villagers + 4 Iron Golems around the interior plaza & avenues!
-    const interactiveOffsets = [
-      [-5.5, -1.5], [-5.5, 1.5], [5.5, -1.5], [5.5, 1.5],
-      [-1.5, -5.5], [1.5, -5.5], [-1.5, 5.5], [1.5, 5.5],
-      [-9.5, 0.5], [9.5, -0.5], [0.5, -9.5], [-0.5, 9.5],
-      [-13.5, 0.5], [13.5, -0.5], [0.5, -13.5], [-0.5, 13.5]
-    ];
-    for (let i = 0; i < interactiveOffsets.length; i++) {
-      const [ox, oz] = interactiveOffsets[i];
+    // Spawn ALL REAL full-physics Villagers, Villager Soldiers & Iron Golems inside Castles & Pyramids!
+    // Every single villager has full gravity, AABB collision, HP, damage, red hurt flash, trading & combat AI!
+    const innerR = ms.innerRadius || 20;
+    const villagerTotal = 26;
+    const soldierTotal = 6;
+    const golemTotal = 3;
+
+    const pickSafeSpot = (idx, minRad = 4.0) => {
+      for (let tries = 0; tries < 28; tries++) {
+        const mode = (idx + tries) % 3;
+        let rx, rz;
+        if (mode === 0) {
+          rx = (Math.random() - 0.5) * 3.0;
+          rz = (Math.random() - 0.5) * (innerR * 1.75);
+        } else if (mode === 1) {
+          rx = (Math.random() - 0.5) * (innerR * 1.75);
+          rz = (Math.random() - 0.5) * 3.0;
+        } else {
+          const ang = ((idx + tries * 0.37) / 14) * Math.PI * 2;
+          const rad = minRad + Math.random() * Math.max(2, innerR - minRad - 1.5);
+          rx = Math.cos(ang) * rad;
+          rz = Math.sin(ang) * rad;
+        }
+        const tx = ms.x + rx;
+        const tz = ms.z + rz;
+        const bFoot = this.world.getBlock(tx, ms.y, tz);
+        const bHead = this.world.getBlock(tx, ms.y + 1, tz);
+        const bFloor = this.world.getBlock(tx, ms.y - 1, tz);
+        if (!isBlockSolid(bFoot) && bFoot !== BLOCK.WATER && !isBlockSolid(bHead) && isBlockSolid(bFloor)) {
+          return { x: tx, z: tz };
+        }
+      }
+      return { x: ms.x + ((idx % 5) - 2) * 2.5, z: ms.z + (Math.floor(idx / 5) - 2) * 2.5 };
+    };
+
+    for (let i = 0; i < villagerTotal; i++) {
+      const pt = pickSafeSpot(i, 4.2);
       this._pendingVillageSpawns.push({
         mType: 'villager',
-        sx: ms.x + ox,
-        sz: ms.z + oz,
+        sx: pt.x,
+        sz: pt.z,
         baseY: ms.y,
         exactY: true,
         prof: VILLAGER_PROFESSIONS[i % VILLAGER_PROFESSIONS.length]
       });
     }
-    for (const [ox, oz] of [[-7.5, -7.5], [7.5, -7.5], [-7.5, 7.5], [7.5, 7.5]]) {
+    for (let i = 0; i < soldierTotal; i++) {
+      const pt = pickSafeSpot(i + 40, 5.5);
       this._pendingVillageSpawns.push({
-        mType: 'iron_golem',
-        sx: ms.x + ox,
-        sz: ms.z + oz,
+        mType: 'villager_soldier',
+        sx: pt.x,
+        sz: pt.z,
         baseY: ms.y,
         exactY: true,
         prof: null
       });
     }
+    for (let i = 0; i < golemTotal; i++) {
+      const pt = pickSafeSpot(i + 80, 6.0);
+      this._pendingVillageSpawns.push({
+        mType: 'iron_golem',
+        sx: pt.x,
+        sz: pt.z,
+        baseY: ms.y,
+        exactY: true,
+        prof: null
+      });
+    }
+  }
 
-    // 2. High-performance Instanced Villager Crowd — 100% IDENTICAL UV-Textured Models to Village Villagers!
-    // Grouped into 4 profession batches (Farmer, Blacksmith, Librarian, Cleric) using exact getVillagerTextures()!
-    const count = Math.max(40, (ms.villagerCount || 200) - interactiveOffsets.length);
+  _unusedOldInstancedCrowdHelper() {
+    // Kept empty so no fake invincible ghost crowds ever spawn!
+    if (false) {
+    const count = 0;
     const group = new THREE.Group();
-    this.group.add(group);
-
-    const innerR = ms.innerRadius || 20;
+    const innerR = 20;
     const perProf = [0, 0, 0, 0];
     const profAgents = [[], [], [], []];
+    const ms = { x: 0, y: 0, z: 0 };
+    const interactiveOffsets = [];
 
     for (let i = 0; i < count; i++) {
       let ax = ms.x, az = ms.z;
@@ -2947,6 +3203,7 @@ export class EntityManager {
     this.megaCrowds.set(ms.key, { ms, group, batches });
     // Immediately populate initial transforms so villagers appear on the very first frame!
     this._updateMegaCrowds(0.016, { pos: { x: ms.x, z: ms.z } });
+    }
   }
 
   _updateMegaCrowds(dt, player) {

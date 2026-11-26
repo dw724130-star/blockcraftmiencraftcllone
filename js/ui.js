@@ -574,6 +574,18 @@ export class UIManager {
     document.getElementById('set-biome-fx').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('biomeEffects', e.target.checked);
     });
+    document.getElementById('set-adaptive')?.addEventListener('change', (e) => {
+      if (this.game) {
+        this.game.updateSetting('adaptiveQuality', e.target.checked);
+        this.syncSettingsUI(this.game.settings);
+      }
+    });
+    document.getElementById('title-set-adaptive')?.addEventListener('change', (e) => {
+      if (this.game) {
+        this.game.updateSetting('adaptiveQuality', e.target.checked);
+        this.syncSettingsUI(this.game.settings);
+      }
+    });
     document.getElementById('set-control-style').addEventListener('change', (e) => {
       if (this.game) this.game.updateSetting('controlStyle', e.target.value);
     });
@@ -802,6 +814,10 @@ export class UIManager {
     document.getElementById('set-mc-ui').checked = settings.minecraftUI !== false;
     document.getElementById('set-large-ui').checked = settings.largeUI !== false;
     document.getElementById('set-biome-fx').checked = settings.biomeEffects !== false;
+    const adpEl = document.getElementById('set-adaptive');
+    if (adpEl) adpEl.checked = settings.adaptiveQuality !== false;
+    const tAdpEl = document.getElementById('title-set-adaptive');
+    if (tAdpEl) tAdpEl.checked = settings.adaptiveQuality !== false;
     document.getElementById('set-control-style').value = settings.controlStyle;
     document.getElementById('set-show-touch').checked = settings.showTouch;
     document.getElementById('set-sound').checked = settings.sound;

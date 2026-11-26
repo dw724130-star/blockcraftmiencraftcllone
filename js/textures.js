@@ -70,6 +70,9 @@ export class TextureManager {
     this.atlasTexture.colorSpace = THREE.SRGBColorSpace;
     this.atlasTexture.generateMipmaps = false;
 
+    // Procedural LabPBR Companion Atlases (Normal Map + Roughness/Metalness/F0/Emission) preserving 100% of Minecraft pixel art!
+    this.buildPBRAtlases();
+
     // Instant Main Menu startup: HUD & UI icons build immediately (<1ms); 10 crack WebGL textures warm lazily!
     this._gameplayTexReady = false;
     this.buildHudIcons();
@@ -104,6 +107,164 @@ export class TextureManager {
 
   getUV(name) {
     return this.tileMap[name] || this.tileMap['stone'];
+  }
+
+  /**
+   * Procedurally synthesizes synchronized 256x256 Tangent-Space Normal Atlas and PBR Material Atlas
+   * (R=Roughness, G=Metalness, B=Reflectivity F0, A=Emission) directly from the existing 16x16 pixel-art tiles.
+   */
+  buildPBRAtlases() {
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    const src = this.ctx.getImageData(0, 0, W, H).data;
+
+    this.normalCanvas = document.createElement('canvas');
+    this.normalCanvas.width = W;
+    this.normalCanvas.height = H;
+    const nCtx = this.normalCanvas.getContext('2d');
+    const nImg = nCtx.createImageData(W, H);
+    const nData = nImg.data;
+
+    this.pbrCanvas = document.createElement('canvas');
+    this.pbrCanvas.width = W;
+    this.pbrCanvas.height = H;
+    const pCtx = this.pbrCanvas.getContext('2d');
+    const pImg = pCtx.createImageData(W, H);
+    const pData = pImg.data;
+
+    // Default neutral normal (0.5, 0.5, 1.0) & matte rough dielectric (R=0.88, M=0, F0=0.04, E=0)
+    for (let i = 0; i < W * H * 4; i += 4) {
+      nData[i] = 128; nData[i + 1] = 128; nData[i + 2] = 255; nData[i + 3] = 255;
+      pData[i] = 224; pData[i + 1] = 0;   pData[i + 2] = 10;  pData[i + 3] = 0;
+    }
+
+    const getMatProfile = (name) => {
+      if (name === 'iron_block') return { rough: 0.22, metal: 0.94, f0: 0.88, bump: 0.85, emit: 0.0, ore: false };
+      if (name === 'gold_block') return { rough: 0.20, metal: 0.96, f0: 0.92, bump: 0.85, emit: 0.05, ore: false };
+      if (name === 'diamond_block') return { rough: 0.14, metal: 0.28, f0: 0.82, bump: 0.75, emit: 0.55, ore: false };
+      if (name === 'obsidian') return { rough: 0.28, metal: 0.04, f0: 0.22, bump: 1.8, emit: 0.0, ore: false };
+      if (name === 'glass') return { rough: 0.08, metal: 0.0, f0: 0.26, bump: 0.4, emit: 0.0, ore: false };
+      if (name === 'ice' || name === 'packed_ice') return { rough: 0.14, metal: 0.0, f0: 0.22, bump: 0.8, emit: 0.08, ore: false };
+      if (name === 'lava') return { rough: 0.42, metal: 0.0, f0: 0.08, bump: 1.5, emit: 1.0, ore: false };
+      if (name === 'glowstone') return { rough: 0.34, metal: 0.0, f0: 0.16, bump: 2.0, emit: 1.0, ore: false };
+      if (name === 'torch' || name === 'fire') return { rough: 0.75, metal: 0.0, f0: 0.04, bump: 1.0, emit: 0.85, ore: false };
+      if (name === 'stone_bricks' || name === 'cobblestone' || name === 'mossy_cobblestone' || name === 'bricks') {
+        return { rough: 0.64, metal: 0.0, f0: 0.09, bump: 2.85, emit: 0.0, ore: false };
+      }
+      if (name === 'iron_ore' || name === 'gold_ore' || name === 'diamond_ore' || name === 'coal_ore') {
+        return { rough: 0.80, metal: 0.0, f0: 0.05, bump: 2.4, emit: name === 'diamond_ore' ? 0.18 : 0.0, ore: true };
+      }
+      if (name === 'stone' || name === 'bedrock' || name === 'furnace_top' || name === 'furnace_front' || name.startsWith('sandstone')) {
+        return { rough: 0.78, metal: 0.0, f0: 0.06, bump: 2.1, emit: name === 'furnace_front' ? 0.35 : 0.0, ore: false };
+      }
+      if (name.includes('planks') || name.includes('door') || name.includes('chest') || name.includes('craft') || name === 'bookshelf') {
+        return { rough: 0.72, metal: 0.0, f0: 0.06, bump: 1.95, emit: 0.0, ore: false };
+      }
+      if (name.includes('log')) {
+        return { rough: 0.86, metal: 0.0, f0: 0.04, bump: 2.6, emit: 0.0, ore: false };
+      }
+      if (name.includes('terracotta')) {
+        return { rough: 0.76, metal: 0.0, f0: 0.06, bump: 1.35, emit: 0.0, ore: false };
+      }
+      if (name === 'snow') {
+        return { rough: 0.68, metal: 0.0, f0: 0.10, bump: 0.9, emit: 0.0, ore: false };
+      }
+      if (name.includes('farmland_wet') || name === 'mud') {
+        return { rough: 0.44, metal: 0.0, f0: 0.12, bump: 2.2, emit: 0.0, ore: false };
+      }
+      // Grass, dirt, sand, leaves, wool, crops: natural matte organic surfaces
+      return { rough: 0.89, metal: 0.0, f0: 0.035, bump: 1.65, emit: 0.0, ore: false };
+    };
+
+    const hBuf = new Float32Array(16 * 16);
+    for (const [name, tile] of Object.entries(this.tileMap)) {
+      const prof = getMatProfile(name);
+      const ox = tile.ox;
+      const oy = tile.oy;
+
+      // 1. Extract tile heightfield from pixel luminance
+      for (let ly = 0; ly < 16; ly++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const p = ((oy + ly) * W + (ox + lx)) * 4;
+          const r = src[p] / 255, g = src[p + 1] / 255, b = src[p + 2] / 255;
+          hBuf[ly * 16 + lx] = r * 0.299 + g * 0.587 + b * 0.114;
+        }
+      }
+
+      // 2. Sobel micro-bevel normal + per-texel PBR roughness/metalness/emission modulation!
+      for (let ly = 0; ly < 16; ly++) {
+        const ym = (ly + 15) & 15;
+        const yp = (ly + 1) & 15;
+        for (let lx = 0; lx < 16; lx++) {
+          const xm = (lx + 15) & 15;
+          const xp = (lx + 1) & 15;
+
+          const tl = hBuf[ym * 16 + xm], tc = hBuf[ym * 16 + lx], tr = hBuf[ym * 16 + xp];
+          const ml = hBuf[ly * 16 + xm], mc = hBuf[ly * 16 + lx], mr = hBuf[ly * 16 + xp];
+          const bl = hBuf[yp * 16 + xm], bc = hBuf[yp * 16 + lx], br = hBuf[yp * 16 + xp];
+
+          const dx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+          const dy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+          let nx = -dx * prof.bump;
+          let ny = dy * prof.bump;
+          let nz = 1.0;
+          const invLen = 1.0 / Math.hypot(nx, ny, nz);
+          nx *= invLen; ny *= invLen; nz *= invLen;
+
+          const p = ((oy + ly) * W + (ox + lx)) * 4;
+          nData[p] = Math.max(0, Math.min(255, Math.round((nx * 0.5 + 0.5) * 255)));
+          nData[p + 1] = Math.max(0, Math.min(255, Math.round((ny * 0.5 + 0.5) * 255)));
+          nData[p + 2] = Math.max(0, Math.min(255, Math.round((nz * 0.5 + 0.5) * 255)));
+          nData[p + 3] = 255;
+
+          const r = src[p] / 255, g = src[p + 1] / 255, b = src[p + 2] / 255;
+          const sat = Math.max(r, g, b) - Math.min(r, g, b);
+          // Micro-variation: mortar crevices (darker mc) are rougher, raised bevels are subtly glossier!
+          let rough = Math.max(0.06, Math.min(0.98, prof.rough + (0.5 - mc) * 0.24));
+          let metal = prof.metal;
+          let f0 = prof.f0;
+          let emit = prof.emit;
+
+          // Make ore crystal veins sparkle with metallic/gem reflectivity inside rough matte stone!
+          if (prof.ore && (sat > 0.14 || (name === 'coal_ore' && mc < 0.22))) {
+            rough = name === 'coal_ore' ? 0.42 : 0.18;
+            metal = name === 'diamond_ore' ? 0.25 : (name === 'coal_ore' ? 0.08 : 0.85);
+            f0 = name === 'coal_ore' ? 0.12 : 0.82;
+            emit = name === 'diamond_ore' ? 0.35 : 0.0;
+          }
+          // Mask emission strictly onto hot glowing texels (lava magma, glowstone crystals, furnace embers, torch flame!)
+          if (name === 'furnace_front') {
+            emit = (r > 0.72 && r - b > 0.35) ? 0.95 : 0.0;
+          } else if (name === 'torch') {
+            emit = ly < 6 ? 1.0 : 0.0;
+          } else if (name === 'lava') {
+            emit = Math.min(1.0, 0.55 + mc * 0.65);
+          } else if (name === 'glowstone') {
+            emit = Math.min(1.0, 0.45 + mc * 0.72);
+          }
+
+          pData[p] = Math.round(rough * 255);
+          pData[p + 1] = Math.round(metal * 255);
+          pData[p + 2] = Math.round(f0 * 255);
+          pData[p + 3] = Math.round(Math.max(0, Math.min(1, emit)) * 255);
+        }
+      }
+    }
+
+    nCtx.putImageData(nImg, 0, 0);
+    pCtx.putImageData(pImg, 0, 0);
+
+    this.normalTexture = new THREE.CanvasTexture(this.normalCanvas);
+    this.normalTexture.magFilter = THREE.NearestFilter;
+    this.normalTexture.minFilter = THREE.NearestFilter;
+    this.normalTexture.colorSpace = THREE.NoColorSpace;
+    this.normalTexture.generateMipmaps = false;
+
+    this.pbrTexture = new THREE.CanvasTexture(this.pbrCanvas);
+    this.pbrTexture.magFilter = THREE.NearestFilter;
+    this.pbrTexture.minFilter = THREE.NearestFilter;
+    this.pbrTexture.colorSpace = THREE.NoColorSpace;
+    this.pbrTexture.generateMipmaps = false;
   }
 
   buildAtlas() {

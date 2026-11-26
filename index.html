@@ -14,29 +14,30 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="css/style.css?v=33" />
+  <link rel="stylesheet" href="css/style.css?v=40" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=33",
-        "./js/textures.js": "./js/textures.js?v=33",
-        "./js/mods.js": "./js/mods.js?v=33",
-        "./js/inventory.js": "./js/inventory.js?v=33",
-        "./js/recipes.js": "./js/recipes.js?v=33",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=33",
-        "./js/noise.js": "./js/noise.js?v=33",
-        "./js/world.js": "./js/world.js?v=33",
-        "./js/mobs.js": "./js/mobs.js?v=33",
-        "./js/player.js": "./js/player.js?v=33",
-        "./js/effects.js": "./js/effects.js?v=33",
-        "./js/audio.js": "./js/audio.js?v=33",
-        "./js/ui.js": "./js/ui.js?v=33",
-        "./js/controls.js": "./js/controls.js?v=33",
-        "./js/sky.js": "./js/sky.js?v=33",
-        "./js/postfx.js": "./js/postfx.js?v=33",
-        "./js/panorama.js": "./js/panorama.js?v=33",
-        "./js/storage.js": "./js/storage.js?v=33"
+        "./js/blocks.js": "./js/blocks.js?v=40",
+        "./js/textures.js": "./js/textures.js?v=40",
+        "./js/mods.js": "./js/mods.js?v=40",
+        "./js/inventory.js": "./js/inventory.js?v=40",
+        "./js/recipes.js": "./js/recipes.js?v=40",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=40",
+        "./js/noise.js": "./js/noise.js?v=40",
+        "./js/voxel-gi.js": "./js/voxel-gi.js?v=40",
+        "./js/world.js": "./js/world.js?v=40",
+        "./js/mobs.js": "./js/mobs.js?v=40",
+        "./js/player.js": "./js/player.js?v=40",
+        "./js/effects.js": "./js/effects.js?v=40",
+        "./js/audio.js": "./js/audio.js?v=40",
+        "./js/ui.js": "./js/ui.js?v=40",
+        "./js/controls.js": "./js/controls.js?v=40",
+        "./js/sky.js": "./js/sky.js?v=40",
+        "./js/postfx.js": "./js/postfx.js?v=40",
+        "./js/panorama.js": "./js/panorama.js?v=40",
+        "./js/storage.js": "./js/storage.js?v=40"
       }
     }
   </script>
@@ -330,10 +331,15 @@
           <div class="setting-row inline">
             <label>Shaders &amp; Graphics</label>
             <select id="title-set-shaders">
-              <option value="ultra">Ultra BSL (Shadows + Mirror Water + Clouds)</option>
-              <option value="enhanced">Enhanced (Mirror Water + Clouds + Glow)</option>
-              <option value="off">Classic (Fastest)</option>
+              <option value="ultra">Ultra RTX (2-Cascade Shadows + SSR Water + Voxel GI + PBR)</option>
+              <option value="high">High (CSM Shadows + SSR Water + Voxel GI + God Rays)</option>
+              <option value="medium">Medium (Soft Shadows + Water + Bloom — iPad Balanced)</option>
+              <option value="low">Low (Classic Fastest)</option>
             </select>
+          </div>
+          <div class="setting-row inline">
+            <label for="title-set-adaptive">Adaptive Resolution &amp; Auto-FPS (iPad)</label>
+            <input type="checkbox" id="title-set-adaptive" checked />
           </div>
           <div class="setting-row">
             <label>Render Distance: <strong id="title-val-render-dist">6</strong> chunks</label>
@@ -882,10 +888,15 @@
           <div class="setting-row inline">
             <label>Shaders &amp; Graphics</label>
             <select id="set-shaders">
-              <option value="ultra">Ultra BSL (Shadows + Mirror Water + Clouds)</option>
-              <option value="enhanced">Enhanced (Mirror Water + Clouds + Glow)</option>
-              <option value="off">Classic (Fastest)</option>
+              <option value="ultra">Ultra RTX (2-Cascade Shadows + SSR Water + Voxel GI + PBR)</option>
+              <option value="high">High (CSM Shadows + SSR Water + Voxel GI + God Rays)</option>
+              <option value="medium">Medium (Soft Shadows + Water + Bloom — iPad Balanced)</option>
+              <option value="low">Low (Classic Fastest)</option>
             </select>
+          </div>
+          <div class="setting-row inline">
+            <label for="set-adaptive">Adaptive Resolution &amp; Auto-FPS (iPad)</label>
+            <input type="checkbox" id="set-adaptive" checked />
           </div>
           <div class="setting-row inline cheat-toggle-row">
             <label for="set-allow-cheats" class="check-label-icon">
@@ -1036,6 +1047,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=33"></script>
+  <script type="module" src="js/main.js?v=40"></script>
 </body>
 </html>

@@ -37,7 +37,7 @@ class BlockCraftGame {
     const maxDpr = this.isTouch ? 1.25 : 1.5;
     this.renderer.setPixelRatio(Math.min(rawDpr, maxDpr));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = (this.settings.shaders || 'enhanced') === 'ultra';
+    this.renderer.shadowMap.enabled = (this.settings.shaders || 'medium') !== 'low';
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -82,6 +82,10 @@ class BlockCraftGame {
     this._fpsCount = 0;
     this._fpsLastReport = performance.now();
     this._shadowFrame = 0;
+    this._avgFrameMs = 16.6;
+    this._drsTimer = 0;
+    this._drsGoodStreak = 0;
+    this._drsBadStreak = 0;
     this.currentFps = 60;
     this.autosaveTimer = 0;
     this.furnaceUiTimer = 0;
@@ -149,6 +153,20 @@ class BlockCraftGame {
     requestAnimationFrame((t) => this.loop(t));
   }
 
+  _getPresetMaxDpr(sh) {
+    const farLod = this.settings.renderDistance > 256;
+    if (this.isTouch) {
+      if (sh === 'low') return 1.0;
+      if (sh === 'medium') return farLod ? 1.0 : 1.1;
+      if (sh === 'high') return farLod ? 1.05 : 1.2;
+      return farLod ? 1.15 : 1.3;
+    }
+    if (sh === 'low') return 1.15;
+    if (sh === 'medium') return 1.25;
+    if (sh === 'high') return 1.35;
+    return 1.5;
+  }
+
   onResize() {
     const vv = window.visualViewport;
     const w = Math.max(1, Math.round(
@@ -158,9 +176,8 @@ class BlockCraftGame {
       (this.container && this.container.clientHeight) || (vv && vv.height) || window.innerHeight
     ));
     const rawDpr = window.devicePixelRatio || 1;
-    const maxDpr = this.isTouch
-      ? (this.settings.renderDistance > 256 ? 1.1 : 1.25)
-      : 1.5;
+    const sh = this.settings.shaders || (this.isTouch ? 'medium' : 'ultra');
+    const maxDpr = this._getPresetMaxDpr(sh);
     const dpr = Math.min(rawDpr, maxDpr);
 
     this._lastViewW = w;
@@ -201,24 +218,26 @@ class BlockCraftGame {
     this.camera.far = Math.max(3400, this.settings.renderDistance * 20 + 2000);
     this.camera.updateProjectionMatrix();
 
-    // Adaptive iPad / Touch DPR scaling at ultra-far 512-1024 chunk LODs so Apple GPU stays locked at 60 FPS!
+    // Adaptive iPad / Touch DPR scaling per graphics preset + render distance so Apple Silicon stays locked at 60 FPS!
+    const rawSh = this.settings.shaders || (this.isTouch ? 'medium' : 'ultra');
+    const sh = rawSh === 'off' ? 'low' : (rawSh === 'enhanced' ? 'medium' : rawSh);
     const rawDpr = window.devicePixelRatio || 1;
-    const maxDpr = this.isTouch
-      ? (this.settings.renderDistance > 256 ? 1.1 : 1.25)
-      : 1.5;
+    const maxDpr = this._getPresetMaxDpr(sh);
     this.renderer.setPixelRatio(Math.min(rawDpr, maxDpr));
     if (this.player) {
       this.player.baseFov = this.settings.fov;
       this.player.flightSpeed = typeof this.settings.flightSpeed === 'number' ? this.settings.flightSpeed : 1.0;
     }
 
-    // Shaders & Cinematic ACES Filmic Tone Mapping (20x BSL vibrancy!)
-    const sh = this.settings.shaders || 'ultra';
-    this.renderer.shadowMap.enabled = sh === 'ultra';
+    // Shaders & Cinematic Filmic Tone Mapping (4 Presets: Low / Medium / High / Ultra!)
+    this.renderer.shadowMap.enabled = sh !== 'low';
     this.renderer.shadowMap.needsUpdate = true;
-    this.renderer.toneMapping = sh === 'off' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.12 : (sh === 'enhanced' ? 1.08 : 1.0);
-    if (this.postfx) this.postfx.setQuality(sh);
+    this.renderer.toneMapping = sh === 'low' ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = sh === 'ultra' ? 1.04 : (sh === 'high' ? 1.02 : (sh === 'medium' ? 1.0 : 1.0));
+    if (this.postfx) {
+      this.postfx.setQuality(sh);
+      if (this.settings.adaptiveQuality === false) this.postfx.setRenderScale(1.0);
+    }
 
     if (this.world) {
       this.world.renderDistance = this.settings.renderDistance;
@@ -226,7 +245,7 @@ class BlockCraftGame {
     }
     if (this.sky) {
       this.sky.setRenderDistance(this.settings.renderDistance);
-      this.sky.setShaderMode(sh);
+      this.sky.setShaderMode(sh, this.isTouch);
       this.sky.biomeEffects = this.settings.biomeEffects !== false;
     }
     if (this.effects) {
@@ -485,7 +504,7 @@ class BlockCraftGame {
 
       this.cleanupScene();
 
-      const shaderMode = this.settings.shaders || (this.isTouch ? 'enhanced' : 'ultra');
+      const shaderMode = this.settings.shaders || (this.isTouch ? 'medium' : 'ultra');
       this.world = new World(this.scene, this.textures, {
         seed: meta.seed,
         worldType: meta.worldType,
@@ -550,7 +569,7 @@ class BlockCraftGame {
 
       this.sky = new SkySystem(this.scene);
       this.sky.setRenderDistance(this.settings.renderDistance);
-      this.sky.setShaderMode(shaderMode);
+      this.sky.setShaderMode(shaderMode, this.isTouch);
       this.sky.biomeEffects = this.settings.biomeEffects !== false;
       if (saved && typeof saved.time === 'number') {
         this.sky.time = saved.time;
@@ -1634,8 +1653,12 @@ class BlockCraftGame {
     if (curW !== this._lastViewW || curH !== this._lastViewH) {
       this.onResize();
     }
-    const dt = Math.min(0.05, (now - this.lastTime) / 1000);
+    const rawDtMs = now - this.lastTime;
+    const dt = Math.min(0.05, rawDtMs / 1000);
     this.lastTime = now;
+    if (rawDtMs > 2 && rawDtMs < 180) {
+      this._avgFrameMs = this._avgFrameMs * 0.92 + rawDtMs * 0.08;
+    }
 
     // True wall-clock rolling FPS counter (accurate from 1 FPS to 240+ FPS, zero dt-clamp bias!)
     const ring = this._fpsRing;
@@ -1856,18 +1879,58 @@ class BlockCraftGame {
         this.saveCurrentWorld(false);
       }
 
-      // Throttled shadow map refresh (cuts shadow-pass GPU cost by 75% while keeping crisp moving shadows!)
+      // Adaptive Dynamic Resolution Scaling (DRS) & Auto-Quality Governor for silky Apple Silicon iPad playability!
+      if (this.settings.adaptiveQuality !== false && this.postfx && this.postfx.enabled) {
+        this._drsTimer += dt;
+        if (this._drsTimer >= 1.25) {
+          this._drsTimer = 0;
+          const minScale = this.isTouch ? 0.68 : 0.75;
+          if (this._avgFrameMs > 23.5) {
+            this._drsGoodStreak = 0;
+            this._drsBadStreak++;
+            if (this.postfx.renderScale > minScale + 0.04) {
+              this.postfx.setRenderScale(Math.max(minScale, this.postfx.renderScale - 0.10));
+            } else if (this._avgFrameMs > 30.0 && this._drsBadStreak >= 3) {
+              const curQ = this.settings.shaders || 'ultra';
+              const nextQ = curQ === 'ultra' ? 'high' : (curQ === 'high' ? 'medium' : null);
+              if (nextQ) {
+                this._drsBadStreak = 0;
+                this.settings.shaders = nextQ;
+                this.postfx.setRenderScale(0.90);
+                this.applySettings();
+                this.ui.syncSettingsUI(this.settings);
+                this.ui.toast(`Auto-Performance: Scaled graphics to ${nextQ.toUpperCase()} for smooth FPS`);
+              }
+            }
+          } else if (this._avgFrameMs < 18.0) {
+            this._drsBadStreak = 0;
+            this._drsGoodStreak++;
+            if (this._drsGoodStreak >= 3 && this.postfx.renderScale < 0.99) {
+              this._drsGoodStreak = 0;
+              this.postfx.setRenderScale(Math.min(1.0, this.postfx.renderScale + 0.05));
+            }
+          } else {
+            this._drsBadStreak = 0;
+            this._drsGoodStreak = 0;
+          }
+        }
+      }
+
+      // Adaptive shadow map refresh cadence (2 frames on Ultra, 3 on High/Medium — responsive & GPU-friendly!)
       if (this.renderer.shadowMap.enabled) {
         this._shadowFrame++;
-        if (this.world._shadowNeedsUpdate || (this._shadowFrame & 3) === 0) {
+        const shadowStride = (this.settings.shaders === 'ultra' && !this.isTouch) ? 2 : 3;
+        if (this.world._shadowNeedsUpdate || (this._shadowFrame % shadowStride) === 0) {
           this.renderer.shadowMap.needsUpdate = true;
           this.world._shadowNeedsUpdate = false;
         }
       }
 
       if (this.postfx && this.postfx.enabled) {
-        this.postfx.render(this.scene, this.camera, this.sky, now * 0.001, this.player.headInWater);
+        this.postfx.render(this.scene, this.camera, this.sky, now * 0.001, this.player.headInWater, this.world);
       } else {
+        this.camera.layers.enableAll();
+        if (this.world.setWaterSplitPass) this.world.setWaterSplitPass(false);
         this.renderer.render(this.scene, this.camera);
       }
     } else if (this.titlePanorama && !this._loadingWorld) {

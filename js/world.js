@@ -3,6 +3,7 @@ import { BLOCK, getBlockDef, isBlockTransparent, isBlockCross, isBlockLiquid, is
 import { Noise, hashString } from './noise.js';
 import { SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { LodWorkerPool } from './lod-mesher.js';
+import { VoxelGIVolume } from './voxel-gi.js';
 
 export const CHUNK_SIZE = 16;
 export const CHUNK_HEIGHT = 512;
@@ -84,24 +85,42 @@ function coordHash(x, z, seed) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-// Reusable zero-GC TypedArray scratch buffer for chunk meshing (with optional Greedy Atlas Tiling!)
+// Reusable zero-GC TypedArray scratch buffer for chunk meshing (Greedy Atlas Tiling + 3D Voxel GI RGB Channels!)
 class MeshBucket {
-  constructor(initialVerts = 16384, tiled = false) {
+  constructor(initialVerts = 16384, tiled = false, withGI = false) {
     this.cap = initialVerts;
     this.tiled = tiled;
+    this.withGI = withGI;
     this.pos = new Float32Array(initialVerts * 3);
     this.norm = new Float32Array(initialVerts * 3);
     this.uv = new Float32Array(initialVerts * 2);
     this.col = new Float32Array(initialVerts * 3);
     this.tile = tiled ? new Float32Array(initialVerts * 4) : null;
+    this.blk = withGI ? new Float32Array(initialVerts * 3) : null;
+    this.bnc = withGI ? new Float32Array(initialVerts * 3) : null;
     this.idx = new Uint32Array((initialVerts / 4) * 6);
     this.vCount = 0;
     this.iCount = 0;
+    this._sky = 1.0;
+    this._br = 0.0; this._bg = 0.0; this._bb = 0.0;
+    this._gr = 0.0; this._gg = 0.0; this._gb = 0.0;
+    this._emit = 0.0;
   }
 
   reset() {
     this.vCount = 0;
     this.iCount = 0;
+    this._sky = 1.0;
+    this._br = 0.0; this._bg = 0.0; this._bb = 0.0;
+    this._gr = 0.0; this._gg = 0.0; this._gb = 0.0;
+    this._emit = 0.0;
+  }
+
+  setGI(sky, br, bg, bb, gr, gg, gb, emit = 0.0) {
+    this._sky = sky;
+    this._br = br; this._bg = bg; this._bb = bb;
+    this._gr = gr; this._gg = gg; this._gb = gb;
+    this._emit = emit;
   }
 
   ensure(addVerts) {
@@ -118,6 +137,10 @@ class MeshBucket {
     this.uv = growF(this.uv, 2);
     this.col = growF(this.col, 3);
     if (this.tiled) this.tile = growF(this.tile, 4);
+    if (this.withGI) {
+      this.blk = growF(this.blk, 3);
+      this.bnc = growF(this.bnc, 3);
+    }
     const nextIdx = new Uint32Array((newCap / 4) * 6);
     nextIdx.set(this.idx);
     this.idx = nextIdx;
@@ -152,10 +175,29 @@ class MeshBucket {
     uv[u + 4] = u2; uv[u + 5] = v2;
     uv[u + 6] = u3; uv[u + 7] = v3;
 
-    col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
-    col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
-    col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
-    col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+    if (this.withGI) {
+      const sky = this._sky, em = this._emit;
+      col[p] = c0; col[p + 1] = sky; col[p + 2] = em;
+      col[p + 3] = c1; col[p + 4] = sky; col[p + 5] = em;
+      col[p + 6] = c2; col[p + 7] = sky; col[p + 8] = em;
+      col[p + 9] = c3; col[p + 10] = sky; col[p + 11] = em;
+      const blk = this.blk, bnc = this.bnc;
+      const br = this._br, bg = this._bg, bb = this._bb;
+      const gr = this._gr, gg = this._gg, gb = this._gb;
+      blk[p] = br; blk[p + 1] = bg; blk[p + 2] = bb;
+      blk[p + 3] = br; blk[p + 4] = bg; blk[p + 5] = bb;
+      blk[p + 6] = br; blk[p + 7] = bg; blk[p + 8] = bb;
+      blk[p + 9] = br; blk[p + 10] = bg; blk[p + 11] = bb;
+      bnc[p] = gr; bnc[p + 1] = gg; bnc[p + 2] = gb;
+      bnc[p + 3] = gr; bnc[p + 4] = gg; bnc[p + 5] = gb;
+      bnc[p + 6] = gr; bnc[p + 7] = gg; bnc[p + 8] = gb;
+      bnc[p + 9] = gr; bnc[p + 10] = gg; bnc[p + 11] = gb;
+    } else {
+      col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
+      col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
+      col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
+      col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+    }
 
     if (this.tiled) {
       const t = base * 4;
@@ -209,10 +251,29 @@ class MeshBucket {
     uv[u + 4] = u2; uv[u + 5] = v2;
     uv[u + 6] = u3; uv[u + 7] = v3;
 
-    col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
-    col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
-    col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
-    col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+    if (this.withGI) {
+      const sky = this._sky, em = this._emit;
+      col[p] = c0; col[p + 1] = sky; col[p + 2] = em;
+      col[p + 3] = c1; col[p + 4] = sky; col[p + 5] = em;
+      col[p + 6] = c2; col[p + 7] = sky; col[p + 8] = em;
+      col[p + 9] = c3; col[p + 10] = sky; col[p + 11] = em;
+      const blk = this.blk, bnc = this.bnc;
+      const br = this._br, bg = this._bg, bb = this._bb;
+      const gr = this._gr, gg = this._gg, gb = this._gb;
+      blk[p] = br; blk[p + 1] = bg; blk[p + 2] = bb;
+      blk[p + 3] = br; blk[p + 4] = bg; blk[p + 5] = bb;
+      blk[p + 6] = br; blk[p + 7] = bg; blk[p + 8] = bb;
+      blk[p + 9] = br; blk[p + 10] = bg; blk[p + 11] = bb;
+      bnc[p] = gr; bnc[p + 1] = gg; bnc[p + 2] = gb;
+      bnc[p + 3] = gr; bnc[p + 4] = gg; bnc[p + 5] = gb;
+      bnc[p + 6] = gr; bnc[p + 7] = gg; bnc[p + 8] = gb;
+      bnc[p + 9] = gr; bnc[p + 10] = gg; bnc[p + 11] = gb;
+    } else {
+      col[p] = c0; col[p + 1] = c0; col[p + 2] = c0;
+      col[p + 3] = c1; col[p + 4] = c1; col[p + 5] = c1;
+      col[p + 6] = c2; col[p + 7] = c2; col[p + 8] = c2;
+      col[p + 9] = c3; col[p + 10] = c3; col[p + 11] = c3;
+    }
 
     const t = base * 4;
     const tl = this.tile;
@@ -223,7 +284,6 @@ class MeshBucket {
 
     const ii = this.iCount;
     const idx = this.idx;
-    // Flip diagonal automatically for smooth artifact-free Minecraft Voxel AO!
     if (c0 + c2 < c1 + c3) {
       idx[ii] = base + 1; idx[ii + 1] = base + 2; idx[ii + 2] = base + 3;
       idx[ii + 3] = base + 1; idx[ii + 4] = base + 3; idx[ii + 5] = base;
@@ -246,6 +306,10 @@ class MeshBucket {
     if (this.tiled) {
       geo.setAttribute('aTile', new THREE.BufferAttribute(this.tile.slice(0, this.vCount * 4), 4));
     }
+    if (this.withGI) {
+      geo.setAttribute('aBlockLight', new THREE.BufferAttribute(this.blk.slice(0, this.vCount * 3), 3));
+      geo.setAttribute('aBounceLight', new THREE.BufferAttribute(this.bnc.slice(0, this.vCount * 3), 3));
+    }
     const idxSlice = this.vCount < 65536
       ? new Uint16Array(this.idx.subarray(0, this.iCount))
       : this.idx.slice(0, this.iCount);
@@ -255,17 +319,20 @@ class MeshBucket {
 }
 
 const SCRATCH_BUCKETS = {
-  opaque: new MeshBucket(16384, true),
-  cutout: new MeshBucket(8192, false),
-  staticCutout: new MeshBucket(4096, false),
-  water: new MeshBucket(4096, false),
-  fire: new MeshBucket(2048, false)
+  opaque: new MeshBucket(16384, true, true),
+  cutout: new MeshBucket(8192, false, true),
+  staticCutout: new MeshBucket(4096, false, true),
+  water: new MeshBucket(4096, false, false),
+  fire: new MeshBucket(2048, false, false)
 };
+const VOXEL_GI = new VoxelGIVolume();
+const GI_EMIT_TMP = new Float32Array(3);
 // Dual coarse 4x4x4 trilinear cave grids (Minecraft 1.18 Spaghetti + Cheese Caverns, up to Y=252!)
 const CAVE_GRID = new Float32Array(5 * 64 * 5);
 const CAVE_GRID_B = new Float32Array(5 * 64 * 5);
 // Zero-GC Greedy Meshing slice masks & 16-bit column sky-light cache (supports 512-block world height!)
 const GREEDY_MASK = new Int32Array(16 * CHUNK_HEIGHT);
+const GREEDY_GI = new Int32Array(16 * CHUNK_HEIGHT);
 const GREEDY_SHADE = new Float32Array(16 * CHUNK_HEIGHT);
 const GREEDY_WATER_MASK = new Uint8Array(256);
 const SKY_TOP = new Uint16Array(256);
@@ -349,19 +416,42 @@ export class World {
     this._lastChunkRD = -1;
     this._chunksAllLoaded = false;
     this.renderDistance = options.renderDistance || 6;
-    this.shaderMode = options.shaders || 'ultra';
+    const rawMode = options.shaders || 'ultra';
+    this.shaderMode = rawMode === 'off' ? 'low' : (rawMode === 'enhanced' ? 'medium' : rawMode);
+
+    // 1x1 white fallback texture for shadow samplers before first shadow render
+    const dummyShadowData = new Uint8Array([255, 255, 255, 255]);
+    this._dummyShadowTex = new THREE.DataTexture(dummyShadowData, 1, 1, THREE.RGBAFormat);
+    this._dummyShadowTex.needsUpdate = true;
+
+    this._dynLightPos = Array.from({ length: 8 }, () => new THREE.Vector4(0, -9999, 0, 1));
+    this._dynLightCol = Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0));
+
     this.shaderUniforms = {
+      uAtlas: { value: this.textures.atlasTexture },
+      uNormalAtlas: { value: this.textures.normalTexture || this.textures.atlasTexture },
+      uPbrAtlas: { value: this.textures.pbrTexture || this.textures.atlasTexture },
+      uPbrOn: { value: this.shaderMode === 'low' ? 0.0 : 1.0 },
+      uWetness: { value: 0.0 },
       uTime: { value: 0 },
       uCloudTime: { value: 0 },
-      uWaveStrength: { value: this.shaderMode === 'off' ? 0.0 : (this.shaderMode === 'ultra' ? 1.15 : 0.9) },
-      uShaderOn: { value: this.shaderMode === 'off' ? 0.0 : 1.0 },
+      uWaveStrength: { value: this.shaderMode === 'low' ? 0.0 : (this.shaderMode === 'ultra' ? 1.15 : 0.9) },
+      uShaderOn: { value: this.shaderMode === 'low' ? 0.0 : 1.0 },
       uSunDir: { value: new THREE.Vector3(0.6, 0.5, -0.25).normalize() },
       uMoonDir: { value: new THREE.Vector3(-0.6, -0.5, 0.25).normalize() },
+      uShadowDir: { value: new THREE.Vector3(0.6, 0.5, -0.25).normalize() },
       uTopColor: { value: new THREE.Color(0x245ec2) },
       uMidColor: { value: new THREE.Color(0x63a8ed) },
       uHorizonColor: { value: new THREE.Color(0xd4e8fa) },
       uSunsetColor: { value: new THREE.Color(0xff9b54) },
       uSunColor: { value: new THREE.Color(0xfff6dc) },
+      uSunLightColor: { value: new THREE.Color(0xfff4dc) },
+      uSunLightIntensity: { value: 1.35 },
+      uHemiSkyColor: { value: new THREE.Color(0xcbe8ff) },
+      uHemiGroundColor: { value: new THREE.Color(0x88997e) },
+      uHemiIntensity: { value: 0.95 },
+      uFillColor: { value: new THREE.Color(0x88b4ff) },
+      uFillIntensity: { value: 0.26 },
       uCloudLitColor: { value: new THREE.Color(0xfffcf5) },
       uCloudShadowColor: { value: new THREE.Color(0x88a4c7) },
       uDayFactor: { value: 1.0 },
@@ -369,154 +459,384 @@ export class World {
       uRainFactor: { value: 0.0 },
       uFogNear: { value: 45.0 },
       uFogFar: { value: 110.0 },
+      uShadowMap0: { value: this._dummyShadowTex },
+      uShadowMap1: { value: this._dummyShadowTex },
+      uShadowMatrix0: { value: new THREE.Matrix4() },
+      uShadowMatrix1: { value: new THREE.Matrix4() },
+      uShadowTexel0: { value: 1 / 2048 },
+      uShadowTexel1: { value: 1 / 1024 },
+      uShadowsOn: { value: this.shaderMode === 'low' ? 0.0 : 1.0 },
+      uHasFarCascade: { value: (this.shaderMode === 'high' || this.shaderMode === 'ultra') ? 1.0 : 0.0 },
+      uShadowSoftness: { value: this.shaderMode === 'ultra' ? 1.55 : (this.shaderMode === 'high' ? 1.3 : 1.05) },
+      uDynLightPos: { value: this._dynLightPos },
+      uDynLightCol: { value: this._dynLightCol },
       uLodInnerCenter: { value: new THREE.Vector2(0, 0) },
       uLodInnerRadiusSq: { value: 0.0 },
       uLodBlendInner: { value: 0.0 },
       uLodBlendOuter: { value: 14.0 }
     };
 
-    // 1. Opaque Terrain Material — Greedy Atlas Tiling + 20x BSL Atmospheric Lighting, Specular Rim, Underwater Caustics & Emissive Bloom!
-    this.opaqueMat = new THREE.MeshLambertMaterial({
+    // Shared Alpha-Tested Depth Material so tree canopies, leaves, fences, doors & glass frames cast authentic shadows!
+    this.cutoutDepthMat = new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
       map: this.textures.atlasTexture,
-      vertexColors: true
+      alphaTest: 0.35,
+      side: THREE.DoubleSide
     });
-    this.opaqueMat.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, {
-        uTime: this.shaderUniforms.uTime,
-        uShaderOn: this.shaderUniforms.uShaderOn,
-        uSunDir: this.shaderUniforms.uSunDir,
-        uMoonDir: this.shaderUniforms.uMoonDir,
-        uSunColor: this.shaderUniforms.uSunColor,
-        uHorizonColor: this.shaderUniforms.uHorizonColor,
-        uSunsetColor: this.shaderUniforms.uSunsetColor,
-        uDayFactor: this.shaderUniforms.uDayFactor,
-        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
-        uFogNear: this.shaderUniforms.uFogNear,
-        uFogFar: this.shaderUniforms.uFogFar
-      });
-      shader.vertexShader = `
+
+    // Shared RTX-Quality 2-Cascade CSM Soft Shadow + Natural Sky/Sun Lighting GLSL Chunk
+    const CSM_LIGHTING_GLSL = `
+      #include <packing>
+      uniform sampler2D uAtlas;
+      uniform sampler2D uNormalAtlas;
+      uniform sampler2D uPbrAtlas;
+      uniform float uPbrOn;
+      uniform float uWetness;
+      uniform sampler2D uShadowMap0;
+      uniform sampler2D uShadowMap1;
+      uniform mat4 uShadowMatrix0;
+      uniform mat4 uShadowMatrix1;
+      uniform float uShadowTexel0;
+      uniform float uShadowTexel1;
+      uniform float uShadowsOn;
+      uniform float uHasFarCascade;
+      uniform float uShadowSoftness;
+      uniform float uTime;
+      uniform float uShaderOn;
+      uniform vec3 uSunDir;
+      uniform vec3 uMoonDir;
+      uniform vec3 uShadowDir;
+      uniform vec3 uSunColor;
+      uniform vec3 uSunLightColor;
+      uniform float uSunLightIntensity;
+      uniform vec3 uHemiSkyColor;
+      uniform vec3 uHemiGroundColor;
+      uniform float uHemiIntensity;
+      uniform vec3 uFillColor;
+      uniform float uFillIntensity;
+      uniform vec3 uTopColor;
+      uniform vec3 uMidColor;
+      uniform vec3 uHorizonColor;
+      uniform vec3 uSunsetColor;
+      uniform float uDayFactor;
+      uniform float uSunsetFactor;
+      uniform float uFogNear;
+      uniform float uFogFar;
+      uniform vec4 uDynLightPos[8];
+      uniform vec4 uDynLightCol[8];
+
+      // Cook-Torrance GGX PBR Microfacet BRDF (Metallic Iron/Gold, Crystalline Diamond/Ores, Bevelled Stone Bricks!)
+      float D_GGX(float NoH, float rough) {
+        float a = rough * rough;
+        float a2 = a * a;
+        float d = (NoH * NoH) * (a2 - 1.0) + 1.0;
+        return a2 / max(3.14159265 * d * d, 0.0005);
+      }
+      float G_SchlickGGX(float NoV, float NoL, float rough) {
+        float k = (rough + 1.0);
+        k = (k * k) * 0.125;
+        float gv = NoV / (NoV * (1.0 - k) + k);
+        float gl = NoL / (NoL * (1.0 - k) + k);
+        return gv * gl;
+      }
+      vec3 F_Schlick(float HoV, vec3 F0) {
+        float om = clamp(1.0 - HoV, 0.0, 1.0);
+        float om2 = om * om;
+        return F0 + (1.0 - F0) * (om2 * om2 * om);
+      }
+
+      // Compute analytic tangent-space normal perturbation from LabPBR normalAtlas (ZERO extra vertex attributes!)
+      vec3 perturbVoxelNormal(vec3 geomN, vec2 atlasUv, float dist) {
+        float normalFade = 1.0 - smoothstep(26.0, 68.0, dist);
+        if (uPbrOn < 0.5 || normalFade < 0.01) return geomN;
+        vec3 mapN = texture2D(uNormalAtlas, atlasUv).xyz * 2.0 - 1.0;
+        mapN.xy *= normalFade * 0.92;
+        vec3 T = abs(geomN.y) > 0.5
+          ? vec3(1.0, 0.0, 0.0)
+          : (abs(geomN.x) > 0.5 ? vec3(0.0, 0.0, -sign(geomN.x)) : vec3(sign(geomN.z), 0.0, 0.0));
+        vec3 B = normalize(cross(geomN, T));
+        return normalize(T * mapN.x + B * mapN.y + geomN * max(0.2, mapN.z));
+      }
+
+      // Procedural Sky-Dome Environment Reflection for Metals, Glass, Ice, Wet Stone & Glossed Bricks!
+      vec3 sampleEnvIBL(vec3 R, float rough, float skyVis) {
+        float rY = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 skyEnv = mix(uHemiGroundColor * 0.75, uHorizonColor, smoothstep(0.32, 0.54, rY));
+        skyEnv = mix(skyEnv, uMidColor, smoothstep(0.54, 0.78, rY));
+        skyEnv = mix(skyEnv, uTopColor, smoothstep(0.76, 1.0, rY));
+        // Roughness-blur approximation mixes toward hemisphere average
+        vec3 diffEnv = mix(uHemiGroundColor, uHemiSkyColor, rY) * uHemiIntensity * 0.65;
+        vec3 env = mix(skyEnv, diffEnv, rough * rough);
+        return env * (skyVis * skyVis * 0.92 + 0.06);
+      }
+
+      float csmIgn(vec2 p) {
+        return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+      }
+
+      float samplePoissonShadow(sampler2D sMap, vec3 sc, float texelSize, float spread, float bias) {
+        if (sc.z >= 1.0 || sc.z <= 0.0) return 1.0;
+        float ang = csmIgn(gl_FragCoord.xy) * 6.2831853;
+        float ca = cos(ang), sa = sin(ang);
+        mat2 rot = mat2(ca, -sa, sa, ca);
+        float r = texelSize * spread;
+        float cmpZ = sc.z - bias;
+        float lit = 0.0;
+        // 8-tap rotated Poisson disk (velvety soft penumbra, zero grid banding!)
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.613,  0.617)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.170, -0.040)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.299, -0.791)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.645,  0.532)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.921, -0.152)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.892, -0.341)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.118,  0.945)) * r)));
+        lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.356, -0.822)) * r)));
+        return lit * 0.125;
+      }
+
+      float computeCSMShadow(vec3 worldPos, vec3 N, bool isFoliage) {
+        if (uShadowsOn < 0.5) return 1.0;
+        vec3 Ls = normalize(uShadowDir);
+        float ndl = dot(N, Ls);
+        float slope = clamp(1.0 - max(0.0, ndl), 0.0, 1.0);
+        // Slope-scaled world-normal offset eliminates shadow acne & Peter-Panning on voxel edges!
+        vec3 offNear = isFoliage ? (Ls * 0.07) : (N * (0.042 + 0.088 * slope) + Ls * 0.022);
+        vec4 p0 = uShadowMatrix0 * vec4(worldPos + offNear, 1.0);
+        vec3 sc0 = p0.xyz / p0.w;
+        float edge0 = max(abs(sc0.x - 0.5), abs(sc0.y - 0.5));
+        bool inNear = edge0 < 0.495 && sc0.z > 0.0 && sc0.z < 1.0;
+
+        float sNear = inNear
+          ? samplePoissonShadow(uShadowMap0, sc0, uShadowTexel0, uShadowSoftness * 1.35, 0.00055 + 0.0008 * slope)
+          : 1.0;
+
+        if (uHasFarCascade < 0.5) {
+          float fadeOut = smoothstep(0.40, 0.495, edge0);
+          return mix(sNear, 1.0, fadeOut);
+        }
+
+        // Smooth feather blend between Cascade 0 (Near ±26m) and Cascade 1 (Far ±92m)
+        float blendFar = smoothstep(0.37, 0.49, edge0);
+        if (blendFar < 0.005) return sNear;
+
+        vec3 offFar = isFoliage ? (Ls * 0.14) : (N * (0.12 + 0.20 * slope) + Ls * 0.05);
+        vec4 p1 = uShadowMatrix1 * vec4(worldPos + offFar, 1.0);
+        vec3 sc1 = p1.xyz / p1.w;
+        float edge1 = max(abs(sc1.x - 0.5), abs(sc1.y - 0.5));
+        float sFar = (edge1 < 0.495 && sc1.z > 0.0 && sc1.z < 1.0)
+          ? samplePoissonShadow(uShadowMap1, sc1, uShadowTexel1, uShadowSoftness * 1.15, 0.0011 + 0.0014 * slope)
+          : 1.0;
+        sFar = mix(sFar, 1.0, smoothstep(0.42, 0.495, edge1));
+        return mix(sNear, sFar, blendFar);
+      }
+
+      vec3 computeDynamicPointLights(vec3 worldPos, vec3 N) {
+        // Lightweight 3-light hero flicker accent (Voxel GI handles wall-occluded colored radiance for ALL lights!)
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < 3; i++) {
+          float inten = uDynLightCol[i].w;
+          if (inten <= 0.001) continue;
+          vec3 toL = uDynLightPos[i].xyz - worldPos;
+          float d2 = dot(toL, toL);
+          float maxR = uDynLightPos[i].w;
+          if (d2 >= maxR * maxR) continue;
+          float d = sqrt(d2);
+          float fall = clamp(1.0 - d / maxR, 0.0, 1.0);
+          float atten = (fall * fall) / (1.0 + d2 * 0.14);
+          float ndl = max(0.15, dot(N, toL / max(d, 0.001)));
+          acc += uDynLightCol[i].rgb * (inten * atten * ndl * 0.08);
+        }
+        return acc;
+      }
+    `;
+
+    // 1. Opaque Terrain Material — Greedy Atlas Tiling + 2-Cascade CSM + 3D Voxel Global Illumination (Colored Emissives & 1-Bounce Color Bleed)!
+    this.opaqueMat = new THREE.ShaderMaterial({
+      uniforms: this.shaderUniforms,
+      vertexShader: `
         attribute vec4 aTile;
+        attribute vec3 color;
+        attribute vec3 aBlockLight;
+        attribute vec3 aBounceLight;
         varying vec4 vTile;
         varying vec2 vLocalUv;
         varying vec3 vWorldPos;
         varying vec3 vWorldNorm;
-        varying float vEmissive;
-      ` + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         vWorldPos = position;
-         vWorldNorm = normal;
-         vLocalUv = uv;
-         vTile = aTile;
-         vEmissive = max(0.0, color.r - 1.04);`
-      );
-      shader.fragmentShader = `
-        uniform float uTime;
-        uniform float uShaderOn;
-        uniform vec3 uSunDir;
-        uniform vec3 uMoonDir;
-        uniform vec3 uSunColor;
-        uniform vec3 uHorizonColor;
-        uniform vec3 uSunsetColor;
-        uniform float uDayFactor;
-        uniform float uSunsetFactor;
-        uniform float uFogNear;
-        uniform float uFogFar;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
+        void main() {
+          vWorldPos = position;
+          vWorldNorm = normal;
+          vLocalUv = uv;
+          vTile = aTile;
+          vColor = color;
+          vBlockLight = aBlockLight;
+          vBounceLight = aBounceLight;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        ${CSM_LIGHTING_GLSL}
         varying vec4 vTile;
         varying vec2 vLocalUv;
         varying vec3 vWorldPos;
         varying vec3 vWorldNorm;
-        varying float vEmissive;
-      ` + shader.fragmentShader;
-      // Seamless Greedy-Mesh Atlas Wrapping (zero tile bleeding at any quad size!)
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <map_fragment>',
-        `#ifdef USE_MAP
-           vec2 wrappedUv = vTile.z < 0.99
-             ? (vTile.xy + clamp(fract(vLocalUv), 0.004, 0.996) * vTile.zw)
-             : vLocalUv;
-           vec4 sampledDiffuseColor = texture2D( map, wrappedUv );
-           diffuseColor *= sampledDiffuseColor;
-         #endif`
-      );
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <fog_fragment>',
-        `if (uShaderOn > 0.5) {
-           vec3 viewVec = vWorldPos - cameraPosition;
-           float dist = length(viewVec);
-           vec3 viewDir = viewVec / max(dist, 0.001);
-           vec3 N = normalize(vWorldNorm);
-           vec3 L = normalize(uSunDir);
-           vec3 V = -viewDir;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
 
-           // Complementary / BSL Dramatic Golden Sunlight vs Cool Periwinkle Shadows + Sapphire Moonlight Rim!
-           float ndl = dot(N, L);
-           float sunLit = smoothstep(-0.22, 0.58, ndl);
-           vec3 warmSunTint = mix(vec3(1.10, 1.04, 0.94), vec3(1.34, 1.02, 0.78), uSunsetFactor);
-           vec3 coolShadowTint = mix(vec3(0.84, 0.91, 1.09), vec3(0.92, 0.98, 1.10), uDayFactor);
-           gl_FragColor.rgb *= mix(coolShadowTint, warmSunTint, sunLit * uDayFactor);
+        void main() {
+          vec2 wrappedUv = vTile.z < 0.99
+            ? (vTile.xy + clamp(fract(vLocalUv), 0.004, 0.996) * vTile.zw)
+            : vLocalUv;
+          vec4 tex = texture2D(uAtlas, wrappedUv);
+          vec3 albedo = tex.rgb;
+          vec3 geomN = normalize(vWorldNorm);
+          vec3 L = normalize(uSunDir);
+          vec3 M = normalize(uMoonDir);
+          vec3 activeL = uDayFactor > 0.08 ? L : M;
+          vec3 viewVec = vWorldPos - cameraPosition;
+          float dist = length(viewVec);
+          vec3 viewDir = viewVec / max(dist, 0.001);
+          vec3 V = -viewDir;
 
-           // Gentle outdoor sky ambient bounce lift in shadowed areas (only above caves)
-           float outdoorLift = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
-           gl_FragColor.rgb += uHorizonColor * 0.042 * uDayFactor * outdoorLift * (1.0 - sunLit * 0.65);
+          // Unpack 3D Voxel GI Channels
+          float ao = clamp(vColor.r, 0.25, 1.15);
+          float skyVis = clamp(vColor.g, 0.0, 1.0);
+          float vEmit = clamp(vColor.b, 0.0, 1.0);
+          float outdoorMask = smoothstep(0.05, 0.45, skyVis);
 
-           // Cool Sapphire-Cyan Moonlight Key & Silhouette Rim Lighting at Night (Image 4!)
-           float nightAmt = clamp(1.0 - uDayFactor * 1.5, 0.0, 1.0) * outdoorLift;
-           if (nightAmt > 0.01) {
-             vec3 M = normalize(uMoonDir);
-             float moonLit = smoothstep(-0.15, 0.65, dot(N, M));
-             float rimN = pow(1.0 - max(0.0, dot(N, V)), 2.8);
-             gl_FragColor.rgb += vec3(0.16, 0.34, 0.68) * (moonLit * 0.32 + rimN * 0.24) * nightAmt;
-           }
+          // Sample LabPBR Material Atlas (Roughness, Metalness, Reflectivity F0, Per-Texel Emission) + Tangent Normal Map!
+          vec4 pbr = uPbrOn > 0.5 ? texture2D(uPbrAtlas, wrappedUv) : vec4(0.88, 0.0, 0.04, 0.0);
+          float roughness = clamp(pbr.r, 0.06, 0.98);
+          float metalness = pbr.g;
+          float f0Scalar = clamp(pbr.b, 0.02, 0.95);
+          float emissive = max(vEmit * max(0.35, pbr.a), pbr.a * step(0.45, pbr.a));
+          vec3 N = perturbVoxelNormal(geomN, wrappedUv, dist);
 
-           // Crisp Sun-Rim Specular Sheen
-           vec3 H = normalize(V + L);
-           float nh = max(0.0, dot(N, H));
-           float nh2 = nh * nh;
-           float nh4 = nh2 * nh2;
-           float nh16 = nh4 * nh4 * nh4 * nh4;
-           float spec = nh16 * sunLit * uDayFactor * (0.11 + 0.18 * uSunsetFactor);
-           gl_FragColor.rgb += uSunColor * spec * (1.0 - smoothstep(40.0, 160.0, dist) * 0.65);
+          // Dynamic Weather Rain Wetness & Puddles on outdoor top faces!
+          if (uPbrOn > 0.5 && uWetness > 0.01 && skyVis > 0.65) {
+            float pWave = sin(vWorldPos.x * 0.45) * cos(vWorldPos.z * 0.45) + sin((vWorldPos.x + vWorldPos.z) * 0.9) * 0.5;
+            float puddle = smoothstep(-0.15, 0.65, pWave) * smoothstep(0.5, 0.95, geomN.y);
+            float wetAmt = uWetness * (0.45 + 0.55 * puddle) * smoothstep(0.65, 0.95, skyVis);
+            roughness = mix(roughness, 0.12, wetAmt * 0.85);
+            f0Scalar = mix(f0Scalar, 0.16, wetAmt * 0.5);
+            albedo *= (1.0 - 0.18 * wetAmt * (1.0 - metalness));
+            if (puddle > 0.35) N = normalize(mix(N, geomN, puddle * uWetness * 0.72));
+          }
 
-           // Shimmering Underwater Caustics projected onto submerged terrain!
-           if (vWorldPos.y < ${SEA_LEVEL}.05 && N.y > 0.25 && uDayFactor > 0.05) {
-             float dSub = ${SEA_LEVEL}.05 - vWorldPos.y;
-             float depthFade = smoothstep(0.0, 1.8, dSub) * smoothstep(18.0, 2.0, dSub);
-             float c1 = sin(vWorldPos.x * 2.1 + uTime * 2.0 + vWorldPos.z * 0.9);
-             float c2 = cos(vWorldPos.z * 2.3 - uTime * 1.8 - vWorldPos.x * 0.8);
-             float cSum = max(0.0, (c1 + c2) * 0.5);
-             gl_FragColor.rgb += vec3(0.20, 0.48, 0.54) * (cSum * cSum * cSum) * depthFade * uDayFactor * 0.72;
-           }
+          // 2-Cascade Rotated Poisson PCF Shadow (using geometric normal for acne-free bias, occluded in caves by skyVis!)
+          float shadow = computeCSMShadow(vWorldPos, geomN, false) * smoothstep(0.08, 0.55, skyVis);
+          float ndl = max(0.0, dot(N, activeL));
+          float directTerm = ndl * shadow;
 
-           // Blazing HDR Torch, Glowstone & Lava Emissive Radiance (triggers warm halo in PostFX Bloom!)
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.15, 0.80, 0.30) * vEmissive * 3.9;
-           }
+          vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, N.y * 0.5 + 0.5) * uHemiIntensity;
+          float fillNdl = max(0.0, dot(N, normalize(vec3(-activeL.x, 0.55, -activeL.z))));
+          vec3 fill = uFillColor * (uFillIntensity * (0.35 + 0.65 * fillNdl));
 
-           // Dreamy Low-Altitude Atmospheric Valley Mist + Volumetric Sun-Aligned Horizon Haze (Images 3 & 4!)
-           float sa = max(0.0, dot(viewDir, L));
-           float sunAlign = sa * sa * sa;
-           float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
-           float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorLift * mix(0.42, 0.52, uSunsetFactor) * (1.0 - smoothstep(180.0, 320.0, dist) * 0.35);
-           vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
-           vec3 mistNight = vec3(0.11, 0.28, 0.58);
-           vec3 mistCol = mix(mistNight, mistDay, uDayFactor);
-           mistCol = mix(mistCol, uSunsetColor * 1.15, sunAlign * uSunsetFactor * 0.45);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, mistCol, clamp(valleyMist, 0.0, 0.62));
+          // Physically-Based Diffuse vs Metallic Energy Conservation
+          vec3 F0 = mix(vec3(f0Scalar), albedo, metalness);
+          vec3 diffAlbedo = albedo * (1.0 - metalness * 0.82);
 
-           float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist) * outdoorLift;
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
-         } else {
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.76, 0.30) * vEmissive * 3.1;
-           }
-           #include <fog_fragment>
-         }`
-      );
-    };
+          vec3 directLight = uSunLightColor * (uSunLightIntensity * directTerm * 0.96);
+          vec3 skyIndirect = (hemi * 0.72 + fill * 0.45) * (skyVis * skyVis * 0.88 + 0.045) * ao;
+          vec3 bounceGI = vBounceLight * uSunColor * (0.52 * uDayFactor * (0.35 + 0.65 * (1.0 - directTerm * 0.5))) * ao;
+          vec3 blockGI = (vBlockLight * vBlockLight * 2.28 + vBlockLight * 0.24) * mix(0.65, 1.0, ao);
+          vec3 localFlicker = computeDynamicPointLights(vWorldPos, N);
+
+          vec3 lit = diffAlbedo * (directLight * mix(0.55, 1.0, ao) + skyIndirect + bounceGI + blockGI + localFlicker);
+
+          if (uShaderOn > 0.5) {
+            float litFactor = clamp(directTerm * uDayFactor, 0.0, 1.0);
+            vec3 warmSunTint = mix(vec3(1.07, 1.03, 0.95), vec3(1.26, 1.00, 0.78), uSunsetFactor);
+            vec3 coolShadowTint = mix(vec3(0.86, 0.92, 1.08), vec3(0.92, 0.96, 1.06), uDayFactor);
+            float blkStrength = clamp(dot(vBlockLight, vec3(0.4, 0.4, 0.4)), 0.0, 1.0);
+            lit *= mix(mix(coolShadowTint, warmSunTint, litFactor), vec3(1.0), blkStrength * 0.75);
+
+            // Subtle Outdoor Sky Bounce Lift
+            lit += diffAlbedo * uHorizonColor * (0.042 * uDayFactor * outdoorMask * (1.0 - litFactor * 0.65) * ao * skyVis);
+
+            // Cool Sapphire Moonlight Silhouette Rim at Night
+            float nightAmt = clamp(1.0 - uDayFactor * 1.5, 0.0, 1.0) * outdoorMask;
+            if (nightAmt > 0.01) {
+              float moonLit = smoothstep(-0.15, 0.65, dot(N, M)) * (0.30 + 0.70 * shadow);
+              float rimN = pow(1.0 - max(0.0, dot(N, V)), 2.8);
+              lit += diffAlbedo * vec3(0.18, 0.36, 0.72) * (moonLit * 0.38 + rimN * 0.24) * nightAmt;
+            }
+
+            // Cook-Torrance GGX Direct Specular + Sky IBL Reflection + Colored GI Specular Sheen (Image 2!)
+            if (uPbrOn > 0.5) {
+              float NoV = max(0.001, dot(N, V));
+              float NoL = max(0.0, dot(N, activeL));
+              vec3 H = normalize(V + activeL);
+              float NoH = max(0.0, dot(N, H));
+              float HoV = max(0.0, dot(H, V));
+
+              if (NoL > 0.001 && shadow > 0.005) {
+                float D = D_GGX(NoH, roughness);
+                float G = G_SchlickGGX(NoV, NoL, roughness);
+                vec3 F = F_Schlick(HoV, F0);
+                vec3 specBRDF = (D * G * F) / max(4.0 * NoV * NoL, 0.004);
+                float specFade = 1.0 - smoothstep(55.0, 175.0, dist) * 0.65;
+                lit += min(specBRDF * uSunLightColor * (uSunLightIntensity * NoL * shadow * 0.65), vec3(4.0)) * specFade;
+              }
+
+              // Environment IBL Reflection (Iron/Gold/Diamond metallic gleam + wet stone/brick Fresnel!)
+              vec3 R = reflect(-V, N);
+              vec3 envCol = sampleEnvIBL(R, roughness, skyVis);
+              vec3 F_env = F_Schlick(NoV, F0) * (1.0 - roughness * 0.72);
+              lit += envCol * F_env * ao * (0.45 + 0.75 * metalness);
+
+              // Colored Voxel GI Specular Reflection across bevelled stone bricks & metals (Image 2 glowstone/diamond/lava sheen!)
+              float smoothSpec = pow(1.0 - roughness, 2.2) * (0.28 + 0.72 * pow(1.0 - NoV, 2.4));
+              lit += (vBlockLight * vBlockLight) * mix(vec3(1.0), albedo, metalness) * smoothSpec * 1.15 * ao;
+            }
+
+            // Shimmering Underwater Caustics on Submerged Riverbeds & Ocean Floors
+            if (vWorldPos.y < ${SEA_LEVEL}.05 && geomN.y > 0.25 && uDayFactor > 0.05) {
+              float dSub = ${SEA_LEVEL}.05 - vWorldPos.y;
+              float depthFade = smoothstep(0.0, 1.8, dSub) * smoothstep(20.0, 2.0, dSub);
+              float c1 = sin(vWorldPos.x * 2.1 + uTime * 2.0 + vWorldPos.z * 0.9);
+              float c2 = cos(vWorldPos.z * 2.3 - uTime * 1.8 - vWorldPos.x * 0.8);
+              float cSum = max(0.0, (c1 + c2) * 0.5);
+              lit += vec3(0.22, 0.50, 0.56) * (cSum * cSum * cSum) * depthFade * uDayFactor * (0.35 + 0.65 * shadow) * 0.78;
+            }
+
+            // Colored HDR Self-Emissive Radiance (Gold Glowstone, Molten Lava, Cyan Diamond, Warm Torch!)
+            if (emissive > 0.01) {
+              lit += (albedo * 1.45 + vBlockLight * 2.35) * emissive;
+            }
+
+            // Low-Altitude Atmospheric Valley Mist + Volumetric Sun-Aligned Haze
+            float sa = max(0.0, dot(viewDir, L));
+            float sunAlign = sa * sa * sa;
+            float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
+            float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorMask * mix(0.38, 0.48, uSunsetFactor) * (1.0 - smoothstep(180.0, 320.0, dist) * 0.35);
+            vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
+            vec3 mistNight = vec3(0.11, 0.28, 0.58);
+            vec3 mistCol = mix(mistNight, mistDay, uDayFactor);
+            mistCol = mix(mistCol, uSunsetColor * 1.15, sunAlign * uSunsetFactor * 0.45);
+            lit = mix(lit, mistCol, clamp(valleyMist, 0.0, 0.58));
+
+            float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist) * outdoorMask;
+            vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+            atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
+            lit = mix(lit, atmFog, hazeFactor);
+          } else {
+            if (emissive > 0.01) {
+              lit += (albedo * 1.1 + vBlockLight * 1.8) * emissive;
+            }
+            float fogF = smoothstep(uFogNear, uFogFar, dist);
+            lit = mix(lit, uHorizonColor, fogF);
+          }
+
+          gl_FragColor = vec4(lit, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `
+    });
 
     // 1b. Distant Horizons 512-Chunk High-Detail LOD Terrain Materials
     // Dual-material iPad/Apple TBDR optimization:
@@ -728,154 +1048,196 @@ export class World {
     this.lodMat = buildLodMat(true);
     this.lodMatOuter = buildLodMat(false);
 
-    // 2. Cutout Foliage Material — Root-anchored Wind Sway + Sunlit Backlighting + Atmospheric Haze
-    this.cutoutMat = new THREE.MeshLambertMaterial({
-      map: this.textures.atlasTexture,
-      vertexColors: true,
-      alphaTest: 0.35,
-      side: THREE.DoubleSide
-    });
-    this.cutoutMat.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, {
-        uTime: this.shaderUniforms.uTime,
-        uWaveStrength: this.shaderUniforms.uWaveStrength,
-        uShaderOn: this.shaderUniforms.uShaderOn,
-        uSunDir: this.shaderUniforms.uSunDir,
-        uSunColor: this.shaderUniforms.uSunColor,
-        uHorizonColor: this.shaderUniforms.uHorizonColor,
-        uSunsetColor: this.shaderUniforms.uSunsetColor,
-        uDayFactor: this.shaderUniforms.uDayFactor,
-        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
-        uFogNear: this.shaderUniforms.uFogNear,
-        uFogFar: this.shaderUniforms.uFogFar
-      });
-      shader.vertexShader = `
+    // 2. Cutout Foliage Material — Root-Anchored Wind Sway + 2-Cascade CSM + 3D Voxel GI + Subsurface Backlighting!
+    this.cutoutMat = new THREE.ShaderMaterial({
+      uniforms: this.shaderUniforms,
+      side: THREE.DoubleSide,
+      vertexShader: `
+        attribute vec3 color;
+        attribute vec3 aBlockLight;
+        attribute vec3 aBounceLight;
         uniform float uTime;
         uniform float uWaveStrength;
+        varying vec2 vLocalUv;
         varying vec3 vWorldPos;
-        varying float vEmissive;
-      ` + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         if (uWaveStrength > 0.01) {
-           float fy = fract(position.y + 0.001);
-           // Grass/flower roots (fy ~ 0.02) stay planted; tips (fy ~ 0.9) sway richly; leaf blocks (fy ~ 0.0) rustle softly!
-           float swayWeight = (fy > 0.01 && fy < 0.12) ? 0.0 : (fy >= 0.12 ? 1.0 : 0.28);
-           float gust = 0.72 + 0.28 * sin(uTime * 0.85 + position.x * 0.12 - position.z * 0.1);
-           float swayX = sin(uTime * 2.2 + position.x * 0.75 + position.z * 0.55) * 0.055 * uWaveStrength * gust * swayWeight;
-           float swayZ = cos(uTime * 1.85 + position.z * 0.7 - position.x * 0.45) * 0.04 * uWaveStrength * gust * swayWeight;
-           transformed.x += swayX;
-           transformed.z += swayZ;
-         }
-         vWorldPos = transformed;
-         vEmissive = max(0.0, color.r - 1.04);`
-      );
-      shader.fragmentShader = `
-        uniform float uShaderOn;
-        uniform vec3 uSunDir;
-        uniform vec3 uSunColor;
-        uniform vec3 uHorizonColor;
-        uniform vec3 uSunsetColor;
-        uniform float uDayFactor;
-        uniform float uSunsetFactor;
-        uniform float uFogNear;
-        uniform float uFogFar;
+        varying vec3 vWorldNorm;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
+        void main() {
+          vec3 p = position;
+          if (uWaveStrength > 0.01) {
+            float fy = fract(p.y + 0.001);
+            float swayWeight = (fy > 0.01 && fy < 0.12) ? 0.0 : (fy >= 0.12 ? 1.0 : 0.28);
+            float gust = 0.72 + 0.28 * sin(uTime * 0.85 + p.x * 0.12 - p.z * 0.1);
+            p.x += sin(uTime * 2.2 + p.x * 0.75 + p.z * 0.55) * 0.055 * uWaveStrength * gust * swayWeight;
+            p.z += cos(uTime * 1.85 + p.z * 0.7 - p.x * 0.45) * 0.04 * uWaveStrength * gust * swayWeight;
+          }
+          vWorldPos = p;
+          vWorldNorm = normal;
+          vLocalUv = uv;
+          vColor = color;
+          vBlockLight = aBlockLight;
+          vBounceLight = aBounceLight;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+        }
+      `,
+      fragmentShader: `
+        ${CSM_LIGHTING_GLSL}
+        varying vec2 vLocalUv;
         varying vec3 vWorldPos;
-        varying float vEmissive;
-      ` + shader.fragmentShader;
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <fog_fragment>',
-        `if (uShaderOn > 0.5) {
-           vec3 viewVec = vWorldPos - cameraPosition;
-           float dist = length(viewVec);
-           vec3 viewDir = viewVec / max(dist, 0.001);
-           float sa = max(0.0, dot(viewDir, normalize(uSunDir)));
-           float sunAlign = sa * sa * sa;
-           // Lush translucent backlit leaves & sunlit grass glow!
-           float sss = sunAlign * (0.36 + 0.28 * uSunsetFactor) * uDayFactor;
-           gl_FragColor.rgb += gl_FragColor.rgb * uSunColor * sss;
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.15, 0.80, 0.30) * vEmissive * 3.4;
-           }
-           float outdoorLift = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
-           float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
-           float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorLift * mix(0.40, 0.50, uSunsetFactor);
-           vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
-           vec3 mistCol = mix(vec3(0.11, 0.28, 0.58), mistDay, uDayFactor);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, mistCol, clamp(valleyMist, 0.0, 0.58));
+        varying vec3 vWorldNorm;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
+        void main() {
+          vec4 tex = texture2D(uAtlas, vLocalUv);
+          if (tex.a < 0.35) discard;
+          vec3 albedo = tex.rgb;
+          vec3 N = normalize(gl_FrontFacing ? vWorldNorm : -vWorldNorm);
+          vec3 L = normalize(uSunDir);
+          vec3 activeL = uDayFactor > 0.08 ? L : normalize(uMoonDir);
+          vec3 viewVec = vWorldPos - cameraPosition;
+          float dist = length(viewVec);
+          vec3 viewDir = viewVec / max(dist, 0.001);
+          float ao = clamp(vColor.r, 0.25, 1.15);
+          float skyVis = clamp(vColor.g, 0.0, 1.0);
+          float emissive = clamp(vColor.b, 0.0, 1.0);
 
-           float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist) * outdoorLift;
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.45);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
-         } else {
-           #include <fog_fragment>
-         }`
-      );
-    };
+          float shadow = computeCSMShadow(vWorldPos, N, true) * smoothstep(0.06, 0.45, skyVis);
+          float ndl = clamp(dot(N, activeL) * 0.65 + 0.35, 0.0, 1.0);
+          vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, 0.68) * uHemiIntensity;
+          vec3 directLight = uSunLightColor * (uSunLightIntensity * ndl * (0.20 + 0.80 * shadow) * 0.90);
+          vec3 skyIndirect = hemi * (skyVis * skyVis * 0.82 + 0.05) * ao;
+          vec3 bounceGI = vBounceLight * uSunColor * (0.45 * uDayFactor) * ao;
+          vec3 blockGI = (vBlockLight * vBlockLight * 2.15 + vBlockLight * 0.20) * ao;
+          vec3 localFlicker = computeDynamicPointLights(vWorldPos, N);
+          vec3 lit = albedo * (directLight * mix(0.55, 1.0, ao) + skyIndirect + bounceGI + blockGI + localFlicker);
 
-    // 2b. Static Cutout Material (Glass, Ice, Torches, Ladders — crisp, no wind sway, with emissive glow + haze)
-    this.staticCutoutMat = new THREE.MeshLambertMaterial({
-      map: this.textures.atlasTexture,
-      vertexColors: true,
-      alphaTest: 0.35,
-      side: THREE.DoubleSide
+          if (uShaderOn > 0.5) {
+            float sa = max(0.0, dot(viewDir, L));
+            float sunAlign = sa * sa * sa;
+            float sss = (sunAlign * (0.58 + 0.45 * uSunsetFactor) + 0.10 * shadow) * uDayFactor * (0.35 + 0.65 * shadow) * skyVis;
+            lit += albedo * uSunColor * sss;
+            if (emissive > 0.01) {
+              lit += (albedo * 1.3 + vBlockLight * 2.2) * emissive;
+            }
+            float outdoorLift = smoothstep(0.05, 0.45, skyVis);
+            float valleyH = exp(-max(0.0, vWorldPos.y - ${SEA_LEVEL - 2}.0) * 0.052);
+            float valleyMist = valleyH * smoothstep(24.0, 145.0, dist) * outdoorLift * mix(0.38, 0.48, uSunsetFactor);
+            vec3 mistDay = mix(uHorizonColor * 1.04, uSunColor * 1.24, sunAlign * (0.42 + 0.58 * uSunsetFactor));
+            vec3 mistCol = mix(vec3(0.11, 0.28, 0.58), mistDay, uDayFactor);
+            lit = mix(lit, mistCol, clamp(valleyMist, 0.0, 0.56));
+
+            float hazeFactor = smoothstep(uFogNear * 0.48, uFogFar, dist) * outdoorLift;
+            vec3 atmFog = mix(uHorizonColor, uSunColor * 1.15, sunAlign * (0.36 + 0.62 * uSunsetFactor) * uDayFactor);
+            atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.45);
+            lit = mix(lit, atmFog, hazeFactor);
+          } else {
+            lit = mix(lit, uHorizonColor, smoothstep(uFogNear, uFogFar, dist));
+          }
+
+          gl_FragColor = vec4(lit, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `
     });
-    this.staticCutoutMat.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, {
-        uShaderOn: this.shaderUniforms.uShaderOn,
-        uSunDir: this.shaderUniforms.uSunDir,
-        uSunColor: this.shaderUniforms.uSunColor,
-        uHorizonColor: this.shaderUniforms.uHorizonColor,
-        uSunsetColor: this.shaderUniforms.uSunsetColor,
-        uDayFactor: this.shaderUniforms.uDayFactor,
-        uSunsetFactor: this.shaderUniforms.uSunsetFactor,
-        uFogNear: this.shaderUniforms.uFogNear,
-        uFogFar: this.shaderUniforms.uFogFar
-      });
-      shader.vertexShader = `
+
+    // 2b. Static Cutout Material (Glass, Ice, Torches, Ladders, Lava — crisp 2-Cascade CSM + 3D Voxel GI + HDR Emission!)
+    this.staticCutoutMat = new THREE.ShaderMaterial({
+      uniforms: this.shaderUniforms,
+      side: THREE.DoubleSide,
+      vertexShader: `
+        attribute vec3 color;
+        attribute vec3 aBlockLight;
+        attribute vec3 aBounceLight;
+        varying vec2 vLocalUv;
         varying vec3 vWorldPos;
-        varying float vEmissive;
-      ` + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         vWorldPos = position;
-         vEmissive = max(0.0, color.r - 1.04);`
-      );
-      shader.fragmentShader = `
-        uniform float uShaderOn;
-        uniform vec3 uSunDir;
-        uniform vec3 uSunColor;
-        uniform vec3 uHorizonColor;
-        uniform vec3 uSunsetColor;
-        uniform float uDayFactor;
-        uniform float uSunsetFactor;
-        uniform float uFogNear;
-        uniform float uFogFar;
+        varying vec3 vWorldNorm;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
+        void main() {
+          vWorldPos = position;
+          vWorldNorm = normal;
+          vLocalUv = uv;
+          vColor = color;
+          vBlockLight = aBlockLight;
+          vBounceLight = aBounceLight;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        ${CSM_LIGHTING_GLSL}
+        varying vec2 vLocalUv;
         varying vec3 vWorldPos;
-        varying float vEmissive;
-      ` + shader.fragmentShader;
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <fog_fragment>',
-        `if (uShaderOn > 0.5) {
-           vec3 viewVec = vWorldPos - cameraPosition;
-           float dist = length(viewVec);
-           vec3 viewDir = viewVec / max(dist, 0.001);
-           if (vEmissive > 0.01) {
-             gl_FragColor.rgb += vec3(1.0, 0.76, 0.32) * vEmissive * 2.8;
-           }
-           float sunAlign = pow(max(0.0, dot(viewDir, normalize(uSunDir))), 3.0);
-           float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist);
-           vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
-           atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
-           gl_FragColor.rgb = mix(gl_FragColor.rgb, atmFog, hazeFactor);
-         } else {
-           #include <fog_fragment>
-         }`
-      );
-    };
+        varying vec3 vWorldNorm;
+        varying vec3 vColor;
+        varying vec3 vBlockLight;
+        varying vec3 vBounceLight;
+        void main() {
+          vec4 tex = texture2D(uAtlas, vLocalUv);
+          if (tex.a < 0.35) discard;
+          vec3 albedo = tex.rgb;
+          vec3 geomN = normalize(gl_FrontFacing ? vWorldNorm : -vWorldNorm);
+          vec3 L = normalize(uSunDir);
+          vec3 activeL = uDayFactor > 0.08 ? L : normalize(uMoonDir);
+          vec3 viewVec = vWorldPos - cameraPosition;
+          float dist = length(viewVec);
+          vec3 viewDir = viewVec / max(dist, 0.001);
+          vec3 V = -viewDir;
+          float ao = clamp(vColor.r, 0.25, 1.15);
+          float skyVis = clamp(vColor.g, 0.0, 1.0);
+          vec4 pbr = uPbrOn > 0.5 ? texture2D(uPbrAtlas, vLocalUv) : vec4(0.85, 0.0, 0.05, 0.0);
+          float roughness = clamp(pbr.r, 0.06, 0.98);
+          float f0Scalar = clamp(pbr.b, 0.02, 0.95);
+          float emissive = max(clamp(vColor.b, 0.0, 1.0), pbr.a * step(0.45, pbr.a));
+          vec3 N = perturbVoxelNormal(geomN, vLocalUv, dist);
+
+          float shadow = computeCSMShadow(vWorldPos, geomN, false) * smoothstep(0.08, 0.55, skyVis);
+          float ndl = max(0.0, dot(N, activeL));
+          vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, N.y * 0.5 + 0.5) * uHemiIntensity;
+          vec3 directLight = uSunLightColor * (uSunLightIntensity * ndl * shadow * 0.92);
+          vec3 skyIndirect = hemi * (skyVis * skyVis * 0.85 + 0.045) * ao;
+          vec3 bounceGI = vBounceLight * uSunColor * (0.45 * uDayFactor) * ao;
+          vec3 blockGI = (vBlockLight * vBlockLight * 2.2 + vBlockLight * 0.22) * ao;
+          vec3 localFlicker = computeDynamicPointLights(vWorldPos, N);
+          vec3 lit = albedo * (directLight * mix(0.55, 1.0, ao) + skyIndirect + bounceGI + blockGI + localFlicker);
+
+          // Crisp Glass & Ice Fresnel Sky Reflections + Specular Glints!
+          if (uPbrOn > 0.5 && roughness < 0.35) {
+            float NoV = max(0.001, dot(N, V));
+            vec3 R = reflect(-V, N);
+            vec3 envCol = sampleEnvIBL(R, roughness, skyVis);
+            vec3 F = F_Schlick(NoV, vec3(f0Scalar));
+            lit += envCol * F * 0.85;
+            vec3 H = normalize(V + activeL);
+            float D = D_GGX(max(0.0, dot(N, H)), roughness);
+            lit += min(uSunLightColor * D * F * shadow * 0.22, vec3(3.0));
+          }
+
+          if (emissive > 0.01) {
+            lit += (albedo * 1.7 + vBlockLight * 2.5) * emissive;
+          }
+
+          if (uShaderOn > 0.5) {
+            float sa = max(0.0, dot(viewDir, L));
+            float sunAlign = sa * sa * sa;
+            float hazeFactor = smoothstep(uFogNear * 0.55, uFogFar, dist) * smoothstep(0.05, 0.45, skyVis);
+            vec3 atmFog = mix(uHorizonColor, uSunColor * 1.05, sunAlign * (0.28 + 0.52 * uSunsetFactor) * uDayFactor);
+            atmFog = mix(atmFog, uSunsetColor, sunAlign * uSunsetFactor * 0.35);
+            lit = mix(lit, atmFog, hazeFactor);
+          } else {
+            lit = mix(lit, uHorizonColor, smoothstep(uFogNear, uFogFar, dist));
+          }
+
+          gl_FragColor = vec4(lit, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `
+    });
 
     // 2c. Dedicated 10x Animated Pixel-Art Minecraft Fire Shader (roaring 16x16 flames + HDR glow + subtle sway!)
     this.fireMat = new THREE.ShaderMaterial({
@@ -986,7 +1348,7 @@ export class World {
       `
     });
 
-    // 3. Mirror-Like Glassy Sky, Cloud, Sun & Crescent-Moon Reflective Water Shader (Image 2!)
+    // 3. RTX / SEUS PTGI-Quality Realistic Water Shader (True SSR + Refraction + Beer-Lambert Depth Absorption + Multi-Octave Waves + Foam!)
     this.waterMat = new THREE.ShaderMaterial({
       uniforms: {
         uTime: this.shaderUniforms.uTime,
@@ -1003,11 +1365,19 @@ export class World {
         uSunsetFactor: this.shaderUniforms.uSunsetFactor,
         uRainFactor: this.shaderUniforms.uRainFactor,
         uFogNear: this.shaderUniforms.uFogNear,
-        uFogFar: this.shaderUniforms.uFogFar
+        uFogFar: this.shaderUniforms.uFogFar,
+        tOpaqueColor: { value: this._dummyShadowTex },
+        tOpaqueDepth: { value: this._dummyShadowTex },
+        uHasOpaqueCopy: { value: 0.0 },
+        uSsrSteps: { value: 0.0 },
+        uResolution: { value: new THREE.Vector2(1024, 768) },
+        uInvProjection: { value: new THREE.Matrix4() },
+        uProjection: { value: new THREE.Matrix4() },
+        uViewMatrix: { value: new THREE.Matrix4() }
       },
       transparent: true,
       side: THREE.DoubleSide,
-      depthWrite: false,
+      depthWrite: true,
       vertexShader: `
         varying vec3 vWorldPos;
         varying vec3 vBaseNormal;
@@ -1033,8 +1403,132 @@ export class World {
         uniform float uRainFactor;
         uniform float uFogNear;
         uniform float uFogFar;
+        uniform sampler2D tOpaqueColor;
+        uniform sampler2D tOpaqueDepth;
+        uniform float uHasOpaqueCopy;
+        uniform float uSsrSteps;
+        uniform vec2 uResolution;
+        uniform mat4 uInvProjection;
+        uniform mat4 uProjection;
+        uniform mat4 uViewMatrix;
         varying vec3 vWorldPos;
         varying vec3 vBaseNormal;
+
+        float wIgn(vec2 p) {
+          return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+        }
+
+        float wHash(vec2 p) {
+          p = fract(p * vec2(123.34, 456.21));
+          p += dot(p, p + 45.32);
+          return fract(p.x * p.y);
+        }
+
+        float wNoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(
+            mix(wHash(i), wHash(i + vec2(1.0, 0.0)), f.x),
+            mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), f.x),
+            f.y
+          );
+        }
+
+        // Smooth 3-octave animated wave heightfield (organic SEUS/RTX capillary + wind swell normals!)
+        float waterHeight(vec2 p, float t) {
+          float h = 0.0;
+          h += wNoise(p * 0.58 + vec2(t * 0.52, t * 0.31)) * 0.52;
+          h += wNoise(p * 1.45 - vec2(t * 0.74, -t * 0.48)) * 0.30;
+          h += wNoise(p * 3.20 + vec2(-t * 0.95, t * 0.85)) * 0.18;
+          if (uRainFactor > 0.05) {
+            h += sin(p.x * 9.0 + t * 7.0) * cos(p.y * 9.0 - t * 6.5) * 0.12 * uRainFactor;
+          }
+          return h;
+        }
+
+        vec3 reconstructViewPos(vec2 uv, float depth) {
+          vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+          vec4 vp = uInvProjection * ndc;
+          return vp.xyz / vp.w;
+        }
+
+        // Analytical Sky + Clouds + Sun/Moon reflection fallback (seamless when SSR ray leaves screen!)
+        vec3 sampleSkyReflection(vec3 R, vec3 sunDir, vec3 moonDir, float skyMask, float t) {
+          float rY = clamp(abs(R.y), 0.015, 1.0);
+          vec3 reflCol = mix(uHorizonColor * 1.06, uMidColor, smoothstep(0.0, 0.34, rY));
+          reflCol = mix(reflCol, uTopColor, smoothstep(0.24, 0.90, rY));
+
+          float rSun = max(0.0, dot(R, sunDir));
+          float rSun2 = rSun * rSun;
+          float rSun4 = rSun2 * rSun2;
+          float rSun16 = rSun4 * rSun4 * rSun4 * rSun4;
+          float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.82) * skyMask;
+          reflCol = mix(reflCol, uSunsetColor * 1.16, (1.0 - rY) * (0.36 + 0.64 * rSun2) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
+          reflCol += uSunColor * (rSun4 * 0.44 + rSun16 * 1.35) * sunUp;
+
+          // Reflected clouds matching the sky dome
+          vec2 cUv = (R.xz / (rY + 0.14)) * 0.36 + vec2(t * 0.007, t * 0.0025);
+          float cDens = wNoise(cUv * 1.4) * 0.65 + wNoise(cUv * 3.1) * 0.35;
+          float cMask = smoothstep(0.50, 0.76, cDens) * smoothstep(0.02, 0.22, rY) * (1.0 - rY * 0.5);
+          reflCol = mix(reflCol, uCloudLitColor * 1.06, cMask * 0.45 * (1.0 - uRainFactor * 0.4));
+          return reflCol;
+        }
+
+        // True Screen-Space Reflection (SSR) with binary hit refinement (reflects bridges, trees, cliffs & castles!)
+        vec4 traceSSR(vec3 waterViewPos, vec3 reflViewDir, float maxSteps) {
+          if (maxSteps < 1.0 || reflViewDir.z > 0.35) return vec4(0.0);
+          int steps = int(maxSteps);
+          float jitter = wIgn(gl_FragCoord.xy);
+          float stepDist = 0.42;
+          float curT = 0.18 + jitter * 0.28;
+          vec3 prevPos = waterViewPos;
+
+          for (int i = 0; i < 22; i++) {
+            if (i >= steps) break;
+            vec3 samplePos = waterViewPos + reflViewDir * curT;
+            if (samplePos.z > -0.15) break;
+            vec4 clip = uProjection * vec4(samplePos, 1.0);
+            if (clip.w <= 0.001) break;
+            vec2 sUv = (clip.xy / clip.w) * 0.5 + 0.5;
+            if (sUv.x < 0.003 || sUv.x > 0.997 || sUv.y < 0.003 || sUv.y > 0.997) break;
+
+            float sDepth = texture2D(tOpaqueDepth, sUv).r;
+            if (sDepth < 0.9997) {
+              vec3 hitView = reconstructViewPos(sUv, sDepth);
+              float dz = hitView.z - samplePos.z;
+              float thickness = 0.28 + stepDist * 1.45;
+              if (dz > 0.0 && dz < thickness) {
+                // 3-step binary refinement for razor-sharp bridge & tree silhouettes on water!
+                vec3 lo = prevPos;
+                vec3 hi = samplePos;
+                vec2 bestUv = sUv;
+                for (int b = 0; b < 3; b++) {
+                  vec3 mid = (lo + hi) * 0.5;
+                  vec4 mClip = uProjection * vec4(mid, 1.0);
+                  vec2 mUv = (mClip.xy / mClip.w) * 0.5 + 0.5;
+                  float mD = texture2D(tOpaqueDepth, clamp(mUv, vec2(0.002), vec2(0.998))).r;
+                  vec3 mHit = reconstructViewPos(mUv, mD);
+                  if (mHit.z - mid.z > 0.0) {
+                    hi = mid;
+                    bestUv = mUv;
+                  } else {
+                    lo = mid;
+                  }
+                }
+                vec2 edgeDist = min(bestUv, 1.0 - bestUv);
+                float edgeFade = smoothstep(0.0, 0.11, min(edgeDist.x, edgeDist.y));
+                float rayFade = 1.0 - smoothstep(float(steps) * 0.65, float(steps), float(i));
+                vec3 hitCol = texture2D(tOpaqueColor, bestUv).rgb;
+                return vec4(hitCol, edgeFade * rayFade);
+              }
+            }
+            prevPos = samplePos;
+            curT += stepDist;
+            stepDist *= 1.18;
+          }
+          return vec4(0.0);
+        }
 
         void main() {
           vec3 viewVec = cameraPosition - vWorldPos;
@@ -1042,87 +1536,124 @@ export class World {
           vec3 V = viewVec / max(dist, 0.001);
           vec3 sunDir = normalize(uSunDir);
           vec3 moonDir = normalize(uMoonDir);
-
-          // Silky multi-directional water ripples (subtler at golden hour for glassy mirror lake reflections!)
           vec2 p = vWorldPos.xz;
           float t = uTime;
-          float wA = sin(p.x * 1.75 + t * 1.65 + p.y * 0.78);
-          float wB = cos(p.y * 2.05 - t * 1.35 - p.x * 0.62);
-          float wC = sin((p.x - p.y) * 2.8 + t * 2.1) * 0.42;
 
-          // UNDERSIDE WATER SURFACE CEILING (visible when swimming underwater looking UP — matches Screenshot 2!)
+          // UNDERSIDE WATER SURFACE CEILING (Snell's Window + Shimmering Overhead Water Surface!)
           if (!gl_FrontFacing) {
-            // Crisp Minecraft-style quantized pixel shimmer + overhead Snell's sky window!
-            vec2 pix = floor(p * 8.0) / 8.0;
-            float uWave1 = sin(pix.x * 2.4 + t * 2.1 + pix.y * 1.1);
-            float uWave2 = cos(pix.y * 2.7 - t * 1.8 - pix.x * 0.9);
-            float shimmer = 0.5 + 0.5 * (uWave1 * 0.55 + uWave2 * 0.45);
+            vec2 pix = floor(p * 10.0) / 10.0;
+            float shimmer = waterHeight(pix * 1.6, t * 1.4);
             float lookUp = clamp(dot(vec3(0.0, -1.0, 0.0), V), 0.0, 1.0);
-            float snell = smoothstep(0.18, 0.85, lookUp);
-
-            vec3 deepCeil = mix(vec3(0.05, 0.14, 0.34), vec3(0.11, 0.28, 0.64), uDayFactor);
-            vec3 brightRipple = mix(vec3(0.16, 0.34, 0.62), vec3(0.32, 0.62, 0.96), uDayFactor);
-            vec3 underCol = mix(deepCeil, brightRipple, shimmer * 0.65 + snell * 0.28);
-            // Bright sunlit refraction glint right overhead so player clearly sees the water top!
-            underCol += mix(vec3(0.08, 0.16, 0.30), uSunColor * 0.28, uDayFactor) * snell * (0.45 + 0.55 * shimmer);
+            // Physical Snell's window critical angle (~48.6 deg -> cos ~ 0.66)
+            float snell = smoothstep(0.52, 0.78, lookUp);
+            vec3 skyWin = mix(uHorizonColor * 0.75, uMidColor * 1.05, snell) * (0.28 + 0.72 * uDayFactor);
+            vec3 tirCol = mix(vec3(0.03, 0.11, 0.24), vec3(0.08, 0.28, 0.52), uDayFactor);
+            vec3 underCol = mix(tirCol, skyWin, snell * (0.55 + 0.45 * shimmer));
+            underCol += uSunColor * 0.35 * snell * smoothstep(0.55, 0.9, shimmer) * uDayFactor;
             float uwFog = smoothstep(10.0, 48.0, dist);
-            vec3 uwFogCol = mix(vec3(0.04, 0.10, 0.24), vec3(0.10, 0.26, 0.54), uDayFactor);
-            underCol = mix(underCol, uwFogCol, uwFog * 0.72);
-            float underAlpha = mix(0.76, 0.90, clamp(1.0 - snell * 0.45 + uwFog * 0.3, 0.0, 1.0));
+            vec3 uwFogCol = mix(vec3(0.03, 0.09, 0.20), vec3(0.08, 0.28, 0.48), uDayFactor);
+            underCol = mix(underCol, uwFogCol, uwFog * 0.76);
+            float underAlpha = mix(0.84, 0.52, snell * (1.0 - uwFog));
             gl_FragColor = vec4(underCol, underAlpha);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
             return;
           }
 
-          float amp = mix(0.010, 0.068, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(35.0, 145.0, dist) * 0.62);
-          vec3 N = vBaseNormal.y > 0.5
-            ? normalize(vec3((wA + wC) * amp, 1.0, (wB - wC) * amp))
-            : normalize(vBaseNormal);
+          // Smooth Animated Multi-Octave Wave Normals (distance-attenuated to prevent far sparkling aliasing)
+          float amp = mix(0.025, 0.14, clamp(uWaveStrength, 0.0, 1.2)) * (1.0 - smoothstep(28.0, 130.0, dist) * 0.72);
+          vec3 N = normalize(vBaseNormal);
+          float wH = 0.5;
+          if (vBaseNormal.y > 0.5 && amp > 0.002) {
+            float eps = 0.08;
+            float hC = waterHeight(p, t);
+            float hX = waterHeight(p + vec2(eps, 0.0), t);
+            float hZ = waterHeight(p + vec2(0.0, eps), t);
+            wH = hC;
+            N = normalize(vec3((hC - hX) * amp / eps, 1.0, (hC - hZ) * amp / eps));
+          }
 
-          // Mute outdoor sky reflection underground inside deep caves!
           float skyMask = smoothstep(${SEA_LEVEL - 10}.0, ${SEA_LEVEL - 2}.0, vWorldPos.y);
-          float NoV = max(0.0, dot(N, V));
-          float omv = 1.0 - NoV;
-          // Rich mirror Fresnel (ultra-reflective at grazing golden-hour angles just like Image 2!)
-          float fresnel = clamp(0.18 + 0.80 * omv * omv * omv, 0.18, 0.97) * skyMask;
+          float NoV = max(0.001, dot(N, V));
+          // Physical Water Schlick Fresnel (F0 = 0.025 -> crystal clear looking down, mirror at grazing angles!)
+          float fresnel = clamp(0.03 + 0.94 * pow(1.0 - NoV, 4.2), 0.03, 0.96);
 
-          // Glassy Mirror Reflection of Sky Gradient + Sun Horizon + Reflected Cloud Wisps!
-          vec3 R = reflect(-V, N);
-          float rY = clamp(abs(R.y), 0.015, 1.0);
-          vec3 reflCol = mix(uHorizonColor * 1.08, uMidColor, smoothstep(0.0, 0.34, rY));
-          reflCol = mix(reflCol, uTopColor, smoothstep(0.24, 0.90, rY));
+          // Sky + Cloud analytical reflection (always ready as seamless fallback!)
+          vec3 R = normalize(reflect(-V, N));
+          vec3 skyRefl = sampleSkyReflection(R, sunDir, moonDir, skyMask, t);
+          vec3 reflCol = skyRefl;
 
-          float rSun = max(0.0, dot(normalize(R), sunDir));
-          float rSun2 = rSun * rSun;
-          float rSun4 = rSun2 * rSun2;
-          float rSun16 = rSun4 * rSun4 * rSun4 * rSun4;
+          vec3 col;
+          float outAlpha = 1.0;
+
+          if (uHasOpaqueCopy > 0.5) {
+            vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+            vec3 waterViewPos = (uViewMatrix * vec4(vWorldPos, 1.0)).xyz;
+            float waterLinZ = -waterViewPos.z;
+
+            // 1. TRUE SCREEN-SPACE REFLECTIONS (SSR) blended smoothly with Sky Reflection!
+            if (uSsrSteps > 0.5 && vBaseNormal.y > 0.5 && dist < 110.0) {
+              vec3 reflViewDir = normalize((uViewMatrix * vec4(R, 0.0)).xyz);
+              vec4 ssr = traceSSR(waterViewPos, reflViewDir, uSsrSteps);
+              float ssrDistFade = 1.0 - smoothstep(65.0, 110.0, dist);
+              reflCol = mix(skyRefl, ssr.rgb, ssr.a * ssrDistFade);
+            }
+
+            // 2. TRUE REFRACTION + BEER-LAMBERT DEPTH-BASED WATER COLORATION!
+            float bgRawD = texture2D(tOpaqueDepth, screenUv).r;
+            float bgLinZ = bgRawD >= 0.9998 ? (waterLinZ + 28.0) : -reconstructViewPos(screenUv, bgRawD).z;
+            float rawWaterDepth = max(0.0, bgLinZ - waterLinZ);
+
+            // Distort underwater refraction UV by wave normal (with foreground anti-bleed depth guard!)
+            float distortAmt = clamp(rawWaterDepth * 0.012, 0.0015, 0.026) / max(1.0, dist * 0.06);
+            vec2 refrUv = clamp(screenUv + N.xz * distortAmt, vec2(0.002), vec2(0.998));
+            float refrRawD = texture2D(tOpaqueDepth, refrUv).r;
+            float refrLinZ = refrRawD >= 0.9998 ? (waterLinZ + 28.0) : -reconstructViewPos(refrUv, refrRawD).z;
+            float waterDepth = rawWaterDepth;
+            if (refrLinZ < waterLinZ + 0.02) {
+              // Distorted UV hit dry land/hand in front of water -> fall back cleanly!
+              refrUv = screenUv;
+            } else {
+              waterDepth = max(0.0, refrLinZ - waterLinZ);
+            }
+
+            vec3 bgCol = texture2D(tOpaqueColor, refrUv).rgb;
+            // Physical Beer-Lambert exponential light absorption (red absorbs first -> crystal turquoise -> emerald -> deep sapphire!)
+            vec3 transmittance = exp(-waterDepth * vec3(0.36, 0.13, 0.085));
+            vec3 shallowScatter = mix(vec3(0.015, 0.05, 0.09), vec3(0.04, 0.24, 0.28), uDayFactor * skyMask);
+            vec3 deepScatter = mix(vec3(0.01, 0.03, 0.08), vec3(0.02, 0.11, 0.20), uDayFactor * skyMask);
+            deepScatter = mix(deepScatter, vec3(0.06, 0.05, 0.09), uSunsetFactor * 0.55 * skyMask);
+            vec3 volumeCol = mix(shallowScatter, deepScatter, smoothstep(1.5, 11.0, waterDepth));
+            vec3 refractedCol = bgCol * transmittance + volumeCol * (1.0 - transmittance);
+
+            // Subtle animated shoreline foam where shallow water laps rocks/sand/bridges!
+            float foamWave = smoothstep(0.45, 0.72, wH + sin(t * 2.4 + p.x * 2.0 + p.y * 1.7) * 0.12);
+            float shoreFoam = (1.0 - smoothstep(0.02, 0.42, waterDepth)) * foamWave * 0.38 * (0.35 + 0.65 * uDayFactor);
+            refractedCol = mix(refractedCol, vec3(0.92, 0.97, 1.0) * (0.4 + 0.6 * uDayFactor), shoreFoam);
+
+            col = mix(refractedCol, reflCol, fresnel * mix(0.35, 1.0, skyMask));
+            // Smooth alpha at the very shallowest 8cm shoreline edge so water meets sand seamlessly
+            outAlpha = smoothstep(0.0, 0.09, waterDepth);
+          } else {
+            // Classic / Low fallback without opaque copy
+            vec3 deepWater = mix(vec3(0.02, 0.06, 0.14), vec3(0.04, 0.24, 0.36), uDayFactor * skyMask);
+            col = mix(deepWater, reflCol, fresnel * skyMask);
+            outAlpha = mix(0.68, 0.94, fresnel);
+          }
+
+          // Crisp Sparkling Golden Sun & Silver Crescent Moon Specular Highlights!
           float sunUp = smoothstep(-0.08, 0.08, sunDir.y) * (1.0 - uRainFactor * 0.82) * skyMask;
-          reflCol = mix(reflCol, uSunsetColor * 1.16, (1.0 - rY) * (0.36 + 0.64 * rSun2) * uSunsetFactor * (1.0 - uRainFactor * 0.7));
-          reflCol += uSunColor * (rSun4 * 0.45 + rSun16 * 1.25) * sunUp;
+          if (sunUp > 0.01) {
+            vec3 H = normalize(V + sunDir);
+            float nh = max(0.0, dot(N, H));
+            float nh2 = nh * nh;
+            float nh4 = nh2 * nh2;
+            float nh16 = nh4 * nh4 * nh4 * nh4;
+            float nh64 = nh16 * nh16 * nh16 * nh16;
+            float nh256 = nh64 * nh64 * nh64 * nh64;
+            col += uSunColor * (nh256 * 5.5 + nh64 * 1.45 + nh16 * 0.16) * sunUp;
+          }
 
-          // Subtle shimmering reflected cloud wisps across the mirror lake surface!
-          float cWave = 0.5 + 0.5 * sin(R.x * 8.5 + t * 0.18 + sin(R.z * 6.0));
-          float cMask = smoothstep(0.58, 0.92, cWave) * smoothstep(0.05, 0.32, rY) * (1.0 - rY * 0.65);
-          reflCol = mix(reflCol, uCloudLitColor * 1.08, cMask * 0.32 * (1.0 - uRainFactor * 0.5));
-
-          // Deep glassy obsidian-emerald to sapphire lake body (gives dramatic mirror contrast like Image 2!)
-          vec3 deepWater = mix(vec3(0.015, 0.045, 0.11), vec3(0.03, 0.24, 0.36), uDayFactor * skyMask);
-          deepWater = mix(deepWater, vec3(0.07, 0.05, 0.09), uSunsetFactor * 0.68 * skyMask);
-          deepWater += vec3(0.04, 0.14, 0.18) * (0.5 + 0.5 * wA * wB) * 0.26 * uDayFactor * skyMask;
-
-          vec3 col = mix(deepWater, reflCol, fresnel);
-
-          // Blazing Sparkling Golden Sun Column Reflection (triggers soft bloom glints!)
-          vec3 H = normalize(V + sunDir);
-          float nh = max(0.0, dot(N, H));
-          float nh2 = nh * nh;
-          float nh4 = nh2 * nh2;
-          float nh16 = nh4 * nh4 * nh4 * nh4;
-          float nh64 = nh16 * nh16 * nh16 * nh16;
-          col += uSunColor * (nh64 * 3.4 + nh16 * 0.52) * sunUp;
-
-          // Shimmering Silver-Cyan Crescent Moon Reflection Column at Night (Image 4!)
           float moonUp = smoothstep(-0.08, 0.08, moonDir.y) * (1.0 - uDayFactor * 0.88) * (1.0 - uRainFactor * 0.82) * skyMask;
           if (moonUp > 0.01) {
             vec3 Hm = normalize(V + moonDir);
@@ -1131,10 +1662,10 @@ export class World {
             float nm4 = nm2 * nm2;
             float nm16 = nm4 * nm4 * nm4 * nm4;
             float nm64 = nm16 * nm16 * nm16 * nm16;
-            col += vec3(0.65, 0.90, 1.35) * (nm64 * 2.2 + nm16 * 0.34) * moonUp;
+            col += vec3(0.65, 0.90, 1.35) * (nm64 * 2.2 + nm16 * 0.28) * moonUp;
           }
 
-          // Low Valley Mist & Seamless Atmospheric Distance Haze!
+          // Seamless Atmospheric Distance Haze matching terrain & LODs
           float hazeFactor = smoothstep(uFogNear * 0.44, uFogFar, dist) * skyMask;
           float sa = max(0.0, dot(-V, sunDir));
           float sunAlign = sa * sa * sa;
@@ -1142,8 +1673,7 @@ export class World {
           atmFog = mix(atmFog, uSunsetColor * 1.08, sunAlign * uSunsetFactor * 0.48);
           col = mix(col, atmFog, hazeFactor);
 
-          float alpha = mix(mix(0.80, 0.97, fresnel), 1.0, hazeFactor);
-          gl_FragColor = vec4(col, alpha);
+          gl_FragColor = vec4(col, mix(outAlpha, 1.0, hazeFactor));
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }
@@ -1210,7 +1740,7 @@ export class World {
     this._torchCoalUV = this.textures.getUV('coal_ore');
     this._torchGlowUV = this.textures.getUV('glowstone');
 
-    // Dynamic Placed Torch & Glowstone Lighting Pool (4 pooled PointLights -> 60% faster fragment shader!)
+    // Dynamic Placed & Generated Torch/Glowstone Lighting Pool (4 hero PointLights for mobs/flicker; Voxel GI lights ALL blocks!)
     this.lightSources = new Map(); // "x,y,z" -> { x, y, z, isGlowstone }
     this._lightDirty = true;
     this._lightRefreshTimer = 0;
@@ -1218,7 +1748,7 @@ export class World {
     this._activeLightSources = [];
     this.torchLightPool = [];
     for (let i = 0; i < 4; i++) {
-      const pl = new THREE.PointLight(0xffb44c, 0, 46, 0.85);
+      const pl = new THREE.PointLight(0xffb44c, 0, 44, 0.85);
       pl.castShadow = false;
       this.group.add(pl);
       this.torchLightPool.push(pl);
@@ -1689,9 +2219,20 @@ export class World {
 
     const addLamp = (lx, lz) => {
       setLocal(lx, baseY + 1, lz, BLOCK.COBBLESTONE);
-      setLocal(lx, baseY + 2, lz, logBlk);
+      setLocal(lx, baseY + 2, lz, BLOCK.OAK_FENCE);
       setLocal(lx, baseY + 3, lz, logBlk);
       setLocal(lx, baseY + 4, lz, BLOCK.GLOWSTONE);
+      // Warm flanking wall torches on streetlamp post!
+      if (lx + 1 <= 14 && getLocal(lx + 1, baseY + 3, lz) === BLOCK.AIR) setLocal(lx + 1, baseY + 3, lz, BLOCK.TORCH);
+      if (lx - 1 >= 1 && getLocal(lx - 1, baseY + 3, lz) === BLOCK.AIR) setLocal(lx - 1, baseY + 3, lz, BLOCK.TORCH);
+    };
+
+    const villageDoorId = isSnow ? BLOCK.SPRUCE_DOOR_B : (isBirch ? BLOCK.BIRCH_DOOR_B : (isSavanna ? BLOCK.ACACIA_DOOR_B : (isJungle ? BLOCK.JUNGLE_DOOR_B : (isCherry ? BLOCK.CHERRY_DOOR_B : BLOCK.OAK_DOOR_B))));
+    const setDoorLocal = (lx, by, lz, doorBottomId, facing) => {
+      if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) return;
+      setLocal(lx, by, lz, doorBottomId);
+      setLocal(lx, by + 1, lz, doorBottomId + 1);
+      this.doorStates.set(`${ox + lx},${by},${oz + lz}`, { facing: facing & 3, open: false });
     };
 
     // Detailed Gable-Roofed Village House Helper with Overhanging Eaves, Beds, Chimney & Flowers!
@@ -1747,21 +2288,29 @@ export class World {
         }
       }
 
-      // Doorway + Cobble Porch Step
+      // Real Interactive Wood Door + Cobble Porch Step + Exterior Porch Wall Torch!
       const midX = x0 + Math.floor(w / 2);
       const midZ = z0 + Math.floor(d / 2);
       if (doorSide === 'south') {
-        setLocal(midX, baseY + 1, z0 + d - 1, BLOCK.AIR); setLocal(midX, baseY + 2, z0 + d - 1, BLOCK.AIR);
+        setDoorLocal(midX, baseY + 1, z0 + d - 1, villageDoorId, 2);
         setLocal(midX, baseY, z0 + d, BLOCK.COBBLESTONE);
+        if (midX - 1 > x0 && z0 + d <= 15) setLocal(midX - 1, baseY + 2, z0 + d, BLOCK.TORCH);
       } else if (doorSide === 'north') {
-        setLocal(midX, baseY + 1, z0, BLOCK.AIR); setLocal(midX, baseY + 2, z0, BLOCK.AIR);
+        setDoorLocal(midX, baseY + 1, z0, villageDoorId, 0);
         setLocal(midX, baseY, z0 - 1, BLOCK.COBBLESTONE);
+        if (midX + 1 < x0 + w - 1 && z0 - 1 >= 0) setLocal(midX + 1, baseY + 2, z0 - 1, BLOCK.TORCH);
       } else if (doorSide === 'east') {
-        setLocal(x0 + w - 1, baseY + 1, midZ, BLOCK.AIR); setLocal(x0 + w - 1, baseY + 2, midZ, BLOCK.AIR);
+        setDoorLocal(x0 + w - 1, baseY + 1, midZ, villageDoorId, 1);
         setLocal(x0 + w, baseY, midZ, BLOCK.COBBLESTONE);
+        if (midZ - 1 > z0 && x0 + w <= 15) setLocal(x0 + w, baseY + 2, midZ - 1, BLOCK.TORCH);
       } else {
-        setLocal(x0, baseY + 1, midZ, BLOCK.AIR); setLocal(x0, baseY + 2, midZ, BLOCK.AIR);
+        setDoorLocal(x0, baseY + 1, midZ, villageDoorId, 3);
         setLocal(x0 - 1, baseY, midZ, BLOCK.COBBLESTONE);
+        if (midZ + 1 < z0 + d - 1 && x0 - 1 >= 0) setLocal(x0 - 1, baseY + 2, midZ + 1, BLOCK.TORCH);
+      }
+      // Extra warm wall-mounted interior torch on back wall
+      if (x0 + 1 < x0 + w - 1 && z0 + 1 < z0 + d - 1) {
+        setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
       }
 
       // Interior Furnishings: Torches, REAL 2-BLOCK-LONG 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
@@ -2780,8 +3329,14 @@ export class World {
             setLocal(lx, baseY, lz, BLOCK.OAK_PLANKS);
             for (let dy = 1; dy <= 3; dy++) {
               if (edgeX || edgeZ) {
-                if (isDoor && dy <= 2) setLocal(lx, baseY + dy, lz, BLOCK.AIR);
-                else if (corner) setLocal(lx, baseY + dy, lz, BLOCK.ACACIA_LOG);
+                if (isDoor && dy === 1) {
+                  const dFace = cot.dir === 'S' ? 2 : (cot.dir === 'N' ? 0 : (cot.dir === 'E' ? 1 : 3));
+                  setLocal(lx, baseY + 1, lz, BLOCK.ACACIA_DOOR_B);
+                  setLocal(lx, baseY + 2, lz, BLOCK.ACACIA_DOOR_T);
+                  this.doorStates.set(`${ox + lx},${baseY + 1},${oz + lz}`, { facing: dFace, open: false });
+                } else if (isDoor && dy === 2) {
+                  // Top half placed above
+                } else if (corner) setLocal(lx, baseY + dy, lz, BLOCK.ACACIA_LOG);
                 else if (dy === 2 && !isDoor && (dx === 2 || dz === 2)) setLocal(lx, baseY + dy, lz, BLOCK.GLASS);
                 else setLocal(lx, baseY + dy, lz, cot.wall);
               } else {
@@ -2792,7 +3347,7 @@ export class World {
             setLocal(lx, baseY + 4, lz, cot.roof);
             if (!edgeX && !edgeZ) setLocal(lx, baseY + 5, lz, cot.roof);
 
-            // Cozy miniature interior furnishings!
+            // Cozy miniature interior furnishings + wall-mounted torch (never floating!)
             if (dx === 1 && dz === 1) setLocal(lx, baseY + 1, lz, BLOCK.BED_HEAD_N);
             if (dx === 1 && dz === 2) setLocal(lx, baseY + 1, lz, BLOCK.BED);
             if (dx === 3 && dz === 1) setLocal(lx, baseY + 1, lz, (ci & 1) ? BLOCK.CRAFTING_TABLE : BLOCK.FURNACE);
@@ -2804,7 +3359,8 @@ export class World {
                 { id: 'torch', count: 6 }
               ]);
             }
-            if (dx === 2 && dz === 2) setLocal(lx, baseY + 3, lz, BLOCK.TORCH);
+            if (dx === 2 && dz === 1) setLocal(lx, baseY + 2, lz, BLOCK.TORCH);
+            if (dx === 1 && dz === 3 && cot.dir !== 'W') setLocal(lx, baseY + 2, lz, BLOCK.TORCH);
           }
         }
       }
@@ -2917,9 +3473,9 @@ export class World {
             setLocal(lx, ly0, lz, ((gx + gz) & 1) ? wMat : BLOCK.COBBLESTONE);
             setLocal(lx, ly0 + 5, lz, wMat);
             for (let dy = 1; dy <= 4; dy++) setLocal(lx, ly0 + dy, lz, BLOCK.AIR);
-            // Wall sconces & ceiling glowstone accents
-            if ((lx === 6 || lx === 9) && lz === 7 && (cdx + cdz + lvl) % 2 === 0) {
-              setLocal(lx, ly0 + 3, lz, BLOCK.TORCH);
+            // Wall-mounted hallway torches (strictly touching solid corridor walls, NEVER floating in mid-air!)
+            if (((lx === 6 || lx === 9) && (lz === 2 || lz === 13)) || ((lz === 6 || lz === 9) && (lx === 2 || lx === 13))) {
+              setLocal(lx, ly0 + 2, lz, BLOCK.TORCH);
             }
             if (lx === 7 && lz === 7) {
               setLocal(lx, ly0 + 5, lz, BLOCK.GLOWSTONE);
@@ -2965,15 +3521,19 @@ export class World {
             }
           }
 
-          // Subtle Secret False-Wall Doorway (1-block breakable false wall with a golden/accent clue block above!)
-          setLocal(c.doorX, ly0 + 1, c.doorZ, fMat);
-          setLocal(c.doorX, ly0 + 2, c.doorZ, fMat);
-          setLocal(c.doorX, ly0 + 3, c.doorZ, BLOCK.GOLD_BLOCK); // subtle secret clue keystone!
+          // Accessible Loot Room Doorway with Real Interactive Wood Door (never blocked off!)
+          const dFacePyr = c.doorX === 5 ? 1 : 3;
+          setLocal(c.doorX, ly0, c.doorZ, wMat);
+          setLocal(c.doorX, ly0 + 1, c.doorZ, BLOCK.OAK_DOOR_B);
+          setLocal(c.doorX, ly0 + 2, c.doorZ, BLOCK.OAK_DOOR_T);
+          setLocal(c.doorX, ly0 + 3, c.doorZ, BLOCK.GOLD_BLOCK);
+          this.doorStates.set(`${ox + c.doorX},${ly0 + 1},${oz + c.doorZ}`, { facing: dFacePyr, open: false });
 
-          // Furnish the secret room by archetype!
+          // Furnish the secret room by archetype + wall-mounted torch flush on the solid chamber wall!
           const cxR = c.x0 + 1;
           const czR = c.z0 + 1;
-          setLocal(c.x0 + 2, ly0 + 3, c.z0 + 2, BLOCK.TORCH);
+          setLocal(c.x0, ly0 + 2, c.z0 + 1, BLOCK.TORCH);
+          setLocal(c.x0 + 3, ly0 + 2, c.z0 + 2, BLOCK.TORCH);
           const lootSalt = lvl * 100 + cIdx * 23 + cdx * 7 + cdz * 11;
 
           if (secretType === 0) {
@@ -3135,20 +3695,45 @@ export class World {
             setLocal(lx, y, lz, BLOCK.AIR);
           }
 
-          // 1. Massive 64x64 Outer Curtain Walls + 4 Towering 22-Block Corner Watchtowers!
+          // 1. Massive 64x64 Outer Curtain Walls + 4 Towering 22-Block Corner Watchtowers (with Doors & Full-Height Ladders!)
           const inTower = (gx <= 8 || gx >= 55) && (gz <= 8 || gz >= 55);
           const isOuterWall = dist >= 29.5 && dist <= 31.5;
           const inGate = ((dxC <= 3.0 && (gz <= 3 || gz >= 60)) || (dzC <= 3.0 && (gx <= 3 || gx >= 60)));
           if (inTower) {
             const tEdge = gx === 0 || gx === 8 || gx === 55 || gx === 63 || gz === 0 || gz === 8 || gz === 55 || gz === 63;
+            // Courtyard ground doorway into each corner watchtower!
+            const isTowerDoor = ((gx === 8 || gx === 55) && (gz === 4 || gz === 59));
+            // Vertical ladder shaft climbing ALL floors (ground -> 2nd floor dy=11 -> rooftop dy=20!)
+            const isTowerLadder = ((gx === 2 || gx === 61) && (gz === 4 || gz === 59));
+            const isTowerLadderBack = ((gx === 1 || gx === 62) && (gz === 4 || gz === 59));
             for (let dy = 1; dy <= 22; dy++) {
               if (tEdge) {
+                if (isTowerDoor && dy <= 2) {
+                  if (dy === 1) {
+                    const cDoor = mVar === 1 ? BLOCK.SPRUCE_DOOR_B : BLOCK.OAK_DOOR_B;
+                    setLocal(lx, baseY + 1, lz, cDoor);
+                    setLocal(lx, baseY + 2, lz, cDoor + 1);
+                    this.doorStates.set(`${ox + lx},${baseY + 1},${oz + lz}`, { facing: gx === 8 ? 1 : 3, open: false });
+                  }
+                  continue;
+                }
                 const isCrenel = dy === 22 && ((gx + gz) & 1);
                 const isSlit = (dy === 10 || dy === 16) && (gx === 4 || gx === 59 || gz === 4 || gz === 59);
                 if (!isCrenel) setLocal(lx, baseY + dy, lz, isSlit ? BLOCK.GLASS : (dy % 5 === 0 ? wallTrim : wallMain));
+              } else if (isTowerLadder && dy <= 20) {
+                // Keep floor hatches open right at the ladder column!
+                setLocal(lx, baseY + dy, lz, BLOCK.LADDER);
+              } else if (isTowerLadderBack && dy <= 20) {
+                // Solid stone backing pillar behind the ladder so the 3D ladder mounts flush!
+                setLocal(lx, baseY + dy, lz, wallMain);
               } else if (dy === 11 || dy === 20) {
                 setLocal(lx, baseY + dy, lz, woodPlanks);
               }
+            }
+            // Wall-mounted tower torches on every floor + rooftop glowstone beacon!
+            if ((gx === 4 || gx === 59) && (gz === 1 || gz === 62)) {
+              setLocal(lx, baseY + 3, lz, BLOCK.TORCH);
+              setLocal(lx, baseY + 14, lz, BLOCK.TORCH);
             }
             if ((gx === 4 || gx === 59) && (gz === 4 || gz === 59)) setLocal(lx, baseY + 21, lz, BLOCK.GLOWSTONE);
           } else if (isOuterWall) {
@@ -3162,11 +3747,16 @@ export class World {
             if (dist >= 31.0 && !inGate && ((gx % 10 === 0) || (gz % 10 === 0))) {
               for (let by = 6; by <= 10; by++) setLocal(lx, baseY + by, lz, bannerWool);
             }
-            if ((gx === 1 || gx === 62) && gz % 8 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
-            if ((gz === 1 || gz === 62) && gx % 8 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
+            // Bright battlement torches along curtain walls!
+            if ((gx === 1 || gx === 62) && gz % 6 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
+            if ((gz === 1 || gz === 62) && gx % 6 === 0) setLocal(lx, baseY + 13, lz, BLOCK.TORCH);
+          }
+          // Wall-mounted ladders on the inner face of the N & S curtain walls to climb up to battlements!
+          if ((gx === 27 && gz === 3) || (gx === 27 && gz === 60)) {
+            for (let dy = 1; dy <= 12; dy++) setLocal(lx, baseY + dy, lz, BLOCK.LADDER);
           }
 
-          // 2. Towering Central Grand Keep (20x20 footprint: gx,gz in [22..41], 26 blocks tall!)
+          // 2. Towering Central Grand Keep (20x20 footprint: gx,gz in [22..41], 26 blocks tall + Full Multi-Floor Ladders!)
           if (gx >= 22 && gx <= 41 && gz >= 22 && gz <= 41) {
             const kEdgeX = gx === 22 || gx === 41;
             const kEdgeZ = gz === 22 || gz === 41;
@@ -3185,10 +3775,23 @@ export class World {
                 const isTallWin = (dy === 4 || dy === 5 || dy === 11 || dy === 12 || dy === 17) && !kCorner && ((gx % 4 === 0) || (gz % 4 === 0));
                 setLocal(lx, baseY + dy, lz, isTallWin ? BLOCK.GLASS : (kCorner ? wallTrim : wallMain));
               } else if (dy === 8 || dy === 15 || dy === 21) {
-                // Keep multi-story floors (leave central stairwell open)
+                // Keep multi-story floors (leave stairwell open for ladders!)
                 const isStairWell = gx >= 36 && gx <= 38 && gz >= 25 && gz <= 27;
                 if (!isStairWell) setLocal(lx, baseY + dy, lz, dy === 21 ? wallMain : woodPlanks);
               }
+            }
+            // Full-height Grand Keep Ladder Shaft climbing Ground -> 2nd Floor Library -> 3rd Floor -> Roof Parapet!
+            if (gx === 37 && gz === 24) {
+              for (let dy = 1; dy <= 21; dy++) setLocal(lx, baseY + dy, lz, wallMain);
+            }
+            if (gx === 37 && gz === 25) {
+              for (let dy = 1; dy <= 21; dy++) setLocal(lx, baseY + dy, lz, BLOCK.LADDER);
+            }
+            // Wall-mounted Keep torches on all 3 interior stories (flush against inner walls!)
+            if ((gx === 23 || gx === 40) && (gz === 28 || gz === 34 || gz === 39)) {
+              setLocal(lx, baseY + 3, lz, BLOCK.TORCH);
+              setLocal(lx, baseY + 11, lz, BLOCK.TORCH);
+              setLocal(lx, baseY + 18, lz, BLOCK.TORCH);
             }
             // Golden Throne at North end of Throne Room!
             if (gx >= 30 && gx <= 33 && gz >= 24 && gz <= 26) {
@@ -3211,16 +3814,28 @@ export class World {
             if (gx === 39 && gz === 24) placeChest(lx, baseY + 9, lz, makeSecretLoot(207 + mVar * 17, 3));
             if (gx === 31 && gz === 25) placeChest(lx, baseY + 16, lz, makeSecretLoot(311 + mVar * 19, 3));
           }
+          // Extra Courtyard Streetlight Posts so the Mega Castle glows brightly at night!
+          if ((gx === 28 || gx === 35) && (gz === 12 || gz === 51)) {
+            setLocal(lx, baseY + 1, lz, BLOCK.OAK_FENCE);
+            setLocal(lx, baseY + 2, lz, BLOCK.OAK_FENCE);
+            setLocal(lx, baseY + 3, lz, BLOCK.GLOWSTONE);
+          }
+          if ((gz === 28 || gz === 35) && (gx === 12 || gx === 51)) {
+            setLocal(lx, baseY + 1, lz, BLOCK.OAK_FENCE);
+            setLocal(lx, baseY + 2, lz, BLOCK.OAK_FENCE);
+            setLocal(lx, baseY + 3, lz, BLOCK.GLOWSTONE);
+          }
         }
       }
 
-      // 3. 12 Castle Courtyard Guildhouses, Barracks & Stables in the 4 Outer Quadrants!
+      // 3. 12 Castle Courtyard Guildhouses, Barracks & Stables (with Real Wood Doors & Wall Torches!)
       const houses = [
         [11, 11], [11, 20], [20, 11],
         [46, 11], [46, 20], [37, 11],
         [11, 46], [11, 37], [20, 46],
         [46, 46], [46, 37], [37, 46]
       ];
+      const castleDoorId = mVar === 1 ? BLOCK.SPRUCE_DOOR_B : BLOCK.OAK_DOOR_B;
       for (let hi = 0; hi < houses.length; hi++) {
         const [hx, hz] = houses[hi];
         for (let dz = 0; dz < 6; dz++) {
@@ -3234,21 +3849,27 @@ export class World {
             setLocal(lx, baseY, lz, woodPlanks);
             for (let dy = 1; dy <= 4; dy++) {
               if (eX || eZ) {
-                if (isDoor && dy <= 2) setLocal(lx, baseY + dy, lz, BLOCK.AIR);
-                else if (eX && eZ) setLocal(lx, baseY + dy, lz, woodLog);
+                if (isDoor && dy === 1) {
+                  setLocal(lx, baseY + 1, lz, castleDoorId);
+                  setLocal(lx, baseY + 2, lz, castleDoorId + 1);
+                  this.doorStates.set(`${ox + lx},${baseY + 1},${oz + lz}`, { facing: 2, open: false });
+                } else if (isDoor && dy === 2) {
+                  // Top half placed above
+                } else if (eX && eZ) setLocal(lx, baseY + dy, lz, woodLog);
                 else if (dy === 2 && !isDoor && (dx === 2 || dz === 2)) setLocal(lx, baseY + dy, lz, BLOCK.GLASS);
                 else setLocal(lx, baseY + dy, lz, woodPlanks);
               }
             }
             setLocal(lx, baseY + 5, lz, roofBlk);
             if (!eX && !eZ) setLocal(lx, baseY + 6, lz, roofBlk);
-            if (dx === 2 && dz === 2) setLocal(lx, baseY + 4, lz, BLOCK.TORCH);
+            // Wall-mounted torch flush on back wall (never floating in air!)
+            if (dx === 2 && dz === 1) setLocal(lx, baseY + 3, lz, BLOCK.TORCH);
             if (dx === 4 && dz === 1) placeChest(lx, baseY + 1, lz, makeSecretLoot(hi * 17 + mVar * 9, 2));
           }
         }
       }
 
-      // 4. 2-Level Underground Mega Castle Dungeon Vaults!
+      // 4. 2-Level Underground Mega Castle Dungeon Vaults (Accessible via Wood Doors + Wall-Mounted Torches + Ladder Descent!)
       for (let lvl = 0; lvl < 2; lvl++) {
         const ly0 = levels[lvl];
         for (let lz = 6; lz <= 9; lz++) {
@@ -3264,15 +3885,40 @@ export class World {
           }
         }
         setLocal(7, ly0 + 4, 7, BLOCK.GLOWSTONE);
-        for (const [vx, vz, salt] of [[2, 2, 13], [11, 11, 29]]) {
+        // Wall-mounted hallway torches (strictly touching solid corridor walls, never floating!)
+        setLocal(6, ly0 + 2, 2, BLOCK.TORCH);
+        setLocal(9, ly0 + 2, 13, BLOCK.TORCH);
+        setLocal(2, ly0 + 2, 6, BLOCK.TORCH);
+        setLocal(13, ly0 + 2, 9, BLOCK.TORCH);
+
+        // Accessible Loot Vaults connected directly into the dungeon halls with real interactive Wood Doors!
+        const vaults = [
+          { vx: 2, vz: 2, doorX: 5, doorZ: 3, dFace: 1, salt: 13 },
+          { vx: 11, vz: 11, doorX: 10, doorZ: 12, dFace: 3, salt: 29 }
+        ];
+        for (const v of vaults) {
           for (let dz = 0; dz < 3; dz++) {
             for (let dx = 0; dx < 3; dx++) {
-              setLocal(vx + dx, ly0, vz + dz, BLOCK.MOSSY_COBBLESTONE);
-              for (let dy = 1; dy <= 3; dy++) setLocal(vx + dx, ly0 + dy, vz + dz, BLOCK.AIR);
+              setLocal(v.vx + dx, ly0, v.vz + dz, BLOCK.MOSSY_COBBLESTONE);
+              for (let dy = 1; dy <= 3; dy++) setLocal(v.vx + dx, ly0 + dy, v.vz + dz, BLOCK.AIR);
             }
           }
-          setLocal(vx + 1, ly0 + 3, vz + 1, BLOCK.TORCH);
-          placeChest(vx + 1, ly0 + 1, vz + 1, makeSecretLoot(salt + lvl * 50 + mVar * 11, lvl + 1));
+          // Carve doorway between vault and hall + install interactive Wood Door!
+          setLocal(v.doorX, ly0, v.doorZ, wallMain);
+          setLocal(v.doorX, ly0 + 1, v.doorZ, castleDoorId);
+          setLocal(v.doorX, ly0 + 2, v.doorZ, castleDoorId + 1);
+          setLocal(v.doorX, ly0 + 3, v.doorZ, wallMain);
+          this.doorStates.set(`${ox + v.doorX},${ly0 + 1},${oz + v.doorZ}`, { facing: v.dFace, open: false });
+          // Wall-mounted vault torch (flush on wall, never floating!)
+          setLocal(v.vx, ly0 + 2, v.vz + 1, BLOCK.TORCH);
+          placeChest(v.vx + 1, ly0 + 1, v.vz + 1, makeSecretLoot(v.salt + lvl * 50 + mVar * 11, lvl + 1));
+        }
+      }
+      // Dungeon access ladder shaft in center-north chunk (cdx=1, cdz=1) connecting courtyard down to both dungeon levels!
+      if (cdx === 1 && cdz === 1) {
+        for (let yS = levels[1] + 1; yS <= baseY; yS++) {
+          setLocal(6, yS, 5, wallMain);
+          setLocal(6, yS, 6, BLOCK.LADDER);
         }
       }
 
@@ -4336,11 +4982,13 @@ export class World {
     if (blockId !== 0 && y > chunk.maxY) chunk.maxY = y;
     this.markDirty(cx, cz);
 
-    // Neighbor chunks if on edge
-    if (lx === 0) this.markDirty(cx - 1, cz);
-    if (lx === CHUNK_SIZE - 1) this.markDirty(cx + 1, cz);
-    if (lz === 0) this.markDirty(cx, cz - 1);
-    if (lz === CHUNK_SIZE - 1) this.markDirty(cx, cz + 1);
+    // Neighbor chunks if on edge (or within 6 blocks when placing/removing a GI light emitter!)
+    const emitChange = VOXEL_GI.isEmissiveBlock(blockId) || VOXEL_GI.isEmissiveBlock(prevId);
+    const pad = emitChange ? 6 : 0;
+    if (lx <= pad) this.markDirty(cx - 1, cz);
+    if (lx >= CHUNK_SIZE - 1 - pad) this.markDirty(cx + 1, cz);
+    if (lz <= pad) this.markDirty(cx, cz - 1);
+    if (lz >= CHUNK_SIZE - 1 - pad) this.markDirty(cx, cz + 1);
 
     // Trigger leaf decay checks whenever a tree log or leaf is removed
     if (prevId !== blockId) {
@@ -5054,40 +5702,33 @@ export class World {
     const bedSideUV = this._bedSideUV;
     const bedWoodUV = this._bedWoodUV;
 
-    // Precompute per-column sky ceiling height for authentic dark underground caves & overhangs!
-    const skyTop = SKY_TOP;
-    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-      const zOff = lz << 4;
-      for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        let topY = 0;
-        const base = lx + zOff;
-        for (let y = yLimit; y >= 0; y--) {
-          const bid = data[base + (y << 8)];
-          if (bid !== 0 && transTable[bid] === 0) {
-            topY = y;
-            break;
-          }
-        }
-        skyTop[base] = topY;
-      }
-    }
+    // Compute Full 3D Voxel Global Illumination (Wall-Occluded Sky BFS + Colored RGB Emissives + 1-Bounce Color Bleeding!)
+    const giVol = VOXEL_GI;
+    giVol.compute(data, fastGet, transTable, yLimit);
 
-    const calcSkyLight = (nlx, ny, nlz) => {
-      let colTop;
-      if (nlx >= 0 && nlx < 16 && nlz >= 0 && nlz < 16) {
-        colTop = skyTop[nlx + (nlz << 4)];
-      } else {
-        // Fast probe for border-adjacent column ceiling
-        colTop = ny;
-        if (ny + 2 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 2, nlz)]) colTop = ny + 10;
-        else if (ny + 5 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 5, nlz)]) colTop = ny + 12;
-        else if (ny + 9 <= CHUNK_HEIGHT - 1 && solidTable[fastGet(nlx, ny + 9, nlz)]) colTop = ny + 14;
+    const applyGI = (bucket, nlx, ny, nlz, selfId = 0) => {
+      const idx = giVol.sampleIndex(nlx, ny, nlz);
+      const sky = ny >= giVol.activeH ? 1.0 : (ny < 0 ? 0.0 : giVol.sky[idx] / 15.0);
+      let br = giVol.blkR[idx] / 15.0;
+      let bg = giVol.blkG[idx] / 15.0;
+      let bb = giVol.blkB[idx] / 15.0;
+      const gr = giVol.bncR[idx] / 15.0;
+      const gg = giVol.bncG[idx] / 15.0;
+      const gb = giVol.bncB[idx] / 15.0;
+      let emit = 0.0;
+      if (selfId && giVol.isEmissiveBlock(selfId)) {
+        giVol.getBlockEmitRGB(selfId, GI_EMIT_TMP);
+        if (GI_EMIT_TMP[0] > br) br = GI_EMIT_TMP[0];
+        if (GI_EMIT_TMP[1] > bg) bg = GI_EMIT_TMP[1];
+        if (GI_EMIT_TMP[2] > bb) bb = GI_EMIT_TMP[2];
+        emit = (selfId === BLOCK.LAVA || selfId === BLOCK.GLOWSTONE || selfId === BLOCK.TORCH || selfId === BLOCK.FIRE)
+          ? 1.0
+          : (selfId === BLOCK.DIAMOND_BLOCK ? 0.65 : 0.22);
       }
-      if (ny >= colTop) return 1.0;
-      const depth = colTop - ny;
-      const t = depth > 14 ? 1.0 : depth / 14.0;
-      return 1.0 - t * 0.68; // Smoothly darkens to 0.32 deep underground inside caves!
+      bucket.setGI(sky, br, bg, bb, gr, gg, gb, emit);
     };
+
+    const calcSkyLight = (nlx, ny, nlz) => giVol.getSky(nlx, ny, nlz);
 
     let hasWater = false;
 
@@ -5105,6 +5746,10 @@ export class World {
           if (!def) continue;
 
           const wx = ox + lx;
+          // Apply 3D Voxel GI for all PASS 1 special geometry (beds, doors, fences, torches, ladders, foliage, lava!)
+          applyGI(bOpaque, lx, y, lz, id);
+          applyGI(bCutout, lx, y, lz, id);
+          applyGI(bStatic, lx, y, lz, id);
 
           // Register light-emitting blocks (placed OR generated village torches / glowstone / fire / lava!)
           if (id === BLOCK.TORCH || id === BLOCK.GLOWSTONE || id === BLOCK.FIRE) {
@@ -5492,8 +6137,8 @@ export class World {
 
             const uv = faceUVs[fi];
             const c0 = face.corners[0], c1 = face.corners[1], c2 = face.corners[2], c3 = face.corners[3];
-            const skyF = def.light > 0 ? 1.0 : calcSkyLight(nlx, ny, nlz);
-            const s = isLava ? (fi === 0 ? 1.62 : 1.44) : Math.min(1.2, face.shade * lightBoost * skyF);
+            if (!isWater) applyGI(b, nlx, ny, nlz, id);
+            const s = face.shade;
             const cornerY = (c) => {
               if (!(isWater || isLava) || c[1] !== 1) return y + c[1];
               if (c[0] === 0 && c[2] === 0) return y + hNW;
@@ -5518,8 +6163,9 @@ export class World {
       }
     }
 
-    // PASS 2: TRUE GREEDY MESHING for Opaque Cubes (5x–10x fewer triangles + smooth 4-corner AO + Cave Darkness!)
+    // PASS 2: TRUE GREEDY MESHING for Opaque Cubes (5x–10x fewer triangles + smooth 4-corner AO + Full 3D Voxel GI!)
     const gMask = GREEDY_MASK;
+    const gGi = GREEDY_GI;
     const gShade = GREEDY_SHADE;
 
     // 2A. +Y (fi=0) and -Y (fi=1) Horizontal Slices
@@ -5540,9 +6186,8 @@ export class World {
             const neighbor = fastGet(lx, ny, lz);
             if (neighbor !== 0 && transTable[neighbor] === 0) continue;
 
-            const isLit = litTable[id] !== 0;
-            const skyF = isLit ? 1.0 : calcSkyLight(lx, ny, lz);
-            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+            const baseShade = faceShade;
+            const giKey = giVol.getLightPack(lx, ny, lz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
 
             if (fi === 0) {
               // 4-corner AO for +Y top face
@@ -5551,26 +6196,29 @@ export class World {
               const o11 = solidTable[fastGet(lx + 1, ny, lz)] + solidTable[fastGet(lx, ny, lz - 1)] + solidTable[fastGet(lx + 1, ny, lz - 1)];
               const o01 = solidTable[fastGet(lx - 1, ny, lz)] + solidTable[fastGet(lx, ny, lz - 1)] + solidTable[fastGet(lx - 1, ny, lz - 1)];
               if (o00 === o10 && o10 === o11 && o11 === o01) {
-                const s = Math.min(1.25, baseShade * (1.0 - o00 * 0.09));
+                const s = baseShade * (1.0 - o00 * 0.11);
                 const idx2 = lx + zOff;
                 gMask[idx2] = (id << 10) | ((s * 128) | 0);
+                gGi[idx2] = giKey;
                 gShade[idx2] = s;
                 anyInSlice = true;
               } else {
                 const uv = uvTable[id][0];
                 const wx = ox + lx, wz = oz + lz;
+                applyGI(bOpaque, lx, ny, lz, id);
                 bOpaque.pushTiledQuad(
-                  wx,     y + 1, wz + 1, 0, 0, Math.min(1.25, baseShade * (1.0 - o00 * 0.09)),
-                  wx + 1, y + 1, wz + 1, 1, 0, Math.min(1.25, baseShade * (1.0 - o10 * 0.09)),
-                  wx + 1, y + 1, wz,     1, 1, Math.min(1.25, baseShade * (1.0 - o11 * 0.09)),
-                  wx,     y + 1, wz,     0, 1, Math.min(1.25, baseShade * (1.0 - o01 * 0.09)),
+                  wx,     y + 1, wz + 1, 0, 0, baseShade * (1.0 - o00 * 0.11),
+                  wx + 1, y + 1, wz + 1, 1, 0, baseShade * (1.0 - o10 * 0.11),
+                  wx + 1, y + 1, wz,     1, 1, baseShade * (1.0 - o11 * 0.11),
+                  wx,     y + 1, wz,     0, 1, baseShade * (1.0 - o01 * 0.11),
                   0, 1, 0, uv.u0, uv.v0, uv.du, uv.dv
                 );
               }
             } else {
-              const s = Math.min(1.25, baseShade);
+              const s = baseShade;
               const idx2 = lx + zOff;
               gMask[idx2] = (id << 10) | ((s * 128) | 0);
+              gGi[idx2] = giKey;
               gShade[idx2] = s;
               anyInSlice = true;
             }
@@ -5578,22 +6226,24 @@ export class World {
         }
 
         if (!anyInSlice) continue;
-        // Greedy 2D Rectangle Sweep across 16x16 slice!
+        // Greedy 2D Rectangle Sweep across 16x16 slice (preserves full 3D Voxel GI gradients!)
         for (let lz = 0; lz < 16; lz++) {
           for (let lx = 0; lx < 16; lx++) {
-            const key = gMask[lx + (lz << 4)];
+            const slot0 = lx + (lz << 4);
+            const key = gMask[slot0];
             if (key === 0) continue;
+            const giKey = gGi[slot0];
             let w = 1;
-            while (lx + w < 16 && gMask[(lx + w) + (lz << 4)] === key) w++;
+            while (lx + w < 16 && gMask[(lx + w) + (lz << 4)] === key && gGi[(lx + w) + (lz << 4)] === giKey) w++;
             let h = 1;
             outerH: while (lz + h < 16) {
               const rowOff = (lz + h) << 4;
               for (let k = 0; k < w; k++) {
-                if (gMask[lx + k + rowOff] !== key) break outerH;
+                if (gMask[lx + k + rowOff] !== key || gGi[lx + k + rowOff] !== giKey) break outerH;
               }
               h++;
             }
-            const s = gShade[lx + (lz << 4)];
+            const s = gShade[slot0];
             for (let dz = 0; dz < h; dz++) {
               const rowOff = (lz + dz) << 4;
               for (let dx = 0; dx < w; dx++) gMask[lx + dx + rowOff] = 0;
@@ -5601,6 +6251,7 @@ export class World {
             const id = key >>> 10;
             const uv = uvTable[id][fi];
             const wx = ox + lx, wz = oz + lz;
+            applyGI(bOpaque, lx, ny, lz, id);
             if (fi === 0) {
               bOpaque.pushTiledQuad(
                 wx,     y + 1, wz + h, 0, 0, s,
@@ -5643,11 +6294,9 @@ export class World {
             const neighbor = fastGet(nlx, y, lz);
             if (neighbor !== 0 && transTable[neighbor] === 0) continue;
 
-            const isLit = litTable[id] !== 0;
-            const skyF = isLit ? 1.0 : calcSkyLight(nlx, y, lz);
-            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+            const baseShade = faceShade;
+            const giKey = giVol.getLightPack(nlx, y, lz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
 
-            // 4-corner side AO
             const calcS = (dy, dz) =>
               solidTable[fastGet(nlx, y + dy, lz)] +
               solidTable[fastGet(nlx, y, lz + dz)] +
@@ -5658,28 +6307,30 @@ export class World {
             const o3 = fi === 2 ? calcS(1, 1) : calcS(1, -1);
 
             if (o0 === o1 && o1 === o2 && o2 === o3) {
-              const s = Math.min(1.25, baseShade * (1.0 - o0 * 0.09));
+              const s = baseShade * (1.0 - o0 * 0.11);
               gMask[lz + mRow] = (id << 10) | ((s * 128) | 0);
+              gGi[lz + mRow] = giKey;
               gShade[lz + mRow] = s;
               anyInSlice = true;
             } else {
               const uv = uvTable[id][fi];
               const wz = oz + lz;
               const xPos = fi === 2 ? wx + 1 : wx;
+              applyGI(bOpaque, nlx, y, lz, id);
               if (fi === 2) {
                 bOpaque.pushTiledQuad(
-                  xPos, y,     wz + 1, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
-                  xPos, y,     wz,     1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
-                  xPos, y + 1, wz,     1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
-                  xPos, y + 1, wz + 1, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  xPos, y,     wz + 1, 0, 0, baseShade * (1.0 - o0 * 0.11),
+                  xPos, y,     wz,     1, 0, baseShade * (1.0 - o1 * 0.11),
+                  xPos, y + 1, wz,     1, 1, baseShade * (1.0 - o2 * 0.11),
+                  xPos, y + 1, wz + 1, 0, 1, baseShade * (1.0 - o3 * 0.11),
                   1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
                 );
               } else {
                 bOpaque.pushTiledQuad(
-                  xPos, y,     wz,     0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
-                  xPos, y,     wz + 1, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
-                  xPos, y + 1, wz + 1, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
-                  xPos, y + 1, wz,     0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  xPos, y,     wz,     0, 0, baseShade * (1.0 - o0 * 0.11),
+                  xPos, y,     wz + 1, 1, 0, baseShade * (1.0 - o1 * 0.11),
+                  xPos, y + 1, wz + 1, 1, 1, baseShade * (1.0 - o2 * 0.11),
+                  xPos, y + 1, wz,     0, 1, baseShade * (1.0 - o3 * 0.11),
                   -1, 0, 0, uv.u0, uv.v0, uv.du, uv.dv
                 );
               }
@@ -5692,19 +6343,21 @@ export class World {
         for (let y = 0; y <= yLimit; y++) {
           const mRow = y << 4;
           for (let lz = 0; lz < 16; lz++) {
-            const key = gMask[lz + mRow];
+            const slot0 = lz + mRow;
+            const key = gMask[slot0];
             if (key === 0) continue;
+            const giKey = gGi[slot0];
             let w = 1;
-            while (lz + w < 16 && gMask[(lz + w) + mRow] === key) w++;
+            while (lz + w < 16 && gMask[(lz + w) + mRow] === key && gGi[(lz + w) + mRow] === giKey) w++;
             let h = 1;
             outerHX: while (y + h <= yLimit) {
               const rOff = (y + h) << 4;
               for (let k = 0; k < w; k++) {
-                if (gMask[lz + k + rOff] !== key) break outerHX;
+                if (gMask[lz + k + rOff] !== key || gGi[lz + k + rOff] !== giKey) break outerHX;
               }
               h++;
             }
-            const s = gShade[lz + mRow];
+            const s = gShade[slot0];
             for (let dy = 0; dy < h; dy++) {
               const rOff = (y + dy) << 4;
               for (let dz = 0; dz < w; dz++) gMask[lz + dz + rOff] = 0;
@@ -5712,6 +6365,7 @@ export class World {
             const id = key >>> 10;
             const uv = uvTable[id][fi];
             const wz = oz + lz;
+            applyGI(bOpaque, nlx, y, lz, id);
             if (fi === 2) {
               bOpaque.pushTiledQuad(
                 xPos, y,     wz + w, 0, 0, s,
@@ -5754,9 +6408,8 @@ export class World {
             const neighbor = fastGet(lx, y, nlz);
             if (neighbor !== 0 && transTable[neighbor] === 0) continue;
 
-            const isLit = litTable[id] !== 0;
-            const skyF = isLit ? 1.0 : calcSkyLight(lx, y, nlz);
-            const baseShade = faceShade * (isLit ? 1.24 : skyF);
+            const baseShade = faceShade;
+            const giKey = giVol.getLightPack(lx, y, nlz) | (giVol.isEmissiveBlock(id) ? (1 << 28) : 0);
 
             const calcS = (dy, dx) =>
               solidTable[fastGet(lx, y + dy, nlz)] +
@@ -5768,28 +6421,30 @@ export class World {
             const o3 = fi === 4 ? calcS(1, -1) : calcS(1, 1);
 
             if (o0 === o1 && o1 === o2 && o2 === o3) {
-              const s = Math.min(1.25, baseShade * (1.0 - o0 * 0.09));
+              const s = baseShade * (1.0 - o0 * 0.11);
               gMask[lx + mRow] = (id << 10) | ((s * 128) | 0);
+              gGi[lx + mRow] = giKey;
               gShade[lx + mRow] = s;
               anyInSlice = true;
             } else {
               const uv = uvTable[id][fi];
               const wx = ox + lx;
               const zPos = fi === 4 ? wz + 1 : wz;
+              applyGI(bOpaque, lx, y, nlz, id);
               if (fi === 4) {
                 bOpaque.pushTiledQuad(
-                  wx,     y,     zPos, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
-                  wx + 1, y,     zPos, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
-                  wx + 1, y + 1, zPos, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
-                  wx,     y + 1, zPos, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  wx,     y,     zPos, 0, 0, baseShade * (1.0 - o0 * 0.11),
+                  wx + 1, y,     zPos, 1, 0, baseShade * (1.0 - o1 * 0.11),
+                  wx + 1, y + 1, zPos, 1, 1, baseShade * (1.0 - o2 * 0.11),
+                  wx,     y + 1, zPos, 0, 1, baseShade * (1.0 - o3 * 0.11),
                   0, 0, 1, uv.u0, uv.v0, uv.du, uv.dv
                 );
               } else {
                 bOpaque.pushTiledQuad(
-                  wx + 1, y,     zPos, 0, 0, Math.min(1.25, baseShade * (1.0 - o0 * 0.09)),
-                  wx,     y,     zPos, 1, 0, Math.min(1.25, baseShade * (1.0 - o1 * 0.09)),
-                  wx,     y + 1, zPos, 1, 1, Math.min(1.25, baseShade * (1.0 - o2 * 0.09)),
-                  wx + 1, y + 1, zPos, 0, 1, Math.min(1.25, baseShade * (1.0 - o3 * 0.09)),
+                  wx + 1, y,     zPos, 0, 0, baseShade * (1.0 - o0 * 0.11),
+                  wx,     y,     zPos, 1, 0, baseShade * (1.0 - o1 * 0.11),
+                  wx,     y + 1, zPos, 1, 1, baseShade * (1.0 - o2 * 0.11),
+                  wx + 1, y + 1, zPos, 0, 1, baseShade * (1.0 - o3 * 0.11),
                   0, 0, -1, uv.u0, uv.v0, uv.du, uv.dv
                 );
               }
@@ -5802,19 +6457,21 @@ export class World {
         for (let y = 0; y <= yLimit; y++) {
           const mRow = y << 4;
           for (let lx = 0; lx < 16; lx++) {
-            const key = gMask[lx + mRow];
+            const slot0 = lx + mRow;
+            const key = gMask[slot0];
             if (key === 0) continue;
+            const giKey = gGi[slot0];
             let w = 1;
-            while (lx + w < 16 && gMask[(lx + w) + mRow] === key) w++;
+            while (lx + w < 16 && gMask[(lx + w) + mRow] === key && gGi[(lx + w) + mRow] === giKey) w++;
             let h = 1;
             outerHZ: while (y + h <= yLimit) {
               const rOff = (y + h) << 4;
               for (let k = 0; k < w; k++) {
-                if (gMask[lx + k + rOff] !== key) break outerHZ;
+                if (gMask[lx + k + rOff] !== key || gGi[lx + k + rOff] !== giKey) break outerHZ;
               }
               h++;
             }
-            const s = gShade[lx + mRow];
+            const s = gShade[slot0];
             for (let dy = 0; dy < h; dy++) {
               const rOff = (y + dy) << 4;
               for (let dx = 0; dx < w; dx++) gMask[lx + dx + rOff] = 0;
@@ -5822,6 +6479,7 @@ export class World {
             const id = key >>> 10;
             const uv = uvTable[id][fi];
             const wx = ox + lx;
+            applyGI(bOpaque, lx, y, nlz, id);
             if (fi === 4) {
               bOpaque.pushTiledQuad(
                 wx,     y,     zPos, 0, 0, s,
@@ -5906,7 +6564,11 @@ export class World {
       }
     }
 
-    const addBucket = (bucket, mat, renderOrder = 0, shadows = false) => {
+    const useShadows = this.shaderMode !== 'low';
+    const useFar = this.shaderMode === 'high' || this.shaderMode === 'ultra';
+    const shadowChunkR = useFar ? 6 : 3;
+    const nearShadow = Math.abs(cx - this._lastChunkPcx) <= shadowChunkR && Math.abs(cz - this._lastChunkPcz) <= shadowChunkR;
+    const addBucket = (bucket, mat, renderOrder = 0, shadowKind = 'none') => {
       const geo = bucket.toGeometry();
       if (!geo) return;
       const mesh = new THREE.Mesh(geo, mat);
@@ -5914,38 +6576,70 @@ export class World {
       mesh.frustumCulled = true;
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
-      const nearShadow = Math.abs(cx - this._lastChunkPcx) <= 3 && Math.abs(cz - this._lastChunkPcz) <= 3;
-      mesh.castShadow = shadows && nearShadow && this.shaderMode === 'ultra';
-      mesh.receiveShadow = (shadows || mat === this.cutoutMat) && nearShadow && this.shaderMode === 'ultra';
+      if (shadowKind === 'opaque') {
+        mesh.castShadow = useShadows && nearShadow;
+      } else if (shadowKind === 'cutout') {
+        mesh.customDepthMaterial = this.cutoutDepthMat;
+        mesh.castShadow = useFar && nearShadow;
+      } else if (shadowKind === 'water') {
+        // Put Water on Three.js Layer 1 so PostFX splits Opaque (Layer 0) -> Water SSR/Refraction (Layer 1) with ZERO extra opaque draws!
+        mesh.layers.set(1);
+      }
+      mesh.receiveShadow = false; // Handled directly by our 2-Cascade CSM Shader!
       this.group.add(mesh);
       chunk.meshes.push(mesh);
     };
 
-    addBucket(bOpaque, this.opaqueMat, 0, true);
-    addBucket(bCutout, this.cutoutMat, 1, false);
-    addBucket(bStatic, this.staticCutoutMat, 1, false);
-    addBucket(bFire, this.fireMat, 2, false);
-    // Water draws at renderOrder 3 (AFTER Early-Z SkyDome at renderOrder 2!)
-    addBucket(bWater, this.waterMat, 3, false);
+    addBucket(bOpaque, this.opaqueMat, 0, 'opaque');
+    addBucket(bCutout, this.cutoutMat, 1, 'cutout');
+    addBucket(bStatic, this.staticCutoutMat, 1, 'cutout');
+    addBucket(bFire, this.fireMat, 2, 'none');
+    addBucket(bWater, this.waterMat, 3, 'water');
     if (chunk.lightKeys.length > 0) this._lightDirty = true;
     this._shadowNeedsUpdate = true;
   }
 
   setShaderMode(mode) {
-    this.shaderMode = mode;
-    this.shaderUniforms.uWaveStrength.value = mode === 'off' ? 0.0 : (mode === 'ultra' ? 1.15 : 0.9);
-    this.shaderUniforms.uShaderOn.value = mode === 'off' ? 0.0 : 1.0;
-    const useShadows = mode === 'ultra';
+    const m = mode === 'off' ? 'low' : (mode === 'enhanced' ? 'medium' : (mode || 'ultra'));
+    this.shaderMode = m;
+    this.shaderUniforms.uWaveStrength.value = m === 'low' ? 0.0 : (m === 'ultra' ? 1.15 : (m === 'high' ? 1.0 : 0.85));
+    this.shaderUniforms.uShaderOn.value = m === 'low' ? 0.0 : 1.0;
+    this.shaderUniforms.uPbrOn.value = m === 'low' ? 0.0 : 1.0;
+    const useShadows = m !== 'low';
+    const useFar = m === 'high' || m === 'ultra';
+    const shadowChunkR = useFar ? 6 : 3;
+    this.shaderUniforms.uShadowsOn.value = useShadows ? 1.0 : 0.0;
+    this.shaderUniforms.uHasFarCascade.value = useFar ? 1.0 : 0.0;
+    this.shaderUniforms.uShadowSoftness.value = m === 'ultra' ? 1.55 : (m === 'high' ? 1.3 : 1.05);
     for (const chunk of this.chunks.values()) {
-      for (const m of chunk.meshes) {
-        if (m.material === this.opaqueMat) {
-          m.castShadow = useShadows;
-          m.receiveShadow = useShadows;
-        } else if (m.material === this.cutoutMat || m.material === this.staticCutoutMat) {
-          m.receiveShadow = useShadows;
+      const inR = Math.abs(chunk.cx - this._lastChunkPcx) <= shadowChunkR && Math.abs(chunk.cz - this._lastChunkPcz) <= shadowChunkR;
+      for (const mesh of chunk.meshes) {
+        if (mesh.material === this.opaqueMat) {
+          mesh.castShadow = useShadows && inR;
+        } else if (mesh.material === this.cutoutMat || mesh.material === this.staticCutoutMat) {
+          mesh.castShadow = useFar && inR;
         }
       }
     }
+    this._shadowNeedsUpdate = true;
+  }
+
+  setWaterSplitPass(active) {
+    if (!this.waterMat || !this.waterMat.uniforms) return;
+    this.waterMat.uniforms.uHasOpaqueCopy.value = active ? 1.0 : 0.0;
+    if (!active) this.waterMat.uniforms.uSsrSteps.value = 0.0;
+  }
+
+  syncWaterPass(opaqueColorTex, opaqueDepthTex, camera, width, height, ssrSteps = 20) {
+    const u = this.waterMat.uniforms;
+    u.tOpaqueColor.value = opaqueColorTex || this._dummyShadowTex;
+    u.tOpaqueDepth.value = opaqueDepthTex || this._dummyShadowTex;
+    u.uHasOpaqueCopy.value = (opaqueColorTex && opaqueDepthTex) ? 1.0 : 0.0;
+    u.uSsrSteps.value = ssrSteps;
+    u.uResolution.value.set(width, height);
+    u.uInvProjection.value.copy(camera.projectionMatrixInverse);
+    u.uProjection.value.copy(camera.projectionMatrix);
+    u.uViewMatrix.value.copy(camera.matrixWorldInverse);
   }
 
   updateShaders(dt, sky = null) {
@@ -5964,9 +6658,32 @@ export class World {
       this.shaderUniforms.uDayFactor.value = p.dayFactor;
       this.shaderUniforms.uSunsetFactor.value = p.sunsetFactor;
       this.shaderUniforms.uRainFactor.value = p.rainFactor;
+      if (typeof p.wetness === 'number') this.shaderUniforms.uWetness.value = p.wetness;
       this.shaderUniforms.uCloudTime.value = p.cloudTime;
       this.shaderUniforms.uFogNear.value = sky.fog.near;
       this.shaderUniforms.uFogFar.value = sky.fog.far;
+
+      if (sky.getShadowParams) {
+        const sp = sky.getShadowParams();
+        this.shaderUniforms.uShadowDir.value.copy(sp.shadowDir);
+        this.shaderUniforms.uSunLightColor.value.copy(sp.sunLightColor);
+        this.shaderUniforms.uSunLightIntensity.value = sp.sunLightIntensity;
+        this.shaderUniforms.uHemiSkyColor.value.copy(sp.hemiSkyColor);
+        this.shaderUniforms.uHemiGroundColor.value.copy(sp.hemiGroundColor);
+        this.shaderUniforms.uHemiIntensity.value = sp.hemiIntensity;
+        this.shaderUniforms.uFillColor.value.copy(sp.fillColor);
+        this.shaderUniforms.uFillIntensity.value = sp.fillIntensity;
+        this.shaderUniforms.uShadowMap0.value = sp.nearMap || this._dummyShadowTex;
+        this.shaderUniforms.uShadowMap1.value = sp.farMap || this._dummyShadowTex;
+        // Bind shadow matrices BY REFERENCE so WebGLShadowMap's in-frame update is instantly synced!
+        this.shaderUniforms.uShadowMatrix0.value = sp.nearMatrix;
+        this.shaderUniforms.uShadowMatrix1.value = sp.farMatrix;
+        this.shaderUniforms.uShadowTexel0.value = sp.nearTexelSize;
+        this.shaderUniforms.uShadowTexel1.value = sp.farTexelSize;
+        this.shaderUniforms.uShadowsOn.value = (sp.useShadows && sp.nearMap) ? 1.0 : 0.0;
+        this.shaderUniforms.uHasFarCascade.value = (sp.useFarCascade && sp.farMap) ? 1.0 : 0.0;
+        this.shaderUniforms.uShadowSoftness.value = sp.shadowSoftness;
+      }
     }
   }
 
@@ -6080,7 +6797,9 @@ export class World {
     if (movedChunk) {
       const unloadR = r + 3;
       const unloadSq = unloadR * unloadR;
-      const useShadows = this.shaderMode === 'ultra';
+      const useShadows = this.shaderMode !== 'low';
+      const useFar = this.shaderMode === 'high' || this.shaderMode === 'ultra';
+      const shadowChunkR = useFar ? 6 : 3;
       for (const [key, chunk] of this.chunks.entries()) {
         const dx = chunk.cx - pcx;
         const dz = chunk.cz - pcz;
@@ -6095,14 +6814,12 @@ export class World {
           }
           this.chunks.delete(key);
         } else if (useShadows) {
-          // Only chunks within the ±46-block shadow frustum cast shadows (massive shadow-pass speedup!)
-          const inShadowFrustum = Math.abs(dx) <= 3 && Math.abs(dz) <= 3;
+          const inShadowFrustum = Math.abs(dx) <= shadowChunkR && Math.abs(dz) <= shadowChunkR;
           for (const m of chunk.meshes) {
             if (m.material === this.opaqueMat) {
               m.castShadow = inShadowFrustum;
-              m.receiveShadow = inShadowFrustum;
             } else if (m.material === this.cutoutMat || m.material === this.staticCutoutMat) {
-              m.receiveShadow = inShadowFrustum;
+              m.castShadow = useFar && inShadowFrustum;
             }
           }
         }
@@ -6650,7 +7367,29 @@ export class World {
     }
   }
 
-  // Update pooled real-time PointLights for the closest placed Torches & Glowstone (brighter at night!)
+  // Returns true if (wx, wy, wz) is lit by any Torch, Glowstone, Fire, or Lava within `radius` blocks (blocks hostile spawns!)
+  isPosLitByLightSource(wx, wy, wz, radius = 12) {
+    const r2 = radius * radius;
+    if (this.lightSources && this.lightSources.size > 0) {
+      for (const src of this.lightSources.values()) {
+        const dx = src.x + 0.5 - wx;
+        const dy = src.y + 0.5 - wy;
+        const dz = src.z + 0.5 - wz;
+        if (dx * dx + dy * dy + dz * dz <= r2) return true;
+      }
+    }
+    if (this.activeFires && this.activeFires.size > 0) {
+      for (const f of this.activeFires.values()) {
+        const dx = f.x + 0.5 - wx;
+        const dy = f.y + 0.5 - wy;
+        const dz = f.z + 0.5 - wz;
+        if (dx * dx + dy * dy + dz * dz <= r2) return true;
+      }
+    }
+    return false;
+  }
+
+  // Update pooled real-time PointLights for the closest placed/generated Torches & Glowstone (brighter towns, castles & pyramids!)
   updateTorchLights(dt, playerPos, sky = null) {
     if (!this.torchLightPool || this.torchLightPool.length === 0 || !playerPos) return;
     this._lightClock += dt;
@@ -6660,7 +7399,7 @@ export class World {
       this._lightDirty = false;
       this._lightRefreshTimer = 0.16;
 
-      const maxDistSq = 54 * 54;
+      const maxDistSq = 68 * 68;
       const near = [];
       for (const src of this.lightSources.values()) {
         const dx = src.x + 0.5 - playerPos.x;
@@ -6684,23 +7423,34 @@ export class World {
 
     for (let i = 0; i < this.torchLightPool.length; i++) {
       const pl = this.torchLightPool[i];
+      const dlPos = this._dynLightPos[i];
+      const dlCol = this._dynLightCol[i];
       if (i < activeCount) {
         const s = this._activeLightSources[i];
-        // Position light slightly above the torch flame so it floods nearby floor & walls cleanly!
-        pl.position.set(s.x + 0.5, s.y + (s.isGlowstone ? 0.6 : 1.18), s.z + 0.5);
+        const lx = s.x + 0.5, ly = s.y + (s.isGlowstone ? 0.6 : 1.18), lz = s.z + 0.5;
+        pl.position.set(lx, ly, lz);
         const phase = s.x * 1.7 + s.z * 2.3 + s.y * 0.9;
         const flicker = s.isGlowstone
-          ? Math.sin(t * 3.5 + phase) * 0.22
-          : Math.sin(t * 8.5 + phase) * 0.48 + Math.cos(t * 15.2 + phase * 1.3) * 0.24;
-        // +100% Brighter Torch & Glowstone Light Output with wide warm illumination!
+          ? Math.sin(t * 3.5 + phase) * 0.25
+          : Math.sin(t * 8.5 + phase) * 0.55 + Math.cos(t * 15.2 + phase * 1.3) * 0.28;
         const baseIntensity = s.isGlowstone
-          ? (9.6 + nightFactor * 14.4)
-          : (8.0 + nightFactor * 13.6);
-        pl.intensity = Math.max(1.0, baseIntensity + flicker);
-        pl.distance = 38 + nightFactor * 14;
-        pl.color.setHex(s.isGlowstone ? 0xffd27a : 0xffb247);
+          ? (13.5 + nightFactor * 20.5)
+          : (12.0 + nightFactor * 19.0);
+        const inten = Math.max(1.5, baseIntensity + flicker);
+        const range = 48 + nightFactor * 18;
+        pl.intensity = inten;
+        pl.distance = range;
+        pl.color.setHex(s.isGlowstone ? 0xffd584 : 0xffb64e);
+        if (dlPos && dlCol) {
+          dlPos.set(lx, ly, lz, range * 0.65);
+          dlCol.set(pl.color.r, pl.color.g, pl.color.b, inten * 0.48);
+        }
       } else {
         pl.intensity = 0;
+        if (dlPos && dlCol) {
+          dlPos.set(0, -9999, 0, 1);
+          dlCol.set(0, 0, 0, 0);
+        }
       }
     }
   }
