@@ -14,30 +14,31 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="css/style.css?v=41" />
+  <link rel="stylesheet" href="css/style.css?v=46" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=41",
-        "./js/textures.js": "./js/textures.js?v=41",
-        "./js/mods.js": "./js/mods.js?v=41",
-        "./js/inventory.js": "./js/inventory.js?v=41",
-        "./js/recipes.js": "./js/recipes.js?v=41",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=41",
-        "./js/noise.js": "./js/noise.js?v=41",
-        "./js/voxel-gi.js": "./js/voxel-gi.js?v=41",
-        "./js/world.js": "./js/world.js?v=41",
-        "./js/mobs.js": "./js/mobs.js?v=41",
-        "./js/player.js": "./js/player.js?v=41",
-        "./js/effects.js": "./js/effects.js?v=41",
-        "./js/audio.js": "./js/audio.js?v=41",
-        "./js/ui.js": "./js/ui.js?v=41",
-        "./js/controls.js": "./js/controls.js?v=41",
-        "./js/sky.js": "./js/sky.js?v=41",
-        "./js/postfx.js": "./js/postfx.js?v=41",
-        "./js/panorama.js": "./js/panorama.js?v=41",
-        "./js/storage.js": "./js/storage.js?v=41"
+        "./js/blocks.js": "./js/blocks.js?v=46",
+        "./js/textures.js": "./js/textures.js?v=46",
+        "./js/mods.js": "./js/mods.js?v=46",
+        "./js/inventory.js": "./js/inventory.js?v=46",
+        "./js/recipes.js": "./js/recipes.js?v=46",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=46",
+        "./js/noise.js": "./js/noise.js?v=46",
+        "./js/voxel-gi.js": "./js/voxel-gi.js?v=46",
+        "./js/world.js": "./js/world.js?v=46",
+        "./js/mobs.js": "./js/mobs.js?v=46",
+        "./js/player.js": "./js/player.js?v=46",
+        "./js/effects.js": "./js/effects.js?v=46",
+        "./js/audio.js": "./js/audio.js?v=46",
+        "./js/ui.js": "./js/ui.js?v=46",
+        "./js/controls.js": "./js/controls.js?v=46",
+        "./js/sky.js": "./js/sky.js?v=46",
+        "./js/postfx.js": "./js/postfx.js?v=46",
+        "./js/panorama.js": "./js/panorama.js?v=46",
+        "./js/multiplayer.js": "./js/multiplayer.js?v=46",
+        "./js/storage.js": "./js/storage.js?v=46"
       }
     }
   </script>
@@ -103,34 +104,58 @@
         </div>
       </div>
 
-      <div class="java-menu-stack">
-        <button id="btn-nav-singleplayer" class="mc-stone-btn primary java-wide" data-title-view="singleplayer">
-          <img class="px-ui-icon btn-px" data-px-icon="play" alt="" />
-          <span>Singleplayer</span>
-        </button>
-        <button id="btn-nav-multiplayer" class="mc-stone-btn mp-highlight-btn java-wide" data-title-view="multiplayer">
-          <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
-          <span>Multiplayer</span>
-          <span class="java-new-pill">NEW</span>
-        </button>
-        <button id="btn-nav-mods" class="mc-stone-btn java-wide java-mods-btn" data-title-view="mods">
-          <img class="px-ui-icon btn-px" data-px-icon="mods" alt="" />
-          <span>Mods &amp; Add-Ons</span>
-          <span class="java-count-pill"><span id="title-mod-count">2</span></span>
-        </button>
+      <div class="java-home-columns">
+        <div class="java-menu-stack">
+          <button id="btn-nav-singleplayer" class="mc-stone-btn primary java-wide" data-title-view="singleplayer">
+            <img class="px-ui-icon btn-px" data-px-icon="play" alt="" />
+            <span>Singleplayer</span>
+          </button>
+          <button id="btn-nav-multiplayer" class="mc-stone-btn mp-highlight-btn java-wide" data-title-view="multiplayer">
+            <img class="px-ui-icon btn-px" data-px-icon="multiplayer" alt="" />
+            <span>Multiplayer</span>
+            <span class="java-new-pill">NEW</span>
+          </button>
+          <button id="btn-nav-mods" class="mc-stone-btn java-wide java-mods-btn" data-title-view="mods">
+            <img class="px-ui-icon btn-px" data-px-icon="mods" alt="" />
+            <span>Mods &amp; Add-Ons</span>
+            <span class="java-count-pill"><span id="title-mod-count">2</span></span>
+          </button>
 
-        <div class="java-bottom-row">
-          <button id="btn-nav-options" class="mc-stone-btn java-half" data-title-view="settings">
-            <img class="px-ui-icon btn-px" data-px-icon="settings" alt="" />
-            <span>Options</span>
-          </button>
-          <button id="btn-nav-guide" class="mc-stone-btn java-half" data-title-view="guide">
-            <img class="px-ui-icon btn-px" data-px-icon="book" alt="" />
-            <span>Controls</span>
-          </button>
-          <button id="btn-quick-scale" class="mc-stone-btn java-sq" title="Toggle Large / Compact iPad UI Scale" aria-label="Toggle UI Scale">
-            <img class="px-ui-icon btn-px solo-px" data-px-icon="person" alt="UI Scale" />
-          </button>
+          <div class="java-bottom-row">
+            <button id="btn-nav-options" class="mc-stone-btn java-half" data-title-view="settings">
+              <img class="px-ui-icon btn-px" data-px-icon="settings" alt="" />
+              <span>Options</span>
+            </button>
+            <button id="btn-nav-guide" class="mc-stone-btn java-half" data-title-view="guide">
+              <img class="px-ui-icon btn-px" data-px-icon="book" alt="" />
+              <span>Controls</span>
+            </button>
+            <button id="btn-quick-scale" class="mc-stone-btn java-sq" title="Toggle Large / Compact iPad UI Scale" aria-label="Toggle UI Scale">
+              <img class="px-ui-icon btn-px solo-px" data-px-icon="person" alt="UI Scale" />
+            </button>
+          </div>
+        </div>
+
+        <!-- LIVE 3D CHARACTER, DISPLAY NAME CHANGER & SKIN CUSTOMIZER -->
+        <div class="title-avatar-card">
+          <div class="title-avatar-stage" id="title-avatar-stage">
+            <div class="title-nametag-plate" id="title-player-nametag">Player</div>
+            <canvas id="title-player-canvas" width="210" height="236" aria-label="3D Character Preview"></canvas>
+          </div>
+
+          <div class="title-name-row">
+            <label for="title-player-name">Display Name</label>
+            <input type="text" id="title-player-name" class="title-name-input" maxlength="16" placeholder="Player" autocomplete="off" spellcheck="false" />
+          </div>
+
+          <div class="title-skin-section">
+            <div class="title-skin-bar">
+              <button type="button" id="btn-skin-prev" class="mc-stone-btn sm skin-arrow-btn" aria-label="Previous Skin">&lt;</button>
+              <span class="title-skin-label">Skin: <strong id="title-skin-name">Steve</strong></span>
+              <button type="button" id="btn-skin-next" class="mc-stone-btn sm skin-arrow-btn" aria-label="Next Skin">&gt;</button>
+            </div>
+            <div id="title-skin-grid" class="title-skin-grid"></div>
+          </div>
         </div>
       </div>
 
@@ -265,9 +290,9 @@
               <span>Enter a friend's 6-character world code to jump straight into their live world with real-time blocks, chat, and 3D held tools!</span>
             </div>
           </div>
-          <div class="mp-name-row">
-            <label for="mp-player-name">Your Display Name</label>
-            <input type="text" id="mp-player-name" class="cw-mc-input mp-name-input" maxlength="16" placeholder="Player" />
+          <div class="mp-profile-strip">
+            <span class="mp-profile-info">Playing as <strong id="mp-profile-name">Player</strong> &bull; Skin: <strong id="mp-profile-skin">Steve</strong></span>
+            <button type="button" class="mc-stone-btn sm" data-title-view="home">Edit Profile</button>
           </div>
           <div class="mp-hero-actions">
             <button id="btn-open-join-world" class="mc-stone-btn primary mp-join-hero-btn">
@@ -476,9 +501,8 @@
     <!-- Active Status Effects HUD -->
     <div id="effects-hud" class="effects-hud hidden"></div>
 
-    <!-- Toast Notifications & Chat Log -->
+    <!-- Chat Log -->
     <div id="chat-log"></div>
-    <div id="toast-area"></div>
 
     <!-- iPad / Mobile Touch Controls -->
     <div id="touch-controls">
@@ -1118,9 +1142,12 @@
     </div>
   </div>
 
+  <!-- Global Toast Notifications (always above modals & title screen) -->
+  <div id="toast-area"></div>
+
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=44"></script>
+  <script type="module" src="js/main.js?v=46"></script>
 </body>
 </html>

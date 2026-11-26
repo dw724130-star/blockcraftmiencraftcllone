@@ -751,6 +751,7 @@ class BlockCraftGame {
     }
     const res = await this.multiplayer.hostWorld();
     const formatted = formatRoomCode(res.code);
+    if (this.player) this.player.setDisplayName(this.multiplayer.playerName, true);
     this.ui.addChatMessage(`Multiplayer World open! Share code: ${formatted}`);
     this.ui.syncMultiplayerUI(this.multiplayer);
     return res;
@@ -812,6 +813,7 @@ class BlockCraftGame {
     if (!this.multiplayer || !this.multiplayer.isActive()) return;
     const wasGuest = this.multiplayer.role === 'guest';
     this.multiplayer.disconnect(false);
+    if (this.player) this.player.setDisplayName(this.multiplayer.playerName, false);
     this.ui.syncMultiplayerUI(this.multiplayer);
     if (wasGuest) {
       this.quitToTitle();

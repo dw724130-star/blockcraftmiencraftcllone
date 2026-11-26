@@ -1,19 +1,72 @@
 import * as THREE from 'three';
 import { BLOCK, ITEMS, getBlockDef, isBlockSolid, isBlockLiquid, isDoorBlock, isFenceGateBlock, isFenceOrGate, isStairBlock } from './blocks.js';
+import { getSavedPlayerName, getSavedPlayerSkin } from './storage.js';
 
 const PLAYER_RADIUS = 0.33;
 const PLAYER_HEIGHT = 1.75;
 const EYE_HEIGHT = 1.56;
 
-// Shared Classic Minecraft Steve 3D Model + Visible 3D Armor Shells (used by BOTH 3rd-Person Player AND Inventory Doll!)
-export function createSteveModel(textures) {
-  const root = new THREE.Group();
-  const sTex = textures && textures.getSteveTextures ? textures.getSteveTextures() : null;
+// Authentic Minecraft Floating Nametag Sprite positioned directly above the player's head!
+export function createPlayerNametag(name = 'Player', isHost = false) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 48;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.75, 0.33, 1);
+  sprite.position.set(0, 2.16, 0);
+  const tagObj = { sprite, canvas, tex, mat, name: '', isHost: false };
+  updatePlayerNametag(tagObj, name, isHost);
+  return tagObj;
+}
 
-  const skinMat = new THREE.MeshLambertMaterial({ color: 0xc6906c });
-  const sleeveMat = new THREE.MeshLambertMaterial({ color: 0x14a6ad });
-  const jeanTopMat = new THREE.MeshLambertMaterial({ color: 0x262169 });
-  const shoeBotMat = new THREE.MeshLambertMaterial({ color: 0x303030 });
+export function updatePlayerNametag(tagObj, name = 'Player', isHost = false) {
+  if (!tagObj) return;
+  const clean = String(name || 'Player').trim().slice(0, 16) || 'Player';
+  const hostFlag = Boolean(isHost);
+  if (tagObj.name === clean && tagObj.isHost === hostFlag) return;
+  tagObj.name = clean;
+  tagObj.isHost = hostFlag;
+
+  const ctx = tagObj.canvas.getContext('2d');
+  ctx.clearRect(0, 0, 256, 48);
+
+  const label = hostFlag ? `★ ${clean}` : clean;
+  ctx.font = 'bold 24px "Courier New", Consolas, monospace';
+  const tw = Math.min(244, Math.max(68, Math.ceil(ctx.measureText(label).width) + 22));
+  const rx = Math.round((256 - tw) * 0.5);
+
+  // Classic Minecraft translucent dark nameplate floating cleanly above head
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.46)';
+  ctx.fillRect(rx, 8, tw, 32);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+  ctx.fillText(label, 130, 26);
+  ctx.fillStyle = hostFlag ? '#ffe57f' : '#ffffff';
+  ctx.fillText(label, 128, 24);
+  tagObj.tex.needsUpdate = true;
+}
+
+function buildSkinMaterialBundle(textures, skinId = 'steve') {
+  const sTex = textures && textures.getPlayerSkinTextures
+    ? textures.getPlayerSkinTextures(skinId)
+    : (textures && textures.getSteveTextures ? textures.getSteveTextures() : null);
+
+  const skinMat = new THREE.MeshLambertMaterial({ color: sTex?.skinHex ?? 0xc6906c });
+  const sleeveMat = new THREE.MeshLambertMaterial({ color: sTex?.sleeveHex ?? 0x14a6ad });
+  const jeanTopMat = new THREE.MeshLambertMaterial({ color: sTex?.pantHex ?? 0x262169 });
+  const shoeBotMat = new THREE.MeshLambertMaterial({ color: sTex?.shoeHex ?? 0x303030 });
 
   const headMats = sTex ? [
     new THREE.MeshLambertMaterial({ map: sTex.headSide }),
@@ -51,6 +104,16 @@ export function createSteveModel(textures) {
     new THREE.MeshLambertMaterial({ map: sTex.legFront })
   ] : jeanTopMat;
 
+  return { headMats, torsoMats, armMats, legMats, slimArms: Boolean(sTex?.slimArms), sTex };
+}
+
+// Shared Classic Minecraft Character 3D Model + Multi-Skin + Visible 3D Armor Shells (Main Menu, Inventory, 3rd-Person & Multiplayer!)
+export function createSteveModel(textures, skinId = null) {
+  const resolvedSkin = skinId || getSavedPlayerSkin();
+  const root = new THREE.Group();
+  const bundle = buildSkinMaterialBundle(textures, resolvedSkin);
+  const { headMats, torsoMats, armMats, legMats } = bundle;
+
   const bodyPivot = new THREE.Group();
   root.add(bodyPivot);
 
@@ -78,7 +141,7 @@ export function createSteveModel(textures) {
     pivot.add(bootArmor);
 
     bodyPivot.add(pivot);
-    return { pivot, legArmor, bootArmor };
+    return { pivot, legMesh, legArmor, bootArmor };
   };
   const leftLegObj = makeLeg(-0.125);
   const rightLegObj = makeLeg(0.125);
@@ -101,12 +164,13 @@ export function createSteveModel(textures) {
   waistArmor.visible = false;
   bodyPivot.add(waistArmor);
 
-  // Arms (pivoted at shoulder Y = 1.38, classic Steve 4x12x4 proportions!)
+  // Arms (pivoted at shoulder Y = 1.38; Alex slim arms scale X to 0.78!)
   const makeArm = (xOff, isRight) => {
     const pivot = new THREE.Group();
     pivot.position.set(xOff, 1.38, 0);
     const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.70, 0.24), armMats);
     armMesh.position.set(0, -0.33, 0);
+    armMesh.scale.x = bundle.slimArms ? 0.78 : 1.0;
     armMesh.castShadow = true;
     pivot.add(armMesh);
 
@@ -122,10 +186,10 @@ export function createSteveModel(textures) {
       pivot.add(heldItem);
     }
     bodyPivot.add(pivot);
-    return { pivot, pauldronArmor, heldItem };
+    return { pivot, armMesh, pauldronArmor, heldItem };
   };
-  const leftArmObj = makeArm(-0.365, false);
-  const rightArmObj = makeArm(0.365, true);
+  const leftArmObj = makeArm(bundle.slimArms ? -0.34 : -0.365, false);
+  const rightArmObj = makeArm(bundle.slimArms ? 0.34 : 0.365, true);
 
   // Head (pivoted at neck Y = 1.40, classic Steve 8x8x8 proportions!)
   const headPivot = new THREE.Group();
@@ -135,7 +199,7 @@ export function createSteveModel(textures) {
   head.castShadow = true;
   headPivot.add(head);
 
-  // 3D Helmet Shell (with open front face visor cutout so Steve's eyes & goatee shine through!)
+  // 3D Helmet Shell (with open front face visor cutout so eyes & face shine through!)
   const helmArmor = new THREE.Mesh(new THREE.BoxGeometry(0.545, 0.545, 0.545), placeholderMat);
   helmArmor.position.set(0, 0.245, 0);
   helmArmor.visible = false;
@@ -153,6 +217,14 @@ export function createSteveModel(textures) {
     rightArm: rightArmObj.pivot,
     heldItem: rightArmObj.heldItem,
     heldRig: rightArmObj.heldItem,
+    skinMeshes: {
+      head,
+      torso,
+      leftArmMesh: leftArmObj.armMesh,
+      rightArmMesh: rightArmObj.armMesh,
+      leftLegMesh: leftLegObj.legMesh,
+      rightLegMesh: rightLegObj.legMesh
+    },
     armorMeshes: {
       helm: helmArmor,
       chest: chestArmor,
@@ -165,9 +237,36 @@ export function createSteveModel(textures) {
       bootR: rightLegObj.bootArmor
     },
     _textures: textures,
+    _skinMatCache: { [resolvedSkin]: bundle },
     _armorMatCache: {},
+    _lastSkinId: resolvedSkin,
     _lastArmorSig: ''
   };
+}
+
+export function updateSteveSkin(model, skinId = 'steve') {
+  if (!model || !model.skinMeshes) return;
+  const next = skinId || 'steve';
+  if (model._lastSkinId === next) return;
+  model._lastSkinId = next;
+  let bundle = model._skinMatCache[next];
+  if (!bundle) {
+    bundle = buildSkinMaterialBundle(model._textures, next);
+    model._skinMatCache[next] = bundle;
+  }
+  const sm = model.skinMeshes;
+  sm.head.material = bundle.headMats;
+  sm.torso.material = bundle.torsoMats;
+  sm.leftArmMesh.material = bundle.armMats;
+  sm.rightArmMesh.material = bundle.armMats;
+  sm.leftLegMesh.material = bundle.legMats;
+  sm.rightLegMesh.material = bundle.legMats;
+
+  const armScaleX = bundle.slimArms ? 0.78 : 1.0;
+  sm.leftArmMesh.scale.x = armScaleX;
+  sm.rightArmMesh.scale.x = armScaleX;
+  model.leftArm.position.x = bundle.slimArms ? -0.34 : -0.365;
+  model.rightArm.position.x = bundle.slimArms ? 0.34 : 0.365;
 }
 
 // Shared geometries/materials for sculpted 3D held torches (reused across 1st-person, 3rd-person & all multiplayer friends!)
@@ -598,18 +697,24 @@ export class Player {
     this._lastCrackStage = -1;
 
     // First-person sculpted Minecraft arm + sleeve + pixel-art held block/item/tool
+    this.skinId = getSavedPlayerSkin();
+    this.displayName = getSavedPlayerName();
+    const initSkinTex = textures && textures.getPlayerSkinTextures
+      ? textures.getPlayerSkinTextures(this.skinId)
+      : null;
+
     this.handGroup = new THREE.Group();
     this.handPivot = new THREE.Group();
     this.handGroup.add(this.handPivot);
 
     this.armMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.17, 0.17, 0.48),
-      new THREE.MeshLambertMaterial({ color: 0xdba882 })
+      new THREE.MeshLambertMaterial({ color: initSkinTex?.skinHex ?? 0xdba882 })
     );
     this.armMesh.position.set(0, 0, 0);
     this.sleeveMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.19, 0.19, 0.22),
-      new THREE.MeshLambertMaterial({ color: 0x26a6b8 })
+      new THREE.MeshLambertMaterial({ color: initSkinTex?.sleeveHex ?? 0x14a6ad })
     );
     this.sleeveMesh.position.set(0, 0, 0.2);
     this.handPivot.add(this.armMesh, this.sleeveMesh);
@@ -633,9 +738,11 @@ export class Player {
     this.camera.add(this.handGroup);
     this.wasInWater = false;
 
-    // 3D Articulated Player Model (visible in 3rd-person back & front views)
+    // 3D Articulated Player Model (visible in 3rd-person back & front views) + Authentic Minecraft Nametag on top!
     this.playerModel = this.buildPlayerModel();
     this.playerModel.root.visible = false;
+    this.nametag = createPlayerNametag(this.displayName, false);
+    this.playerModel.root.add(this.nametag.sprite);
 
     // 3D Animated Burning Flames wrapping Steve when on fire (visible in 3rd-person views!)
     this.playerFireGroup = createSteveFireGroup(textures);
@@ -648,7 +755,25 @@ export class Player {
   }
 
   buildPlayerModel() {
-    return createSteveModel(this.textures);
+    return createSteveModel(this.textures, this.skinId);
+  }
+
+  setSkin(skinId) {
+    const next = skinId || 'steve';
+    this.skinId = next;
+    if (this.playerModel) updateSteveSkin(this.playerModel, next);
+    const sTex = this.textures && this.textures.getPlayerSkinTextures
+      ? this.textures.getPlayerSkinTextures(next)
+      : null;
+    if (sTex) {
+      if (this.armMesh?.material) this.armMesh.material.color.setHex(sTex.skinHex);
+      if (this.sleeveMesh?.material) this.sleeveMesh.material.color.setHex(sTex.sleeveHex);
+    }
+  }
+
+  setDisplayName(name, isHost = false) {
+    this.displayName = String(name || 'Player').trim().slice(0, 16) || 'Player';
+    if (this.nametag) updatePlayerNametag(this.nametag, this.displayName, isHost);
   }
 
   attachToScene(scene) {

@@ -3,9 +3,9 @@ import { ITEMS, getItemCategory } from './blocks.js';
 import { RECIPES, matchCraftingGrid, canCraftRecipe, quickCraftRecipe, matchesItemTag, SMELTING_RECIPES, FUEL_VALUES } from './recipes.js';
 import { MOD_LIST } from './mods.js';
 import { VILLAGER_TRADES } from './mobs.js';
-import { DEFAULT_KEYBINDS } from './storage.js';
-import { createSteveModel, updateSteveArmor } from './player.js';
-import { formatRoomCode, getRecentRoomCodes, getSavedPlayerName, savePlayerName } from './multiplayer.js';
+import { DEFAULT_KEYBINDS, PLAYER_SKINS, getSavedPlayerName, savePlayerName, getSavedPlayerSkin, savePlayerSkin } from './storage.js';
+import { createSteveModel, updateSteveArmor, updateSteveSkin, updateHeldItemRig } from './player.js';
+import { formatRoomCode, getRecentRoomCodes } from './multiplayer.js';
 
 // Smooth 24-stop non-linear Render Distance scale (2..1024 chunks — easy touch precision on iPad!)
 const RD_STOPS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024];
@@ -165,6 +165,8 @@ export class UIManager {
     if (splash) splash.textContent = SPLASH_TEXTS[0];
     this.syncMultiplayerHubInputs();
     this.renderRecentRoomCodes();
+    this.renderTitleSkinCustomizer();
+    this._startTitle3DLoop();
   }
 
   showLoadingScreen(show, progress = 0, status = 'Generating terrain...', worldName = '') {
@@ -205,6 +207,13 @@ export class UIManager {
       document.getElementById('cw-page-main')?.classList.remove('hidden');
       document.getElementById('cw-page-more')?.classList.add('hidden');
       this.syncCreateWorldUI();
+    }
+    if (viewName === 'home') {
+      this.syncMultiplayerHubInputs();
+      this.renderTitleSkinCustomizer();
+      this._startTitle3DLoop();
+    } else {
+      this._stopTitle3DLoop();
     }
     if (viewName === 'mods') this.renderModsUI();
     if (viewName === 'multiplayer') {
@@ -341,25 +350,46 @@ export class UIManager {
       document.getElementById('btn-craft-book')?.classList.remove('active');
     });
 
-    // Live smooth 3D Steve cursor tracking across the entire viewport while Player Inventory is open!
+    // Live smooth 3D Player cursor tracking for BOTH Inventory Doll AND Main Menu 3D Character!
     this._steveTargetX = 0.22;
     this._steveTargetY = 0.04;
     this._steveLookX = 0.22;
     this._steveLookY = 0.04;
     this._stevePreviewRAF = null;
     this._inv3d = null;
-    const onInvPointer = (e) => {
-      if (this.activeModal !== 'inventory-modal') return;
-      const box = document.getElementById('inv-player-preview');
-      if (!box) return;
-      const r = box.getBoundingClientRect();
-      const cx = r.left + r.width * 0.5;
-      const cy = r.top + r.height * 0.28;
-      this._steveTargetX = Math.max(-1, Math.min(1, (e.clientX - cx) / 210));
-      this._steveTargetY = Math.max(-1, Math.min(1, (e.clientY - cy) / 180));
+
+    this._titleTargetX = -0.18;
+    this._titleTargetY = 0.02;
+    this._titleLookX = -0.18;
+    this._titleLookY = 0.02;
+    this._titlePreviewRAF = null;
+    this._title3d = null;
+    this._titleWaveAnim = 0;
+
+    const onCharacterPointer = (e) => {
+      if (this.activeModal === 'inventory-modal') {
+        const box = document.getElementById('inv-player-preview');
+        if (!box) return;
+        const r = box.getBoundingClientRect();
+        const cx = r.left + r.width * 0.5;
+        const cy = r.top + r.height * 0.28;
+        this._steveTargetX = Math.max(-1, Math.min(1, (e.clientX - cx) / 210));
+        this._steveTargetY = Math.max(-1, Math.min(1, (e.clientY - cy) / 180));
+      }
+      const titleEl = document.getElementById('title-screen');
+      const homeEl = document.getElementById('title-view-home');
+      if (titleEl && !titleEl.classList.contains('hidden') && homeEl && !homeEl.classList.contains('hidden')) {
+        const stage = document.getElementById('title-avatar-stage');
+        if (!stage) return;
+        const r = stage.getBoundingClientRect();
+        const cx = r.left + r.width * 0.5;
+        const cy = r.top + r.height * 0.30;
+        this._titleTargetX = Math.max(-1, Math.min(1, (e.clientX - cx) / 280));
+        this._titleTargetY = Math.max(-1, Math.min(1, (e.clientY - cy) / 220));
+      }
     };
-    window.addEventListener('pointermove', onInvPointer, { passive: true });
-    window.addEventListener('pointerdown', onInvPointer, { passive: true });
+    window.addEventListener('pointermove', onCharacterPointer, { passive: true });
+    window.addEventListener('pointerdown', onCharacterPointer, { passive: true });
 
     // Creative search, categories, stack mode & clear inventory
     document.getElementById('creative-search')?.addEventListener('input', (e) => {
@@ -456,17 +486,20 @@ export class UIManager {
       });
     }
 
-    // Live Multiplayer Hub & Join World Popup Modal bindings
-    const syncPlayerNameValue = (val) => {
-      const clean = savePlayerName(val);
-      if (this.game?.multiplayer) this.game.multiplayer.playerName = clean;
-      const a = document.getElementById('mp-player-name');
-      const b = document.getElementById('join-name-input');
-      if (a && a.value !== clean) a.value = clean;
-      if (b && b.value !== clean) b.value = clean;
+    // Live Main Menu Display Name, Skin Customizer & Multiplayer Hub bindings
+    const titleNameInp = document.getElementById('title-player-name');
+    titleNameInp?.addEventListener('input', (e) => this.setPlayerDisplayName(e.target.value, false));
+    titleNameInp?.addEventListener('change', (e) => this.setPlayerDisplayName(e.target.value, true));
+    document.getElementById('join-name-input')?.addEventListener('change', (e) => this.setPlayerDisplayName(e.target.value, true));
+
+    const cycleSkin = (dir) => {
+      const cur = getSavedPlayerSkin();
+      const idx = Math.max(0, PLAYER_SKINS.findIndex((s) => s.id === cur));
+      const next = PLAYER_SKINS[(idx + dir + PLAYER_SKINS.length) % PLAYER_SKINS.length];
+      if (next) this.setPlayerSkin(next.id);
     };
-    document.getElementById('mp-player-name')?.addEventListener('change', (e) => syncPlayerNameValue(e.target.value));
-    document.getElementById('join-name-input')?.addEventListener('change', (e) => syncPlayerNameValue(e.target.value));
+    document.getElementById('btn-skin-prev')?.addEventListener('click', () => cycleSkin(-1));
+    document.getElementById('btn-skin-next')?.addEventListener('click', () => cycleSkin(1));
 
     const openJoinWorld = (prefillCode = '') => this.openJoinWorldModal(prefillCode);
     document.getElementById('btn-open-join-world')?.addEventListener('click', () => openJoinWorld(''));
@@ -478,7 +511,7 @@ export class UIManager {
     const submitJoinWorld = async () => {
       if (!this.game || this._joiningWorld) return;
       const rawCode = joinCodeInput?.value || '';
-      const nameVal = document.getElementById('join-name-input')?.value || document.getElementById('mp-player-name')?.value || getSavedPlayerName();
+      const nameVal = document.getElementById('join-name-input')?.value || document.getElementById('title-player-name')?.value || getSavedPlayerName();
       const statusEl = document.getElementById('join-world-status');
       const confirmBtn = document.getElementById('btn-confirm-join-world');
       const setStatus = (txt, isError = false) => {
@@ -526,6 +559,9 @@ export class UIManager {
       if (lbl) lbl.textContent = 'Starting Multiplayer...';
       try {
         const res = await this.game.startMultiplayerWorld();
+        this.syncMultiplayerUI(this.game.multiplayer);
+        const body = document.querySelector('#pause-modal .pause-body');
+        if (body) body.scrollTop = 0;
         this.toast(`Multiplayer World Ready! Code: ${formatRoomCode(res.code)}`);
       } catch (err) {
         this.toast(err?.message || 'Could not start Multiplayer World');
@@ -1025,6 +1061,8 @@ export class UIManager {
     document.getElementById('hud').classList.toggle('hidden', show);
     if (show) {
       this.showTitleView('home');
+    } else {
+      this._stopTitle3DLoop();
     }
   }
 
@@ -1344,7 +1382,7 @@ export class UIManager {
     this.activeFurnacePos = null;
     this.activeChestPos = null;
     this.cancelInventoryDrag();
-    if (this.game && !this.game.player.dead) {
+    if (this.game && this.game.player && !this.game.player.dead) {
       this.game.controls.enabled = true;
       this.updateHotbar();
       this.updateStats();
@@ -1383,6 +1421,7 @@ export class UIManager {
     if (this.game) {
       this.syncCheatUI(this.game.areCheatsAllowed());
       this.renderKeybindsUI(this.game.settings.keybinds);
+      this.syncMultiplayerUI(this.game.multiplayer);
     }
   }
 
@@ -1485,6 +1524,7 @@ export class UIManager {
     this._steveLookY += (this._steveTargetY - this._steveLookY) * 0.20;
 
     const { renderer, scene, camera, steve } = ctx3d;
+    updateSteveSkin(steve, getSavedPlayerSkin());
     updateSteveArmor(steve, this.game.inventory.armor);
 
     const t = performance.now() * 0.001;
@@ -1514,6 +1554,7 @@ export class UIManager {
     if (!this.game) return;
     const ctx3d = this._ensureInv3DPreview();
     if (!ctx3d) return;
+    updateSteveSkin(ctx3d.steve, getSavedPlayerSkin());
     updateSteveArmor(ctx3d.steve, this.game.inventory.armor);
     if (!this._stevePreviewRAF && this.activeModal === 'inventory-modal') {
       this._drawInv3DFrame();
@@ -2663,13 +2704,162 @@ export class UIManager {
     ctx.restore();
   }
 
+  // --- MAIN MENU 3D CHARACTER PREVIEW, DISPLAY NAME & SKIN CUSTOMIZER ---
+  _ensureTitle3DPreview() {
+    if (this._title3d) return this._title3d;
+    const canvas = document.getElementById('title-player-canvas');
+    if (!canvas) return null;
+    try {
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setSize(canvas.width, canvas.height, false);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.setClearColor(0x000000, 0);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(31, canvas.width / canvas.height, 0.1, 20);
+      camera.position.set(0, 1.02, 3.85);
+      camera.lookAt(0, 0.96, 0);
+
+      const hemi = new THREE.HemisphereLight(0xffffff, 0x6b7280, 1.2);
+      const key = new THREE.DirectionalLight(0xfff7e6, 1.08);
+      key.position.set(2.4, 3.6, 3.4);
+      const rim = new THREE.DirectionalLight(0x93c5fd, 0.48);
+      rim.position.set(-2.5, 1.8, -2.0);
+      scene.add(hemi, key, rim);
+
+      const steve = createSteveModel(this.textures, getSavedPlayerSkin());
+      steve.root.rotation.y = Math.PI;
+      // Hold a crisp 3D Diamond Pickaxe on the Main Menu showcase so 3D held tools shine right away!
+      if (ITEMS.diamond_pickaxe) {
+        updateHeldItemRig(steve.heldRig, ITEMS.diamond_pickaxe, this.textures, false);
+      }
+      scene.add(steve.root);
+
+      this._title3d = { renderer, scene, camera, steve };
+      return this._title3d;
+    } catch {
+      return null;
+    }
+  }
+
+  _startTitle3DLoop() {
+    if (this._titlePreviewRAF) return;
+    this._drawTitle3DFrame();
+  }
+
+  _stopTitle3DLoop() {
+    if (this._titlePreviewRAF) {
+      cancelAnimationFrame(this._titlePreviewRAF);
+      this._titlePreviewRAF = null;
+    }
+  }
+
+  _drawTitle3DFrame() {
+    const titleEl = document.getElementById('title-screen');
+    const homeEl = document.getElementById('title-view-home');
+    if (!titleEl || titleEl.classList.contains('hidden') || !homeEl || homeEl.classList.contains('hidden')) {
+      this._titlePreviewRAF = null;
+      return;
+    }
+    const ctx3d = this._ensureTitle3DPreview();
+    if (!ctx3d) {
+      this._titlePreviewRAF = null;
+      return;
+    }
+
+    this._titleLookX += (this._titleTargetX - this._titleLookX) * 0.16;
+    this._titleLookY += (this._titleTargetY - this._titleLookY) * 0.16;
+    if (this._titleWaveAnim > 0) this._titleWaveAnim = Math.max(0, this._titleWaveAnim - 0.045);
+
+    const { renderer, scene, camera, steve } = ctx3d;
+    const t = performance.now() * 0.001;
+    const lx = this._titleLookX;
+    const ly = this._titleLookY;
+    const wave = Math.sin(this._titleWaveAnim * Math.PI);
+
+    steve.root.rotation.y = Math.PI + lx * 0.38;
+    steve.bodyPivot.rotation.x = -ly * 0.07;
+    steve.headPivot.rotation.y = lx * 0.64;
+    steve.headPivot.rotation.x = -ly * 0.45;
+
+    const breath = Math.sin(t * 2.1) * 0.024;
+    steve.leftArm.rotation.z = 0.06 + breath;
+    steve.rightArm.rotation.z = -0.06 - breath;
+    steve.leftArm.rotation.x = Math.sin(t * 1.4) * 0.04;
+    steve.rightArm.rotation.x = 0.24 - Math.sin(t * 1.4) * 0.03 + wave * 0.72;
+    steve.leftLeg.rotation.x = 0.03;
+    steve.rightLeg.rotation.x = -0.03;
+
+    renderer.render(scene, camera);
+    this._titlePreviewRAF = requestAnimationFrame(() => this._drawTitle3DFrame());
+  }
+
+  setPlayerDisplayName(rawVal, commit = true) {
+    const trimmed = String(rawVal || '').slice(0, 16);
+    const display = trimmed.trim() || 'Player';
+    const clean = commit ? savePlayerName(display) : display;
+    if (!commit && trimmed.trim()) savePlayerName(trimmed.trim());
+
+    const tagEl = document.getElementById('title-player-nametag');
+    if (tagEl) tagEl.textContent = clean;
+    const titleInp = document.getElementById('title-player-name');
+    if (titleInp && commit && titleInp.value !== clean) titleInp.value = clean;
+    const modalInp = document.getElementById('join-name-input');
+    if (modalInp && modalInp.value !== clean) modalInp.value = clean;
+    const mpName = document.getElementById('mp-profile-name');
+    if (mpName) mpName.textContent = clean;
+
+    if (this.game?.multiplayer) this.game.multiplayer.playerName = clean;
+    if (this.game?.player) this.game.player.setDisplayName(clean, this.game.multiplayer?.role === 'host');
+  }
+
+  setPlayerSkin(skinId) {
+    const valid = savePlayerSkin(skinId);
+    this._titleWaveAnim = 1.0;
+    if (this._title3d?.steve) updateSteveSkin(this._title3d.steve, valid);
+    if (this._inv3d?.steve) updateSteveSkin(this._inv3d.steve, valid);
+    if (this.game?.player) this.game.player.setSkin(valid);
+    if (this.game?.multiplayer) this.game.multiplayer.playerSkin = valid;
+    this.sound.playPop();
+    this.renderTitleSkinCustomizer();
+  }
+
+  renderTitleSkinCustomizer() {
+    const cur = getSavedPlayerSkin();
+    const curDef = PLAYER_SKINS.find((s) => s.id === cur) || PLAYER_SKINS[0];
+    const lbl = document.getElementById('title-skin-name');
+    if (lbl) lbl.textContent = curDef.name;
+    const mpSkin = document.getElementById('mp-profile-skin');
+    if (mpSkin) mpSkin.textContent = curDef.name;
+
+    const grid = document.getElementById('title-skin-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    for (const sk of PLAYER_SKINS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `skin-pill${sk.id === cur ? ' active' : ''}`;
+      btn.innerHTML = `<span class="skin-dot" style="background:${sk.swatch}"></span><span>${sk.name}</span>`;
+      btn.addEventListener('click', () => this.setPlayerSkin(sk.id));
+      grid.appendChild(btn);
+    }
+  }
+
   // --- MULTIPLAYER UI HELPERS ---
   syncMultiplayerHubInputs() {
     const saved = getSavedPlayerName();
-    const hubInput = document.getElementById('mp-player-name');
-    const modalInput = document.getElementById('join-name-input');
-    if (hubInput && !hubInput.value) hubInput.value = saved;
-    if (modalInput && !modalInput.value) modalInput.value = saved;
+    const curSkin = PLAYER_SKINS.find((s) => s.id === getSavedPlayerSkin()) || PLAYER_SKINS[0];
+    const titleInp = document.getElementById('title-player-name');
+    const modalInp = document.getElementById('join-name-input');
+    const tagEl = document.getElementById('title-player-nametag');
+    const mpName = document.getElementById('mp-profile-name');
+    const mpSkin = document.getElementById('mp-profile-skin');
+    if (titleInp && !titleInp.value) titleInp.value = saved;
+    if (modalInp && !modalInp.value) modalInp.value = saved;
+    if (tagEl) tagEl.textContent = saved;
+    if (mpName) mpName.textContent = saved;
+    if (mpSkin) mpSkin.textContent = curSkin.name;
   }
 
   renderRecentRoomCodes() {
@@ -2740,7 +2930,11 @@ export class UIManager {
     const count = mp.getPlayerCount();
     if (btnLbl) btnLbl.textContent = mp.role === 'host' ? `Multiplayer Active (${formatted})` : `Connected (${formatted})`;
     if (titleEl) titleEl.textContent = mp.role === 'host' ? 'Hosting Multiplayer World' : 'Connected to Multiplayer World';
-    if (modeTag) modeTag.textContent = mp.onlineMode === 'online' ? 'ONLINE + LOCAL' : 'LOCAL CO-OP';
+    if (modeTag) {
+      modeTag.textContent = mp.onlineMode === 'online'
+        ? 'ONLINE + LOCAL'
+        : (mp.onlineMode === 'connecting' ? 'CONNECTING...' : 'LOCAL CO-OP');
+    }
     if (codeEl) codeEl.textContent = formatted;
     if (countEl) countEl.textContent = String(count);
     if (stopBtn) stopBtn.textContent = mp.role === 'host' ? 'Stop Multiplayer World' : 'Leave Multiplayer World';

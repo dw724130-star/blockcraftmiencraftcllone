@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { ITEMS, BLOCK, getBlockDef } from './blocks.js';
-import { createSteveModel, updateSteveArmor, updateHeldItemRig, createSteveFireGroup } from './player.js';
+import { createSteveModel, updateSteveArmor, updateSteveSkin, updateHeldItemRig, createSteveFireGroup, createPlayerNametag, updatePlayerNametag } from './player.js';
+import { getSavedPlayerName, savePlayerName, getSavedPlayerSkin, savePlayerSkin } from './storage.js';
+
+export { getSavedPlayerName, savePlayerName, getSavedPlayerSkin, savePlayerSkin };
 
 // Unambiguous uppercase room code alphabet (no 0/O/1/I confusion!)
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PEER_PREFIX = 'bc44mp-';
 const RECENT_CODES_KEY = 'blockcraft_recent_mp_codes_v1';
-const PLAYER_NAME_KEY = 'blockcraft_mp_name_v1';
 
 export function generateRoomCode(len = 6) {
   let out = '';
@@ -26,20 +28,6 @@ export function normalizeRoomCode(raw) {
 export function formatRoomCode(code) {
   const clean = normalizeRoomCode(code);
   if (clean.length === 6) return `${clean.slice(0, 3)}-${clean.slice(3)}`;
-  return clean;
-}
-
-export function getSavedPlayerName() {
-  try {
-    const s = localStorage.getItem(PLAYER_NAME_KEY);
-    if (s && s.trim()) return s.trim().slice(0, 16);
-  } catch {}
-  return `Player${Math.floor(100 + Math.random() * 899)}`;
-}
-
-export function savePlayerName(name) {
-  const clean = String(name || '').trim().slice(0, 16) || 'Player';
-  try { localStorage.setItem(PLAYER_NAME_KEY, clean); } catch {}
   return clean;
 }
 
@@ -104,43 +92,6 @@ function loadPeerJS() {
   return _peerJsPromise;
 }
 
-function createNametagSprite(name, isHost = false) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 56;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, 256, 56);
-
-  const label = isHost ? `★ ${name}` : name;
-  ctx.font = 'bold 26px "Courier New", monospace';
-  const tw = Math.min(232, Math.max(88, Math.ceil(ctx.measureText(label).width) + 28));
-  const rx = (256 - tw) * 0.5;
-
-  // Translucent Minecraft-style dark name plate
-  ctx.fillStyle = 'rgba(10, 14, 22, 0.72)';
-  ctx.fillRect(rx, 8, tw, 40);
-  ctx.strokeStyle = isHost ? 'rgba(255, 213, 79, 0.85)' : 'rgba(134, 239, 172, 0.75)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(rx + 1, 9, tw - 2, 38);
-
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#000000';
-  ctx.fillText(label, 130, 30);
-  ctx.fillStyle = isHost ? '#ffe57f' : '#ffffff';
-  ctx.fillText(label, 128, 28);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(1.9, 0.42, 1);
-  sprite.position.set(0, 2.28, 0);
-  return { sprite, tex, mat };
-}
-
 function lerpAngle(a, b, t) {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
@@ -156,6 +107,7 @@ export class MultiplayerManager {
     this.roomCode = '';
     this.localId = 'p_' + Math.random().toString(36).slice(2, 9);
     this.playerName = getSavedPlayerName();
+    this.playerSkin = getSavedPlayerSkin();
     this.onlineMode = 'none'; // 'none' | 'online' | 'local'
 
     this.peer = null;
@@ -209,56 +161,59 @@ export class MultiplayerManager {
     if (playerName) this.playerName = savePlayerName(playerName);
     this.roomCode = generateRoomCode(6);
     this.role = 'host';
-    this.onlineMode = 'local';
+    this.onlineMode = 'connecting';
     this._lastSentSig = '';
 
-    // 1. Open instant local BroadcastChannel bridge (allows same-browser co-op in <30ms!)
+    // 1. Open instant local BroadcastChannel bridge & show the room code IMMEDIATELY (<1ms!)
     this._setupBroadcastChannel(this.roomCode);
-
-    // 2. Open WebRTC PeerJS Signaling endpoint for cross-device / internet co-op!
-    const PeerCtor = await loadPeerJS();
-    if (PeerCtor && this.role === 'host') {
-      await new Promise((resolve) => {
-        let settled = false;
-        const finish = (mode) => {
-          if (settled) return;
-          settled = true;
-          this.onlineMode = mode;
-          resolve();
-        };
-        const timeout = setTimeout(() => finish('local'), 7500);
-        try {
-          const peerId = PEER_PREFIX + this.roomCode;
-          const peer = new PeerCtor(peerId, {
-            debug: 0,
-            config: {
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-              ]
-            }
-          });
-          this.peer = peer;
-          peer.on('open', () => {
-            clearTimeout(timeout);
-            finish('online');
-          });
-          peer.on('connection', (conn) => {
-            this._attachHostPeerConnection(conn);
-          });
-          peer.on('error', () => {
-            clearTimeout(timeout);
-            finish('local');
-          });
-        } catch {
-          clearTimeout(timeout);
-          finish('local');
-        }
-      });
-    }
-
     rememberRoomCode(this.roomCode, this.game.worldMeta?.name || 'Hosted World');
     this._emitState();
+
+    // 2. Connect WebRTC PeerJS Signaling endpoint asynchronously in the background for cross-device online play!
+    loadPeerJS().then((PeerCtor) => {
+      if (this.role !== 'host') return;
+      if (!PeerCtor) {
+        this.onlineMode = 'local';
+        this._emitState();
+        return;
+      }
+      let settled = false;
+      const finish = (mode) => {
+        if (settled || this.role !== 'host') return;
+        settled = true;
+        this.onlineMode = mode;
+        this._emitState();
+      };
+      const timeout = setTimeout(() => finish('local'), 7500);
+      try {
+        const peerId = PEER_PREFIX + this.roomCode;
+        const peer = new PeerCtor(peerId, {
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+          }
+        });
+        this.peer = peer;
+        peer.on('open', () => {
+          clearTimeout(timeout);
+          finish('online');
+        });
+        peer.on('connection', (conn) => {
+          this._attachHostPeerConnection(conn);
+        });
+        peer.on('error', () => {
+          clearTimeout(timeout);
+          finish('local');
+        });
+      } catch {
+        clearTimeout(timeout);
+        finish('local');
+      }
+    });
+
     return { code: this.roomCode, onlineMode: this.onlineMode };
   }
 
@@ -338,7 +293,7 @@ export class MultiplayerManager {
 
       // 1. Try instant local BroadcastChannel first (connects in <30ms for same-browser testing!)
       this._setupBroadcastChannel(code);
-      this._sendBroadcastChannel({ t: 'hello', id: this.localId, name: this.playerName });
+      this._sendBroadcastChannel({ t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin });
 
       // 2. Simultaneously connect over WebRTC PeerJS for cross-device / internet multiplayer!
       const PeerCtor = await loadPeerJS();
@@ -369,7 +324,7 @@ export class MultiplayerManager {
             if (done) return;
             this.onlineMode = 'online';
             report('Connected! Downloading world snapshot...');
-            conn.send({ t: 'hello', id: this.localId, name: this.playerName });
+            conn.send({ t: 'hello', id: this.localId, name: this.playerName, sk: this.playerSkin });
           });
           conn.on('data', (msg) => {
             if (!msg || typeof msg !== 'object') return;
@@ -495,6 +450,7 @@ export class MultiplayerManager {
         id: rp.id,
         name: rp.name,
         isHost: rp.isHost,
+        sk: rp.skinId || 'steve',
         x: r2(rp.targetPos.x),
         y: r2(rp.targetPos.y),
         z: r2(rp.targetPos.z),
@@ -548,6 +504,7 @@ export class MultiplayerManager {
       id: this.localId,
       name: this.playerName,
       isHost: this.role === 'host',
+      sk: this.playerSkin || getSavedPlayerSkin(),
       x: r2(p.pos.x),
       y: r2(p.pos.y),
       z: r2(p.pos.z),
@@ -669,10 +626,11 @@ export class MultiplayerManager {
       } else if (viaBc) {
         this._sendBroadcastChannel(snap, pid);
       }
-      // Spawn remote Steve for the new player and notify everyone!
+      // Spawn remote player model with their chosen skin and notify everyone!
       const pPos = this.game.player ? this.game.player.pos : { x: 0.5, y: 48, z: 0.5 };
-      this._upsertRemotePlayer(pid, pname, false, { x: pPos.x + 1.5, y: pPos.y + 0.5, z: pPos.z + 1.5 });
-      this._broadcastRaw({ t: 'join', id: pid, name: pname }, pid);
+      const pSkin = msg.sk || 'steve';
+      this._upsertRemotePlayer(pid, pname, false, { x: pPos.x + 1.5, y: pPos.y + 0.5, z: pPos.z + 1.5, sk: pSkin });
+      this._broadcastRaw({ t: 'join', id: pid, name: pname, sk: pSkin }, pid);
       this.game.ui?.addChatMessage(`${pname} joined the world!`);
       this.game.ui?.toast(`${pname} joined!`);
       this._emitState();
@@ -707,7 +665,7 @@ export class MultiplayerManager {
 
     if (type === 'join') {
       if (msg.id && msg.id !== this.localId) {
-        this._upsertRemotePlayer(msg.id, msg.name || 'Player', false);
+        this._upsertRemotePlayer(msg.id, msg.name || 'Player', false, { sk: msg.sk || 'steve' });
         this.game.ui?.addChatMessage(`${msg.name || 'Player'} joined the world!`);
         this._emitState();
       }
@@ -812,9 +770,10 @@ export class MultiplayerManager {
   // --- REMOTE 3D PLAYER MANAGEMENT ---
   _upsertRemotePlayer(id, name, isHost = false, data = null) {
     let rp = this.remotePlayers.get(id);
+    const incomingSkin = data?.sk || 'steve';
     if (!rp) {
-      const model = createSteveModel(this.game.textures);
-      const nametag = createNametagSprite(name, isHost);
+      const model = createSteveModel(this.game.textures, incomingSkin);
+      const nametag = createPlayerNametag(name, isHost);
       model.root.add(nametag.sprite);
       const fireGroup = createSteveFireGroup(this.game.textures);
       model.root.add(fireGroup);
@@ -830,6 +789,7 @@ export class MultiplayerManager {
         id,
         name,
         isHost,
+        skinId: incomingSkin,
         model,
         nametag,
         fireGroup,
@@ -859,14 +819,14 @@ export class MultiplayerManager {
     rp.lastSeen = performance.now();
     if (name && name !== rp.name) {
       rp.name = name;
-      rp.model.root.remove(rp.nametag.sprite);
-      rp.nametag.tex?.dispose();
-      rp.nametag.mat?.dispose();
-      rp.nametag = createNametagSprite(name, rp.isHost);
-      rp.model.root.add(rp.nametag.sprite);
+      updatePlayerNametag(rp.nametag, name, rp.isHost);
     }
 
     if (data) {
+      if (data.sk && data.sk !== rp.skinId) {
+        rp.skinId = data.sk;
+        updateSteveSkin(rp.model, data.sk);
+      }
       if (typeof data.x === 'number') rp.targetPos.set(data.x, data.y, data.z);
       if (typeof data.yw === 'number') rp.targetYaw = data.yw;
       if (typeof data.pt === 'number') rp.targetPitch = data.pt;
@@ -936,7 +896,7 @@ export class MultiplayerManager {
     if (this._sendTimer >= 0.055) {
       this._sendTimer = 0;
       const pkt = this._buildLocalPlayerPacket();
-      const sig = `${pkt.x}|${pkt.y}|${pkt.z}|${pkt.yw}|${pkt.pt}|${pkt.h}|${pkt.ar.join(',')}|${pkt.sw}|${pkt.ea}|${pkt.sn}|${pkt.fl}|${pkt.bn}`;
+      const sig = `${pkt.x}|${pkt.y}|${pkt.z}|${pkt.yw}|${pkt.pt}|${pkt.sk}|${pkt.h}|${pkt.ar.join(',')}|${pkt.sw}|${pkt.ea}|${pkt.sn}|${pkt.fl}|${pkt.bn}`;
       this._keepaliveAccum = (this._keepaliveAccum || 0) + 0.055;
       if (sig !== this._lastSentSig || this._keepaliveAccum >= 0.8) {
         this._lastSentSig = sig;

@@ -3891,9 +3891,250 @@ export class TextureManager {
     this._steveTextures = {
       headFront, headSide, headBack, headTop, headBottom,
       torsoFront, torsoBack, torsoSide,
-      armFront, armSide, legFront, legSide
+      armFront, armSide, legFront, legSide,
+      skinHex: 0xdba882,
+      sleeveHex: 0x14a6ad,
+      pantHex: 0x262169,
+      shoeHex: 0x303030,
+      slimArms: false
     };
     return this._steveTextures;
+  }
+
+  // Multi-Skin Pixel-Art Character Texture Generator (Steve, Alex, Knight, Explorer, Ender, Builder!)
+  getPlayerSkinTextures(skinId = 'steve') {
+    const id = skinId || 'steve';
+    if (id === 'steve') return this.getSteveTextures();
+    if (!this._skinTexCache) this._skinTexCache = {};
+    if (this._skinTexCache[id]) return this._skinTexCache[id];
+
+    const makeTex = (w, h, fn) => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      const p = (x, y, col, pw = 1, ph = 1) => { ctx.fillStyle = col; ctx.fillRect(x, y, pw, ph); };
+      fn(p, ctx);
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.generateMipmaps = false;
+      return tex;
+    };
+
+    const defs = {
+      alex: {
+        skin: '#f2c7a5', skinD: '#d4a37d', skinL: '#ffdcc0', nose: '#e0ad86',
+        hair: '#d46a24', hairD: '#a64d14', hairL: '#f08b3e',
+        eye: '#3e8c2e', mouth: '#c9886b',
+        shirt: '#5f9e3d', shirtD: '#487d2c', shirtL: '#78ba52', shirtSh: '#396322',
+        belt: '#52341b', buckle: '#e0b84c',
+        pant: '#5e432e', pantD: '#453020', pantL: '#75563e',
+        shoe: '#454240', shoeD: '#292726', shoeL: '#635f5c',
+        skinHex: 0xf2c7a5, sleeveHex: 0x5f9e3d, pantHex: 0x453020, shoeHex: 0x292726,
+        slimArms: true, longHair: true, sleeveLen: 5
+      },
+      knight: {
+        skin: '#dfb08a', skinD: '#ba8964', skinL: '#f2c8a4', nose: '#c9966f',
+        hair: '#8c99a8', hairD: '#5d6875', hairL: '#c7d2de',
+        eye: '#2563eb', mouth: '#9c6b4e',
+        shirt: '#9aa8b8', shirtD: '#6c7a8a', shirtL: '#cfd9e3', shirtSh: '#475261',
+        tabard: '#2452a6', belt: '#4a2f18', buckle: '#f2c12e',
+        pant: '#525b66', pantD: '#39404a', pantL: '#6f7985',
+        shoe: '#7a8594', shoeD: '#4d5561', shoeL: '#b0bac7',
+        skinHex: 0x9aa8b8, sleeveHex: 0x6c7a8a, pantHex: 0x39404a, shoeHex: 0x4d5561,
+        slimArms: false, helmetHead: true, sleeveLen: 9
+      },
+      explorer: {
+        skin: '#d9a47b', skinD: '#b58057', skinL: '#ebbd98', nose: '#bd875e',
+        hair: '#3d281a', hairD: '#26170e', hairL: '#5c3e2b',
+        eye: '#386e46', mouth: '#a66d4b',
+        shirt: '#b8844c', shirtD: '#8f6335', shirtL: '#d49f66', shirtSh: '#6b4823',
+        bandana: '#c9382b', belt: '#4f2f16', buckle: '#e8c456',
+        pant: '#4e5e3b', pantD: '#38452a', pantL: '#64784d',
+        shoe: '#57361e', shoeD: '#382111', shoeL: '#754b2c',
+        skinHex: 0xd9a47b, sleeveHex: 0xb8844c, pantHex: 0x38452a, shoeHex: 0x382111,
+        slimArms: false, bandanaHead: true, sleeveLen: 6
+      },
+      ender: {
+        skin: '#221f2e', skinD: '#14121c', skinL: '#322e42', nose: '#191624',
+        hair: '#13111c', hairD: '#09080d', hairL: '#272338',
+        eye: '#c084fc', mouth: '#3b2e52',
+        shirt: '#1d1a29', shirtD: '#12101a', shirtL: '#312b45', shirtSh: '#0c0a12',
+        tabard: '#7c3aed', belt: '#5b21b6', buckle: '#e879f9',
+        pant: '#171521', pantD: '#0d0c14', pantL: '#29253b',
+        shoe: '#2c2540', shoeD: '#151221', shoeL: '#4c3f6e',
+        skinHex: 0x221f2e, sleeveHex: 0x1d1a29, pantHex: 0x0d0c14, shoeHex: 0x151221,
+        slimArms: false, glowEyes: true, sleeveLen: 8
+      },
+      sunny: {
+        skin: '#e8b68e', skinD: '#c7936b', skinL: '#fad0ae', nose: '#d19b73',
+        hair: '#e6be53', hairD: '#bd9431', hairL: '#fae087',
+        eye: '#2d7a9c', mouth: '#b87654',
+        shirt: '#d94c3d', shirtD: '#ad3528', shirtL: '#f26d5e', shirtSh: '#87241a',
+        overalls: '#2e5894', belt: '#234473', buckle: '#f2cb49',
+        pant: '#2e5894', pantD: '#203f6b', pantL: '#4373b5',
+        shoe: '#52341d', shoeD: '#331f10', shoeL: '#6e4729',
+        skinHex: 0xe8b68e, sleeveHex: 0xd94c3d, pantHex: 0x203f6b, shoeHex: 0x331f10,
+        slimArms: false, longHair: false, sleeveLen: 4
+      }
+    };
+
+    const d = defs[id] || defs.alex;
+
+    const headFront = makeTex(8, 8, (p) => {
+      p(0, 0, d.skin, 8, 8);
+      p(0, 2, d.skinL, 8, 1); p(0, 7, d.skinD, 8, 1);
+      if (d.helmetHead) {
+        // Steel Knight Helm Frame + Open Visor showing eyes!
+        p(0, 0, d.hair, 8, 3); p(0, 0, d.hairL, 8, 1); p(3, 0, '#f2c12e', 2, 2);
+        p(0, 3, d.hair, 1, 5); p(7, 3, d.hair, 1, 5);
+        p(0, 6, d.hairD, 8, 2); p(2, 6, d.hair, 4, 1);
+        p(1, 4, '#ffffff', 1, 1); p(2, 4, d.eye, 1, 1);
+        p(5, 4, d.eye, 1, 1); p(6, 4, '#ffffff', 1, 1);
+        p(3, 5, d.nose, 2, 1);
+      } else {
+        p(0, 0, d.hair, 8, 2);
+        p(1, 0, d.hairL, 2, 1); p(5, 0, d.hairD, 2, 1);
+        if (d.longHair) {
+          // Alex iconic side-swept bangs!
+          p(0, 2, d.hair, 2, 2); p(7, 2, d.hair, 1, 3);
+          p(2, 1, d.hairL, 2, 1);
+        } else {
+          p(0, 2, d.hair, 1, 1); p(7, 2, d.hair, 1, 1);
+        }
+        if (d.bandanaHead) {
+          p(0, 2, d.bandana, 8, 1); p(2, 2, '#f06454', 3, 1);
+        }
+        if (d.glowEyes) {
+          p(1, 4, '#f5d0fe', 1, 1); p(2, 4, d.eye, 1, 1);
+          p(5, 4, d.eye, 1, 1); p(6, 4, '#f5d0fe', 1, 1);
+        } else {
+          p(1, 4, '#ffffff', 1, 1); p(2, 4, d.eye, 1, 1);
+          p(5, 4, d.eye, 1, 1); p(6, 4, '#ffffff', 1, 1);
+          p(3, 5, d.nose, 2, 1);
+          p(3, 6, d.mouth, 2, 1);
+        }
+      }
+    });
+
+    const headSide = makeTex(8, 8, (p) => {
+      p(0, 0, d.skin, 8, 8);
+      p(0, 0, d.hair, 8, d.helmetHead ? 7 : (d.longHair ? 6 : 3));
+      if (!d.helmetHead) {
+        p(0, 2, d.hair, d.longHair ? 7 : 5, d.longHair ? 5 : 2);
+        p(1, 1, d.hairL, 3, 1);
+      } else {
+        p(0, 0, d.hairL, 8, 1); p(0, 6, d.hairD, 8, 2);
+      }
+      if (d.bandanaHead) p(0, 2, d.bandana, 8, 1);
+    });
+
+    const headBack = makeTex(8, 8, (p) => {
+      p(0, 0, d.hair, 8, d.longHair || d.helmetHead ? 8 : 6);
+      if (!d.longHair && !d.helmetHead) p(0, 6, d.skinD, 8, 2);
+      p(1, 1, d.hairL, 2, 2); p(4, 3, d.hairD, 3, 3);
+      if (d.longHair) {
+        // Alex side ponytail detail!
+        p(5, 4, d.hairL, 2, 4); p(4, 5, d.hairD, 1, 3);
+      }
+      if (d.bandanaHead) { p(0, 2, d.bandana, 8, 1); p(3, 3, d.bandana, 2, 2); }
+    });
+
+    const headTop = makeTex(8, 8, (p) => {
+      p(0, 0, d.hair, 8, 8);
+      p(1, 1, d.hairL, 3, 2); p(4, 3, d.hairD, 3, 3);
+      if (d.helmetHead) p(3, 0, '#f2c12e', 2, 8);
+    });
+
+    const headBottom = makeTex(8, 8, (p) => {
+      p(0, 0, d.skinD, 8, 8);
+    });
+
+    const torsoFront = makeTex(8, 12, (p) => {
+      p(0, 0, d.shirt, 8, 12);
+      p(0, 0, d.shirtL, 1, 10); p(7, 0, d.shirtD, 1, 11);
+      if (!d.helmetHead && !d.glowEyes) {
+        p(2, 0, d.skin, 4, 1); p(3, 1, d.skinD, 2, 1);
+      }
+      if (d.tabard) {
+        p(2, 1, d.tabard, 4, 10);
+        p(3, 3, d.buckle || '#f2c12e', 2, 2);
+      }
+      if (d.overalls) {
+        p(1, 0, d.overalls, 1, 7); p(6, 0, d.overalls, 1, 7);
+        p(1, 5, d.overalls, 6, 7);
+        p(1, 5, d.buckle, 1, 1); p(6, 5, d.buckle, 1, 1);
+      }
+      if (d.belt) {
+        p(0, 9, d.belt, 8, 2);
+        p(3, 9, d.buckle || '#e0b84c', 2, 2);
+      }
+      p(0, 11, d.shirtSh, 8, 1);
+    });
+
+    const torsoBack = makeTex(8, 12, (p) => {
+      p(0, 0, d.shirt, 8, 12);
+      p(1, 2, d.shirtL, 6, 2);
+      if (d.tabard) p(2, 1, d.tabard, 4, 10);
+      if (d.overalls) { p(1, 0, d.overalls, 1, 12); p(6, 0, d.overalls, 1, 12); p(1, 6, d.overalls, 6, 6); }
+      if (d.belt) p(0, 9, d.belt, 8, 2);
+      p(0, 11, d.shirtSh, 8, 1);
+    });
+
+    const torsoSide = makeTex(4, 12, (p) => {
+      p(0, 0, d.shirtD, 4, 12);
+      p(1, 1, d.shirt, 2, 8);
+      if (d.belt) p(0, 9, d.belt, 4, 2);
+      p(0, 11, d.shirtSh, 4, 1);
+    });
+
+    const sl = d.sleeveLen || 4;
+    const armFront = makeTex(4, 12, (p) => {
+      p(0, 0, d.shirt, 4, sl);
+      p(0, 0, d.shirtL, 4, 1); p(0, Math.max(0, sl - 1), d.shirtD, 4, 1);
+      p(0, sl, d.skin, 4, 12 - sl);
+      p(1, sl + 1, d.skinL, 2, Math.max(1, 8 - sl));
+      p(0, 11, d.skinD, 4, 1);
+    });
+
+    const armSide = makeTex(4, 12, (p) => {
+      p(0, 0, d.shirtD, 4, sl);
+      p(1, 0, d.shirt, 2, Math.max(1, sl - 1));
+      p(0, sl, d.skinD, 4, 12 - sl);
+      p(1, sl + 1, d.skin, 2, Math.max(1, 10 - sl));
+    });
+
+    const legFront = makeTex(4, 12, (p) => {
+      p(0, 0, d.pant, 4, 10);
+      p(0, 0, d.pantD, 4, 1);
+      p(1, 2, d.pantL, 2, 5);
+      p(3, 1, d.pantD, 1, 9);
+      p(0, 10, d.shoe, 4, 2);
+      p(0, 10, d.shoeL, 3, 1);
+      p(0, 11, d.shoeD, 4, 1);
+    });
+
+    const legSide = makeTex(4, 12, (p) => {
+      p(0, 0, d.pantD, 4, 10);
+      p(1, 1, d.pant, 2, 8);
+      p(0, 10, d.shoeD, 4, 2);
+      p(1, 10, d.shoe, 2, 1);
+    });
+
+    const bundle = {
+      headFront, headSide, headBack, headTop, headBottom,
+      torsoFront, torsoBack, torsoSide,
+      armFront, armSide, legFront, legSide,
+      skinHex: d.skinHex,
+      sleeveHex: d.sleeveHex,
+      pantHex: d.pantHex,
+      shoeHex: d.shoeHex,
+      slimArms: Boolean(d.slimArms)
+    };
+    this._skinTexCache[id] = bundle;
+    return bundle;
   }
 
   // Pixel-Art 3D Armor Textures (Leather, Iron, Gold, Diamond) with open Helmet Visor & Sculpted Crest!

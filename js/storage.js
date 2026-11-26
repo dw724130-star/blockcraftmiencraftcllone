@@ -4,6 +4,45 @@ const DB_NAME = 'BlockCraftDB';
 const DB_VERSION = 1;
 const STORE_WORLDS = 'worlds';
 const SETTINGS_KEY = 'blockcraft_settings_v2';
+const PLAYER_NAME_KEY = 'blockcraft_mp_name_v1';
+const PLAYER_SKIN_KEY = 'blockcraft_player_skin_v1';
+
+export const PLAYER_SKINS = [
+  { id: 'steve',    name: 'Steve',    swatch: '#14a6ad', hair: '#3b2414' },
+  { id: 'alex',     name: 'Alex',     swatch: '#5f9e3d', hair: '#d46a24' },
+  { id: 'knight',   name: 'Knight',   swatch: '#9aa8b8', hair: '#304878' },
+  { id: 'explorer', name: 'Explorer', swatch: '#b8844c', hair: '#3b281c' },
+  { id: 'ender',    name: 'Ender',    swatch: '#8b5cf6', hair: '#16141f' },
+  { id: 'sunny',    name: 'Builder',  swatch: '#e05246', hair: '#e8c15a' }
+];
+
+export function getSavedPlayerName() {
+  try {
+    const s = localStorage.getItem(PLAYER_NAME_KEY);
+    if (s && s.trim()) return s.trim().slice(0, 16);
+  } catch {}
+  return `Player${Math.floor(100 + Math.random() * 899)}`;
+}
+
+export function savePlayerName(name) {
+  const clean = String(name || '').trim().slice(0, 16) || 'Player';
+  try { localStorage.setItem(PLAYER_NAME_KEY, clean); } catch {}
+  return clean;
+}
+
+export function getSavedPlayerSkin() {
+  try {
+    const s = localStorage.getItem(PLAYER_SKIN_KEY);
+    if (s && PLAYER_SKINS.some((sk) => sk.id === s)) return s;
+  } catch {}
+  return 'steve';
+}
+
+export function savePlayerSkin(skinId) {
+  const valid = PLAYER_SKINS.some((sk) => sk.id === skinId) ? skinId : 'steve';
+  try { localStorage.setItem(PLAYER_SKIN_KEY, valid); } catch {}
+  return valid;
+}
 
 export const DEFAULT_KEYBINDS = {
   forward: 'KeyW',
