@@ -32,6 +32,7 @@ export class ControlManager {
     this.onOpenPause = null;
     this.onOpenChat = null;
     this.onToggleCamera = null;
+    this.onDropItem = null;
 
     // State
     this.keys = new Set();
@@ -440,6 +441,11 @@ export class ControlManager {
       if (e.code === kb.inventory) {
         e.preventDefault();
         if (this.onOpenInventory) this.onOpenInventory();
+        return;
+      }
+      if (e.code === (kb.drop || 'KeyQ')) {
+        e.preventDefault();
+        if (this.onDropItem) this.onDropItem(Boolean(e.ctrlKey || e.metaKey));
         return;
       }
       if (e.code === kb.chat || e.code === 'Slash') {

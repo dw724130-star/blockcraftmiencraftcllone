@@ -411,6 +411,7 @@ regItem('stick', { name: 'Stick', icon: 'stick' });
 regItem('coal', { name: 'Coal', icon: 'coal', fuel: 80 });
 regItem('flint', { name: 'Flint', icon: 'flint' });
 regItem('flint_and_steel', { name: 'Flint and Steel', stackSize: 1, toolType: 'flint_and_steel', durability: 64, icon: 'flint_and_steel' });
+regItem('shears', { name: 'Shears', stackSize: 1, toolType: 'shears', durability: 238, speed: 5.0, icon: 'shears' });
 regItem('bucket', { name: 'Bucket', stackSize: 16, bucketType: 'empty', icon: 'bucket' });
 regItem('water_bucket', { name: 'Water Bucket', stackSize: 1, bucketType: 'water', icon: 'water_bucket' });
 regItem('lava_bucket', { name: 'Lava Bucket', stackSize: 1, bucketType: 'lava', fuel: 200, icon: 'lava_bucket' });

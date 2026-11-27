@@ -92,6 +92,7 @@ const RAW_RECIPES = [
   { out: 'crafting_table', count: 1, pattern: ['PP', 'PP'], map: { P: 'any_planks' } },
   { out: 'torch', count: 4, pattern: ['C', 'S'], map: { C: 'coal', S: 'stick' } },
   { out: 'flint_and_steel', count: 1, ingredients: { iron_ingot: 1, flint: 1 } },
+  { out: 'shears', count: 1, pattern: [' I', 'I '], map: { I: 'iron_ingot' } },
   { out: 'bucket', count: 1, table: true, pattern: ['I I', ' I '], map: { I: 'iron_ingot' } },
   // Authentic Minecraft Wood Door Recipes (2x3 planks -> 3 doors for every wood type!)
   { out: 'oak_door',    count: 3, table: true, pattern: ['PP', 'PP', 'PP'], map: { P: 'oak_planks' } },

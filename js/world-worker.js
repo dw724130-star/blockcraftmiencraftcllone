@@ -53,6 +53,7 @@ async function init(msg) {
     maxDetailRadius: 2,
     shaders: 'low',
     generateStructures: msg.generateStructures !== false,
+    worldBorderChunks: msg.worldBorderChunks || 0,
     headless: true
   });
   // Road networks are expensive to derive; keep many more regions cached than the main thread does.
@@ -65,7 +66,8 @@ async function init(msg) {
     blocks: blocksMod,
     palTop: msg.palTop,
     palSide: msg.palSide,
-    generateStructures: msg.generateStructures !== false
+    generateStructures: msg.generateStructures !== false,
+    worldBorderChunks: msg.worldBorderChunks || 0
   });
 }
 

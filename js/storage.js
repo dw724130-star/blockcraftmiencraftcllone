@@ -52,6 +52,7 @@ export const DEFAULT_KEYBINDS = {
   jump: 'Space',
   sneak: 'ShiftLeft',
   sprint: 'ControlLeft',
+  drop: 'KeyQ',
   inventory: 'KeyE',
   chat: 'KeyT',
   camera: 'KeyV',

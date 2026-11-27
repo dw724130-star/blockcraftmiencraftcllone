@@ -264,13 +264,14 @@ export function createLodKernel(seed, worldType, hooks = null) {
     const GRID = 68;
     const HALF_GRID = 34;
     const hRoll = coordHash(gx * 59, gz * 83, seed + 1901);
-    if (hRoll < 0.25) return null;
-    const isCastle = (((gx + gz) & 1) === 1) || hRoll > 0.62;
-    const sizeChunks = 4;
-    const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 18));
-    const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 18));
+    if (hRoll < 0.22) return null;
+    const isMegaCity = hRoll >= 0.72 || (((gx * 3 + gz * 5) % 3 + 3) % 3 === 0 && hRoll >= 0.36);
+    const isCastle = !isMegaCity && ((((gx + gz) & 1) === 1) || hRoll > 0.52);
+    const sizeChunks = isMegaCity ? 8 : 4;
+    const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, seed + 1913) * (GRID - 20));
+    const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, seed + 1931) * (GRID - 20));
     return {
-      type: isCastle ? 2 : 1,
+      type: isMegaCity ? 3 : (isCastle ? 2 : 1),
       originCx: gx * GRID - HALF_GRID + offX,
       originCz: gz * GRID - HALF_GRID + offZ,
       sizeChunks
@@ -341,6 +342,7 @@ export function createLodKernel(seed, worldType, hooks = null) {
   const PAL_TOP = H && H.palTop ? H.palTop : null;
   const PAL_SIDE = H && H.palSide ? H.palSide : null;
   const structuresOn = hooks ? hooks.generateStructures !== false : true;
+  const borderBlocks = (hooks && hooks.worldBorderChunks > 0) ? (hooks.worldBorderChunks * CHUNK_SIZE) : 0;
 
   // Per-block lookup tables
   const SKIP_ID = new Uint8Array(256); // thin/decorative blocks ignored when finding a column's visible top
@@ -453,7 +455,7 @@ export function createLodKernel(seed, worldType, hooks = null) {
       seen.add(k);
       if (isStructureChunk(cx, cz)) out.push(cx, cz);
     };
-    // Starter landmarks
+    // Starter landmarks (including Starter Mega City 8x8!)
     for (let cz = -15; cz <= 8; cz++) {
       for (let cx = -16; cx <= 20; cx++) {
         if (cx < cx0 || cx > cx1 || cz < cz0 || cz > cz1) continue;
@@ -461,7 +463,13 @@ export function createLodKernel(seed, worldType, hooks = null) {
             (cx >= 3 && cx <= 7 && cz >= 2 && cz <= 6)) add(cx, cz);
       }
     }
-    // Mega structures (4x4 chunks somewhere in each 68x68 cell)
+    if (HW._getStarterMegaCityOrigin) {
+      const sc = HW._getStarterMegaCityOrigin();
+      if (sc.originCx + 7 >= cx0 && sc.originCx <= cx1 && sc.originCz + 7 >= cz0 && sc.originCz <= cz1) {
+        for (let dz = 0; dz < 8; dz++) for (let dx = 0; dx < 8; dx++) add(sc.originCx + dx, sc.originCz + dz);
+      }
+    }
+    // Mega structures (4x4 castles/pyramids & 8x8 Mega Cities in each 68x68 cell)
     const GRID = 68;
     const HALF = 34;
     const gx0 = Math.floor((cx0 + HALF) / GRID) - 1;
@@ -471,12 +479,16 @@ export function createLodKernel(seed, worldType, hooks = null) {
     for (let gz = gz0; gz <= gz1; gz++) {
       for (let gx = gx0; gx <= gx1; gx++) {
         if (gx === 0 && gz === 0) continue;
-        const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, HW.seed + 1913) * (GRID - 18));
-        const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, HW.seed + 1931) * (GRID - 18));
+        const hRoll = coordHash(gx * 59, gz * 83, HW.seed + 1901);
+        if (hRoll < 0.22) continue;
+        const isMegaCity = hRoll >= 0.72 || (((gx * 3 + gz * 5) % 3 + 3) % 3 === 0 && hRoll >= 0.36);
+        const sc = isMegaCity ? 8 : 4;
+        const offX = 8 + Math.floor(coordHash(gx * 37, gz * 71, HW.seed + 1913) * (GRID - 20));
+        const offZ = 8 + Math.floor(coordHash(gx * 97, gz * 41, HW.seed + 1931) * (GRID - 20));
         const ocx = gx * GRID - HALF + offX;
         const ocz = gz * GRID - HALF + offZ;
-        if (ocx + 3 < cx0 || ocx > cx1 || ocz + 3 < cz0 || ocz > cz1) continue;
-        for (let dz = 0; dz < 4; dz++) for (let dx = 0; dx < 4; dx++) add(ocx + dx, ocz + dz);
+        if (ocx + sc - 1 < cx0 || ocx > cx1 || ocz + sc - 1 < cz0 || ocz > cz1) continue;
+        for (let dz = 0; dz < sc; dz++) for (let dx = 0; dx < sc; dx++) add(ocx + dx, ocz + dz);
       }
     }
     // Villages (radius up to 2 around a 32-grid center)
@@ -666,17 +678,38 @@ export function createLodKernel(seed, worldType, hooks = null) {
           if (wx < sg.minX || wx > sg.maxX || wz < sg.minZ || wz > sg.maxZ) continue;
           const dx = sg.bx - sg.ax;
           const dz = sg.bz - sg.az;
-          const inv = 1 / (dx * dx + dz * dz);
+          const inv = 1 / (dx * dx + dz * dz || 1);
           let t = ((wx - sg.ax) * dx + (wz - sg.az) * dz) * inv;
           t = t < 0 ? 0 : (t > 1 ? 1 : t);
-          const nx = -dz / sg.len;
-          const nz = dx / sg.len;
-          const curve = Math.sin(t * Math.PI) * sg.bend;
-          const ppx = sg.ax + dx * t + nx * curve;
-          const ppz = sg.az + dz * t + nz * curve;
-          const ddx = wx - ppx;
-          const ddz = wz - ppz;
-          const d = Math.sqrt(ddx * ddx + ddz * ddz);
+          let d;
+          if (sg.profileX && sg.profileZ && sg.profileX.length > 1) {
+            const pX = sg.profileX, pZ = sg.profileZ;
+            const maxI = pX.length - 1;
+            const midI = Math.round(t * maxI);
+            const i0 = Math.max(0, midI - 12);
+            const i1 = Math.min(maxI - 1, midI + 12);
+            let bestD2 = 1e9;
+            let bestU = t;
+            for (let k = i0; k <= i1; k++) {
+              const x0 = pX[k], z0 = pZ[k];
+              const sx = pX[k + 1] - x0, sz = pZ[k + 1] - z0;
+              const u = Math.max(0, Math.min(1, ((wx - x0) * sx + (wz - z0) * sz) / (sx * sx + sz * sz || 1)));
+              const rx = wx - (x0 + sx * u), rz = wz - (z0 + sz * u);
+              const d2 = rx * rx + rz * rz;
+              if (d2 < bestD2) { bestD2 = d2; bestU = (k + u) / maxI; }
+            }
+            d = Math.sqrt(bestD2);
+            t = bestU;
+          } else {
+            const nx = -dz / sg.len;
+            const nz = dx / sg.len;
+            const curve = Math.sin(t * Math.PI) * sg.bend;
+            const ppx = sg.ax + dx * t + nx * curve;
+            const ppz = sg.az + dz * t + nz * curve;
+            const ddx = wx - ppx;
+            const ddz = wz - ppz;
+            d = Math.sqrt(ddx * ddx + ddz * ddz);
+          }
           if (d < minD) {
             minD = d;
             bestSeg = sg;
@@ -789,9 +822,12 @@ export function createLodKernel(seed, worldType, hooks = null) {
           if (m) megaList.push({ ...m, isStarter: gx === 0 && gz === 0 });
         }
       }
-      // Also include the Starter Mega Castle at (16, -14) when near origin!
+      // Also include the Starter Mega Castle at (16, -14) and Starter Mega City at (-10, 14) when near origin!
       if (minCxM <= 20 && maxCxM >= 16 && minCzM <= -10 && maxCzM >= -14) {
         megaList.push({ type: 2, originCx: 16, originCz: -14, sizeChunks: 4, isStarter: true });
+      }
+      if (minCxM <= -2 && maxCxM >= -10 && minCzM <= 22 && maxCzM >= 14) {
+        megaList.push({ type: 3, originCx: -10, originCz: 14, sizeChunks: 8, isStarter: true });
       }
 
       for (let mi = 0; mi < megaList.length; mi++) {
@@ -824,8 +860,32 @@ export function createLodKernel(seed, worldType, hooks = null) {
             const lxM = wx - mx0;
             const idx = row + px;
 
-            colBaseH[idx] = baseY;
-            if (m.type === 1) {
+            if (m.type === 3) {
+              // Terrain-hugging Mega City LOD silhouette (Central Clocktower + Random Core Buildings + Edge Houses!)
+              const dxC = lxM - 64;
+              const dzC = lzM - 64;
+              const rC = Math.hypot(dxC, dzC);
+              if (colBaseH[idx] > SEA_LEVEL) {
+                if (rC < 3.5) {
+                  colStructH[idx] = 24;
+                  colVillage[idx] = 8; // Grand Clocktower spire
+                } else if (rC < 11) {
+                  colStructH[idx] = 0;
+                  colVillage[idx] = 1; // Central stone plaza
+                } else if (rC < 58) {
+                  const cellHash = coordHash(Math.floor(lxM / 11) + m.originCx * 7, Math.floor(lzM / 11) + m.originCz * 11, seed + 4091);
+                  const inCell = (lxM % 11) >= 1 && (lxM % 11) <= 8 && (lzM % 11) >= 1 && (lzM % 11) <= 8;
+                  if (inCell && cellHash > (rC < 36 ? 0.34 : 0.44)) {
+                    colStructH[idx] = rC < 36 ? (9 + Math.floor(cellHash * 9)) : (5 + Math.floor(cellHash * 4));
+                    colVillage[idx] = cellHash > 0.68 ? 9 : 2;
+                  } else if (Math.abs(dxC) < 2.8 || Math.abs(dzC) < 2.8 || Math.abs(rC - 35) < 2.5) {
+                    colStructH[idx] = 0;
+                    colVillage[idx] = 1;
+                  }
+                }
+              }
+            } else if (m.type === 1) {
+              colBaseH[idx] = baseY;
               // Stepped Great Pyramid silhouette with golden apex & royal terracotta bands!
               const dxC = Math.abs(lxM - 31.5);
               const dzC = Math.abs(lzM - 31.5);
@@ -840,6 +900,7 @@ export function createLodKernel(seed, worldType, hooks = null) {
                 colVillage[idx] = 5; // Monumental Sandstone Step
               }
             } else {
+              colBaseH[idx] = baseY;
               // Grand Citadel Fortress Walls, Corner Watchtowers & Red-Roof Guilds!
               const inTower = (lxM <= 8 || lxM >= 55) && (lzM <= 8 || lzM >= 55);
               const dxC = Math.abs(lxM - 31.5);
@@ -1449,6 +1510,23 @@ export function createLodKernel(seed, worldType, hooks = null) {
 
     // Pass 2A: 2D GREEDY MESHING for Top Faces (+Y) -> 60% to 85% fewer vertices!
     topVisited.fill(0);
+    if (borderBlocks > 0) {
+      // Mask out all LOD cells past the World Border so LOD terrain stops cleanly at the border!
+      for (let pz = 0; pz < PAD; pz++) {
+        const wzC = oz + (pz - 1) * step + (step >> 1);
+        const outZ = wzC < -borderBlocks || wzC >= borderBlocks;
+        const pRow = pz * PAD;
+        for (let px = 0; px < PAD; px++) {
+          const wxC = ox + (px - 1) * step + (step >> 1);
+          if (outZ || wxC < -borderBlocks || wxC >= borderBlocks) {
+            colTopY[pRow + px] = -1;
+            if (px >= 1 && px <= CELLS && pz >= 1 && pz <= CELLS) {
+              topVisited[(pz - 1) * CELLS + (px - 1)] = 1;
+            }
+          }
+        }
+      }
+    }
     for (let gz = 0; gz < CELLS; gz++) {
       const gRow = gz * CELLS;
       const pRow = (gz + 1) * PAD;
@@ -1536,10 +1614,12 @@ export function createLodKernel(seed, worldType, hooks = null) {
       while (gz < CELLS) {
         const ci = (gz + 1) * PAD + px;
         const yTop = colTopY[ci];
+        if (yTop < 0) { gz++; continue; }
         let yNeigh = colTopY[ci + 1];
         if (isEastBorder && colMat[ci] !== MAT_WATER) {
           yNeigh = Math.min(yNeigh, yTop - skirtDrop);
         }
+        if (yNeigh < 0) yNeigh = Math.max(0, yTop - skirtDrop);
         if (yTop <= yNeigh) { gz++; continue; }
 
         const drop = yTop - yNeigh;
@@ -1587,10 +1667,12 @@ export function createLodKernel(seed, worldType, hooks = null) {
       while (gz < CELLS) {
         const ci = (gz + 1) * PAD + px;
         const yTop = colTopY[ci];
+        if (yTop < 0) { gz++; continue; }
         let yNeigh = colTopY[ci - 1];
         if (isWestBorder && colMat[ci] !== MAT_WATER) {
           yNeigh = Math.min(yNeigh, yTop - skirtDrop);
         }
+        if (yNeigh < 0) yNeigh = Math.max(0, yTop - skirtDrop);
         if (yTop <= yNeigh) { gz++; continue; }
 
         const drop = yTop - yNeigh;
@@ -1647,10 +1729,12 @@ export function createLodKernel(seed, worldType, hooks = null) {
       while (gx < CELLS) {
         const ci = pRow + (gx + 1);
         const yTop = colTopY[ci];
+        if (yTop < 0) { gx++; continue; }
         let yNeigh = colTopY[ci + PAD];
         if (isSouthBorder && colMat[ci] !== MAT_WATER) {
           yNeigh = Math.min(yNeigh, yTop - skirtDrop);
         }
+        if (yNeigh < 0) yNeigh = Math.max(0, yTop - skirtDrop);
         if (yTop <= yNeigh) { gx++; continue; }
 
         const drop = yTop - yNeigh;
@@ -1697,10 +1781,12 @@ export function createLodKernel(seed, worldType, hooks = null) {
       while (gx < CELLS) {
         const ci = pRow + (gx + 1);
         const yTop = colTopY[ci];
+        if (yTop < 0) { gx++; continue; }
         let yNeigh = colTopY[ci - PAD];
         if (isNorthBorder && colMat[ci] !== MAT_WATER) {
           yNeigh = Math.min(yNeigh, yTop - skirtDrop);
         }
+        if (yNeigh < 0) yNeigh = Math.max(0, yTop - skirtDrop);
         if (yTop <= yNeigh) { gx++; continue; }
 
         const drop = yTop - yNeigh;
@@ -1760,10 +1846,11 @@ export function createLodKernel(seed, worldType, hooks = null) {
 
 // Multi-threaded inline-Blob Web Worker Pool for zero-stutter off-thread LOD generation!
 export class LodWorkerPool {
-  constructor(seed, worldType, maxWorkers = 3, generateStructures = true) {
+  constructor(seed, worldType, maxWorkers = 3, generateStructures = true, worldBorderChunks = 0) {
     this.seed = seed;
     this.worldType = worldType;
     this.generateStructures = generateStructures !== false;
+    this.worldBorderChunks = worldBorderChunks > 0 ? Math.floor(worldBorderChunks) : 0;
     this.workers = [];
     this.idleWorkers = [];
     this.pending = []; // queued jobs when all workers busy
@@ -1779,7 +1866,7 @@ export class LodWorkerPool {
 
   _initWorkers(maxWorkers) {
     if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
-      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures });
+      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures, worldBorderChunks: this.worldBorderChunks });
       return;
     }
 
@@ -1790,7 +1877,7 @@ export class LodWorkerPool {
         self.onmessage = function(e) {
           const msg = e.data;
           if (msg.type === 'init') {
-            kernel = createLodKernel(msg.seed, msg.worldType, { generateStructures: msg.generateStructures !== false });
+            kernel = createLodKernel(msg.seed, msg.worldType, { generateStructures: msg.generateStructures !== false, worldBorderChunks: msg.worldBorderChunks || 0 });
             return;
           }
           if (msg.type === 'build' && kernel) {
@@ -1820,7 +1907,7 @@ export class LodWorkerPool {
 
       for (let i = 0; i < count; i++) {
         const w = new Worker(this._blobUrl);
-        w.postMessage({ type: 'init', seed: this.seed, worldType: this.worldType, generateStructures: this.generateStructures });
+        w.postMessage({ type: 'init', seed: this.seed, worldType: this.worldType, generateStructures: this.generateStructures, worldBorderChunks: this.worldBorderChunks });
         w.onmessage = (e) => {
           if (this.disposed) return;
           const data = e.data;
@@ -1843,7 +1930,7 @@ export class LodWorkerPool {
       }
       this.useWorkers = true;
     } catch {
-      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures });
+      this._fallbackKernel = createLodKernel(this.seed, this.worldType, { generateStructures: this.generateStructures, worldBorderChunks: this.worldBorderChunks });
       this.useWorkers = false;
     }
   }

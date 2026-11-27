@@ -33,6 +33,7 @@ const KEYBIND_ACTIONS = [
   { id: 'jump', label: 'Jump / Fly Up' },
   { id: 'sneak', label: 'Sneak / Fly Down' },
   { id: 'sprint', label: 'Sprint' },
+  { id: 'drop', label: 'Drop Item' },
   { id: 'inventory', label: 'Inventory' },
   { id: 'chat', label: 'Chat / Commands' },
   { id: 'camera', label: 'Switch Camera' },
@@ -115,7 +116,9 @@ export class UIManager {
       bonusChest: false,
       mobSpawnRate: 1.0,
       hungerRate: 1.0,
-      farmSpeed: 1.0
+      farmSpeed: 1.0,
+      worldBorderEnabled: false,
+      worldBorderChunks: 16
     };
 
     // Cache hot HUD DOM nodes to eliminate per-frame getElementById lookups!
@@ -278,6 +281,22 @@ export class UIManager {
     setTxt('cw-btn-mob-rate', `Mob Spawn Rate: ${mobLabels[s.mobSpawnRate] || `${s.mobSpawnRate}×`}`);
     setTxt('cw-btn-hunger-rate', `Hunger Speed: ${hunLabels[s.hungerRate] || `${s.hungerRate}×`}`);
     setTxt('cw-btn-farm-speed', `Farm Speed: ${farmLabels[s.farmSpeed] || `${s.farmSpeed}×`}`);
+
+    // World Border toggle & chunk radius
+    const wbOn = Boolean(s.worldBorderEnabled);
+    const wbChunks = Math.max(2, Math.min(512, Math.floor(Number(s.worldBorderChunks) || 16)));
+    setTxt('cw-btn-world-border', `World Border: ${wbOn ? 'ON' : 'OFF'}`);
+    setTxt('cw-sub-world-border', wbOn
+      ? `World stops generating past ${wbChunks} chunks from spawn`
+      : 'Infinite world with no chunk border');
+    const wbWrap = document.getElementById('cw-border-chunks-wrap');
+    const wbInput = document.getElementById('cw-world-border-chunks');
+    if (wbWrap) wbWrap.style.opacity = wbOn ? '1' : '0.45';
+    if (wbInput) {
+      wbInput.disabled = !wbOn;
+      if (document.activeElement !== wbInput) wbInput.value = String(wbChunks);
+    }
+    setTxt('cw-sub-border-chunks', `${wbChunks * 2}×${wbChunks * 2} chunks (±${wbChunks * 16} blocks)`);
   }
 
   hydratePixelIcons() {
@@ -836,6 +855,18 @@ export class UIManager {
       this.sound.playPop();
       this.syncCreateWorldUI();
     });
+    document.getElementById('cw-btn-world-border')?.addEventListener('click', () => {
+      this.cwState.worldBorderEnabled = !this.cwState.worldBorderEnabled;
+      this.sound.playPop();
+      this.syncCreateWorldUI();
+    });
+    document.getElementById('cw-world-border-chunks')?.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      if (Number.isFinite(val)) {
+        this.cwState.worldBorderChunks = Math.max(2, Math.min(512, val));
+        this.syncCreateWorldUI();
+      }
+    });
     document.getElementById('cw-btn-more')?.addEventListener('click', () => {
       this.sound.playPop();
       document.getElementById('cw-page-main')?.classList.add('hidden');
@@ -865,6 +896,8 @@ export class UIManager {
           farmSpeed: Number.isFinite(s.farmSpeed) ? s.farmSpeed : 1.0,
           generateStructures: s.generateStructures !== false,
           bonusChest: Boolean(s.bonusChest),
+          worldBorderEnabled: Boolean(s.worldBorderEnabled),
+          worldBorderChunks: Math.max(2, Math.min(512, Math.floor(Number(s.worldBorderChunks) || 16))),
           seed,
           allowCheats: Boolean(s.allowCheats)
         });
@@ -2661,7 +2694,7 @@ export class UIManager {
         const mx = half + dx;
         const my = half + dz;
         if (mx >= 6 && mx <= w - 6 && my >= 6 && my <= h - 6) {
-          ctx.fillStyle = ms.type === 'great_pyramid' ? '#ff9800' : '#a855f7';
+          ctx.fillStyle = ms.type === 'mega_city' ? '#22c55e' : (ms.type === 'great_pyramid' ? '#ff9800' : '#a855f7');
           ctx.strokeStyle = '#000';
           ctx.lineWidth = 1.2;
           ctx.beginPath();

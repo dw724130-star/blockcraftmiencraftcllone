@@ -1397,7 +1397,7 @@ export class TextureManager {
       return;
     }
 
-    if (def.toolType && def.toolType !== 'flint_and_steel') {
+    if (def.toolType && def.toolType !== 'flint_and_steel' && def.toolType !== 'shears') {
       const matKey = key.split('_')[0];
       const pal = tierPal[matKey] || tierPal.iron;
       // Bespoke royal gilded pixel-art sprites for Golden Tools!
@@ -2456,6 +2456,27 @@ export class TextureManager {
           '..........OOO...',
           '................'
         ], { O: '#16181f', H: '#ffffff', L: '#d6dde6', M: '#9aa4b3', D: '#656e7d', f: '#3d424d', l: '#6e7687', d: '#23262e', Y: '#fff08a', F: '#ff8a24' });
+        break;
+
+      case 'shears':
+        drawGrid([
+          '................',
+          '.........OOO....',
+          '........OHHLO...',
+          '.......OHHLMO...',
+          '......OHHLMO....',
+          '.....OHHLMO..OO.',
+          '....OHHLMOOOHHLO',
+          '....OHLMMOHHLMOO',
+          '...OODMMMLMMDO..',
+          '..ORRRODMDDDO...',
+          '.OR..RROOOOO....',
+          '.OR...RORRRO....',
+          '..ORRROR...RO...',
+          '...OOOOR...RO...',
+          '........ORRO....',
+          '.........OO.....'
+        ], { O: '#16181f', H: '#ffffff', L: '#dde4ed', M: '#9ea8b8', D: '#5f6878', R: '#b83228' });
         break;
 
       case 'bucket':

@@ -947,11 +947,26 @@ export class Player {
     return hitTop;
   }
 
+  _doorBoxOverlaps(px, pz, x, y, z) {
+    const st = this.world.getDoorState(x, y, z);
+    if (st && st.open) return false;
+    const edge = st ? (st.facing & 3) : 0;
+    const thick = 0.1875;
+    let dx0 = x, dx1 = x + 1, dz0 = z, dz1 = z + 1;
+    if (edge === 0) { dz1 = z + thick; }
+    else if (edge === 1) { dx0 = x + 1 - thick; }
+    else if (edge === 2) { dz0 = z + 1 - thick; }
+    else { dx1 = x + thick; }
+    return (px + PLAYER_RADIUS > dx0 && px - PLAYER_RADIUS < dx1 &&
+            pz + PLAYER_RADIUS > dz0 && pz - PLAYER_RADIUS < dz1);
+  }
+
   _getLandingY(px, ny, pz) {
     const minX = Math.floor(px - PLAYER_RADIUS);
     const maxX = Math.floor(px + PLAYER_RADIUS);
     const minY = Math.floor(ny);
-    const maxY = Math.floor(ny + PLAYER_HEIGHT - 0.05);
+    // Only scan foot-level blocks (within step height) so torso/head overlaps (like closing a door) NEVER launch the player upward!
+    const maxY = Math.floor(ny + 0.62);
     const minZ = Math.floor(pz - PLAYER_RADIUS);
     const maxZ = Math.floor(pz + PLAYER_RADIUS);
     let bestY = Math.floor(ny) + 1;
@@ -961,20 +976,24 @@ export class Player {
         for (let x = minX; x <= maxX; x++) {
           const bid = this.world.getBlock(x, y, z);
           if (isBlockSolid(bid)) {
-            if (isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z)) continue;
+            if (isDoorBlock(bid)) {
+              // Doors are thin vertical panels — never use a door block to snap/boost landing height if we're already inside its footprint!
+              if (!this._doorBoxOverlaps(px, pz, x, y, z)) continue;
+              if (ny > y + 0.15) continue;
+            }
             if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(x, y, z)) continue;
             if (isStairBlock(bid)) {
               const topY = this._getStairStepSupportY(px, ny, pz, x, y, z);
-              if (topY > 0 && (!found || topY > bestY)) { bestY = topY; found = true; }
+              if (topY > 0 && topY <= ny + 0.65 && (!found || topY > bestY)) { bestY = topY; found = true; }
             } else {
               const topY = y + 1;
-              if (!found || topY > bestY) { bestY = topY; found = true; }
+              if (topY <= ny + 0.65 && (!found || topY > bestY)) { bestY = topY; found = true; }
             }
           }
         }
       }
     }
-    return bestY;
+    return found ? bestY : this.pos.y;
   }
 
   collidesAt(px, py, pz) {
@@ -990,7 +1009,10 @@ export class Player {
         for (let x = minX; x <= maxX; x++) {
           const bid = this.world.getBlock(x, y, z);
           if (isBlockSolid(bid)) {
-            if (isDoorBlock(bid) && this.world.isDoorOpenAt(x, y, z)) continue;
+            if (isDoorBlock(bid)) {
+              if (!this._doorBoxOverlaps(px, pz, x, y, z)) continue;
+              return true;
+            }
             if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(x, y, z)) continue;
             if (isStairBlock(bid)) {
               if (this._getStairStepSupportY(px, py, pz, x, y, z) > 0) return true;
@@ -1186,7 +1208,9 @@ export class Player {
           }
         }
         this.fallStartY = null;
-        this.pos.y = landedY;
+        if (landedY <= this.pos.y + 0.65) {
+          this.pos.y = landedY;
+        }
         this.onGround = true;
       }
       this.vel.y = 0;
@@ -1197,6 +1221,15 @@ export class Player {
       }
       this.pos.y = ny;
       this.onGround = false;
+    }
+
+    // World Border clamp (keeps player cleanly inside the configured chunk border!)
+    if (this.world && this.world.worldBorderChunks > 0) {
+      const lim = this.world.worldBorderChunks * 16 - 0.38;
+      if (this.pos.x < -lim) { this.pos.x = -lim; this.vel.x = Math.max(0, this.vel.x); }
+      else if (this.pos.x > lim) { this.pos.x = lim; this.vel.x = Math.min(0, this.vel.x); }
+      if (this.pos.z < -lim) { this.pos.z = -lim; this.vel.z = Math.max(0, this.vel.z); }
+      else if (this.pos.z > lim) { this.pos.z = lim; this.vel.z = Math.min(0, this.vel.z); }
     }
 
     // Void protection
@@ -1494,8 +1527,12 @@ export class Player {
 
     const held = this.inventory.getHeldDef();
     let mult = 1.0;
-    if (held && held.toolType && held.toolType === blockDef.tool) {
-      mult = held.speed || 2.0;
+    if (held && held.toolType) {
+      if (held.toolType === blockDef.tool) {
+        mult = held.speed || 2.0;
+      } else if (held.toolType === 'shears' && (blockDef.id.startsWith('wool_') || blockDef.id.endsWith('_leaves'))) {
+        mult = held.speed || 5.0;
+      }
     }
     return mult / (blockDef.hardness * 1.15);
   }

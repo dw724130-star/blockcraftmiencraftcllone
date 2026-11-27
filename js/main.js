@@ -332,7 +332,7 @@ class BlockCraftGame {
     this.player = null;
   }
 
-  async startNewWorld({ name, mode, worldType, seed, allowCheats = false, difficulty = 'normal', mobSpawnRate = 1.0, hungerRate = 1.0, farmSpeed = 1.0, generateStructures = true, bonusChest = false }) {
+  async startNewWorld({ name, mode, worldType, seed, allowCheats = false, difficulty = 'normal', mobSpawnRate = 1.0, hungerRate = 1.0, farmSpeed = 1.0, generateStructures = true, bonusChest = false, worldBorderEnabled = false, worldBorderChunks = 16 }) {
     if (this._loadingWorld) return;
     this.sound.unlock();
     const id = 'w_' + Date.now();
@@ -348,7 +348,9 @@ class BlockCraftGame {
       hungerRate: typeof hungerRate === 'number' && Number.isFinite(hungerRate) ? hungerRate : 1.0,
       farmSpeed: typeof farmSpeed === 'number' && Number.isFinite(farmSpeed) ? farmSpeed : 1.0,
       generateStructures: generateStructures !== false,
-      bonusChest: Boolean(bonusChest)
+      bonusChest: Boolean(bonusChest),
+      worldBorderEnabled: Boolean(worldBorderEnabled),
+      worldBorderChunks: Math.max(2, Math.min(512, Math.floor(Number(worldBorderChunks) || 16)))
     };
     await this.initGameSession(this.worldMeta, null);
     await this.saveCurrentWorld(false);
@@ -374,7 +376,9 @@ class BlockCraftGame {
       hungerRate: typeof data.hungerRate === 'number' && Number.isFinite(data.hungerRate) ? data.hungerRate : 1.0,
       farmSpeed: typeof data.farmSpeed === 'number' && Number.isFinite(data.farmSpeed) ? data.farmSpeed : (typeof this.settings.farmSpeed === 'number' ? this.settings.farmSpeed : 1.0),
       generateStructures: data.generateStructures !== false,
-      bonusChest: Boolean(data.bonusChest)
+      bonusChest: Boolean(data.bonusChest),
+      worldBorderEnabled: Boolean(data.worldBorderEnabled),
+      worldBorderChunks: Math.max(2, Math.min(512, Math.floor(Number(data.worldBorderChunks) || 16)))
     };
     await this.initGameSession(this.worldMeta, data);
   }
@@ -519,7 +523,8 @@ class BlockCraftGame {
         maxDetailRadius: 16,
         lowPower: this.isTouch,
         shaders: shaderMode,
-        generateStructures: meta.generateStructures !== false
+        generateStructures: meta.generateStructures !== false,
+        worldBorderChunks: meta.worldBorderEnabled ? Math.max(2, Math.floor(Number(meta.worldBorderChunks) || 16)) : 0
       });
 
       // Wire fluid mixing (Obsidian/Cobblestone/Stone steam fizz) & Fire-to-TNT ignition!
@@ -726,9 +731,11 @@ class BlockCraftGame {
         else if (this.ui.activeModal === 'furnace-modal') this.ui.renderFurnaceModal();
       };
       this.entities.onDiscoverMega = (ms) => {
-        const msg = ms.type === 'great_pyramid'
-          ? `Discovered ${ms.name}! (${ms.villagerCount} Villagers & 130+ Underground Secrets!)`
-          : `Discovered ${ms.name}! (${ms.villagerCount} Villagers & Deep Dungeon Vaults!)`;
+        const msg = ms.type === 'mega_city'
+          ? `Discovered ${ms.name}! (${ms.villagerCount}+ Citizens, Soldiers, Iron Golems & Grand Loot!)`
+          : (ms.type === 'great_pyramid'
+            ? `Discovered ${ms.name}! (${ms.villagerCount} Villagers & 130+ Underground Secrets!)`
+            : `Discovered ${ms.name}! (${ms.villagerCount} Villagers & Deep Dungeon Vaults!)`);
         this.ui.showToast(msg);
       };
       this.entities.populateInitialWildlife(this.player.pos);
@@ -906,6 +913,8 @@ class BlockCraftGame {
       farmSpeed: typeof this.worldMeta.farmSpeed === 'number' ? this.worldMeta.farmSpeed : 1.0,
       generateStructures: this.worldMeta.generateStructures !== false,
       bonusChest: Boolean(this.worldMeta.bonusChest),
+      worldBorderEnabled: Boolean(this.worldMeta.worldBorderEnabled),
+      worldBorderChunks: Math.max(2, Math.floor(Number(this.worldMeta.worldBorderChunks) || 16)),
       time: this.sky.time,
       dayCount: this.sky.dayCount,
       player: {
@@ -1003,6 +1012,32 @@ class BlockCraftGame {
     this.controls.onOpenPause = () => this.ui.openPause();
     this.controls.onOpenChat = () => this.ui.openChat();
     this.controls.onToggleCamera = () => this.toggleCamera();
+    this.controls.onDropItem = (dropAll = false) => {
+      if (!this.running || !this.player || !this.inventory || !this.entities) return;
+      const slot = this.inventory.slots[this.inventory.selected];
+      if (!slot || slot.count <= 0) return;
+      const dropCount = dropAll ? slot.count : 1;
+      const dropId = slot.id;
+      const dropDur = slot.durability;
+      slot.count -= dropCount;
+      if (slot.count <= 0) this.inventory.slots[this.inventory.selected] = null;
+      const eye = this.player.getEyePosition(this._eyeVec);
+      const dir = this.player.getLookDirection(this._dirVec);
+      const sx = eye.x + dir.x * 0.55;
+      const sy = eye.y - 0.18 + dir.y * 0.35;
+      const sz = eye.z + dir.z * 0.55;
+      this.entities.spawnDrop(dropId, dropCount, sx, sy, sz, {
+        exactY: true,
+        vx: dir.x * 5.6 + (Math.random() - 0.5) * 0.4,
+        vy: Math.max(1.4, dir.y * 4.2 + 1.8),
+        vz: dir.z * 5.6 + (Math.random() - 0.5) * 0.4,
+        pickupDelay: 1.25,
+        durability: dropDur
+      });
+      this.player.swingAnim = 0.72;
+      if (this.sound.playPop) this.sound.playPop();
+      this.ui.updateHotbar();
+    };
 
     this.controls.onTapAttack = () => {
       if (!this.running || !this.player || !this.entities) return;
@@ -1046,7 +1081,7 @@ class BlockCraftGame {
       if (!this.running || !this.player || !this.world) return;
       const heldDef = this.inventory.getHeldDef();
 
-      // 0. Check if tapping USE on a Villager to trade! (Never repeat-open on hold)
+      // 0. Check if tapping USE on a Villager to trade, or Shearing a Sheep with Shears! (Never repeat-open on hold)
       if (!isRepeat && this.entities) {
         const eye = this.player.getEyePosition();
         const dir = this.player.getLookDirection();
@@ -1054,6 +1089,18 @@ class BlockCraftGame {
         if (mob && mob.type === 'villager') {
           this.player.swingAnim = 1.0;
           this.ui.openTradeModal(mob);
+          return;
+        }
+        if (mob && mob.type === 'sheep' && heldDef && heldDef.id === 'shears') {
+          this.player.swingAnim = 1.0;
+          if (this.entities.shearSheep(mob, this.player, this.effects)) {
+            if (this.player.mode === 'survival') {
+              this.inventory.damageSelectedTool(1);
+              this.ui.updateHotbar();
+            }
+          } else {
+            this.ui.toast('This sheep has already been sheared!');
+          }
           return;
         }
       }
@@ -1101,6 +1148,24 @@ class BlockCraftGame {
             const opened = this.world.toggleDoor(x, y, z);
             const st = this.world.getDoorState(x, y, z);
             const by = (blockId & 1) === 1 && bdef.isDoorTop ? y - 1 : y;
+            // If closing the door while standing inside the thin door leaf, smoothly nudge horizontally clear instead of clipping/jumping!
+            if (!opened && this.player && this.player._doorBoxOverlaps && this.player._doorBoxOverlaps(this.player.pos.x, this.player.pos.z, x, by, z)) {
+              const py = this.player.pos.y;
+              if (py < by + 2.0 && py + 1.75 > by) {
+                const edge = st ? (st.facing & 3) : 0;
+                const thick = 0.1875;
+                const rad = 0.34;
+                let tx = this.player.pos.x, tz = this.player.pos.z;
+                if (edge === 0) tz = (this.player.pos.z < z + thick * 0.5) ? (z - rad) : (z + thick + rad);
+                else if (edge === 2) tz = (this.player.pos.z > z + 1 - thick * 0.5) ? (z + 1 + rad) : (z + 1 - thick - rad);
+                else if (edge === 1) tx = (this.player.pos.x > x + 1 - thick * 0.5) ? (x + 1 + rad) : (x + 1 - thick - rad);
+                else tx = (this.player.pos.x < x + thick * 0.5) ? (x - rad) : (x + thick + rad);
+                if (!this.player.collidesAt(tx, py, tz)) {
+                  this.player.pos.x = tx;
+                  this.player.pos.z = tz;
+                }
+              }
+            }
             this.multiplayer?.sendDoor(x, by, z, 'toggle', blockId, st.facing, opened);
             if (this.sound.playDoorToggle) this.sound.playDoorToggle(opened);
             return;
@@ -2130,7 +2195,12 @@ class BlockCraftGame {
       }
       this.world.updateShaders(dt, this.sky);
       if (this.world.updateTorchLights) {
-        this.world.updateTorchLights(dt, this.player.pos, this.sky);
+        const held = this.inventory ? this.inventory.getHeldDef() : null;
+        const heldActive = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
+        const heldInfo = heldActive
+          ? { active: true, isGlowstone: held.id === 'glowstone', x: this.player.pos.x, y: this.player.pos.y + 1.45, z: this.player.pos.z }
+          : null;
+        this.world.updateTorchLights(dt, this.player.pos, this.sky, heldInfo);
       }
       if (!this._tntExplodeCb) {
         this._tntExplodeCb = (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5, { broadcast: true });

@@ -24,21 +24,37 @@ export class Inventory {
     // Both Survival & Creative start with a clean empty hotbar (like authentic Minecraft!)
   }
 
-  makeStack(id, count = 1) {
+  makeStack(id, count = 1, durability = undefined) {
     const def = ITEMS[id];
     if (!def) return null;
     const st = { id, count: Math.min(count, def.stackSize || 64) };
-    if (def.durability) st.durability = def.durability;
+    if (def.durability) st.durability = durability !== undefined ? durability : def.durability;
     return st;
   }
 
-  addItem(id, count = 1) {
+  canAccept(id, count = 1) {
     const def = ITEMS[id];
     if (!def || count <= 0) return false;
     const maxStack = def.stackSize || 64;
+    if (maxStack > 1) {
+      for (let i = 0; i < this.slots.length; i++) {
+        const s = this.slots[i];
+        if (s && s.id === id && s.count < maxStack) return true;
+      }
+    }
+    for (let i = 0; i < this.slots.length; i++) {
+      if (!this.slots[i]) return true;
+    }
+    return false;
+  }
+
+  addItemPartial(id, count = 1, durability = undefined) {
+    const def = ITEMS[id];
+    if (!def || count <= 0) return { added: 0, remaining: count };
+    const maxStack = def.stackSize || 64;
     let rem = count;
 
-    // 1. Merge into existing stacks
+    // 1. Merge into existing stacks (only for stackable items)
     if (maxStack > 1) {
       for (let i = 0; i < this.slots.length && rem > 0; i++) {
         const s = this.slots[i];
@@ -54,12 +70,16 @@ export class Inventory {
     for (let i = 0; i < this.slots.length && rem > 0; i++) {
       if (!this.slots[i]) {
         const add = Math.min(maxStack, rem);
-        this.slots[i] = this.makeStack(id, add);
+        this.slots[i] = this.makeStack(id, add, durability);
         rem -= add;
       }
     }
 
-    return rem === 0;
+    return { added: count - rem, remaining: rem };
+  }
+
+  addItem(id, count = 1, durability = undefined) {
+    return this.addItemPartial(id, count, durability).remaining === 0;
   }
 
   consumeSelected(amount = 1) {
