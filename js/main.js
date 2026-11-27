@@ -350,7 +350,7 @@ class BlockCraftGame {
       generateStructures: generateStructures !== false,
       bonusChest: Boolean(bonusChest),
       worldBorderEnabled: Boolean(worldBorderEnabled),
-      worldBorderChunks: Math.max(2, Math.min(512, Math.floor(Number(worldBorderChunks) || 16)))
+      worldBorderChunks: Math.max(16, Math.min(4096, Math.floor(Number(worldBorderChunks) || 512)))
     };
     await this.initGameSession(this.worldMeta, null);
     await this.saveCurrentWorld(false);
@@ -378,7 +378,7 @@ class BlockCraftGame {
       generateStructures: data.generateStructures !== false,
       bonusChest: Boolean(data.bonusChest),
       worldBorderEnabled: Boolean(data.worldBorderEnabled),
-      worldBorderChunks: Math.max(2, Math.min(512, Math.floor(Number(data.worldBorderChunks) || 16)))
+      worldBorderChunks: Math.max(16, Math.min(4096, Math.floor(Number(data.worldBorderChunks) || 512)))
     };
     await this.initGameSession(this.worldMeta, data);
   }

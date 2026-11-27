@@ -2271,8 +2271,8 @@ export class EntityManager {
           if (this.onDiscoverMega) this.onDiscoverMega(ms);
         }
         const isCity = ms.type === 'mega_city';
-        const resetDist = isCity ? 235 : 190;
-        const spawnDist = isCity ? 136 : 108;
+        const resetDist = isCity ? 310 : 190;
+        const spawnDist = isCity ? 185 : 108;
         if (d > resetDist && ms.crowdSpawned) {
           ms.crowdSpawned = false;
         }
@@ -2531,7 +2531,7 @@ export class EntityManager {
       const pdz = m.pos.z - player.pos.z;
       const distToPlayer = Math.hypot(pdx, pdy, pdz);
 
-      const despawnDist = (m.def.villager || m.def.golem) ? 215 : 78;
+      const despawnDist = (m.def.villager || m.def.golem) ? 295 : 78;
       if (distToPlayer > despawnDist || m.pos.y < -5) {
         this.removeMob(m);
         continue;
@@ -4203,7 +4203,7 @@ export class EntityManager {
     // Spawn bustling full-physics crowds of Villagers, Villager Soldiers & Iron Golems inside Mega Cities, Pyramids & Castles!
     // GPU-Instanced NPC rendering keeps even 240+ Mega City citizens running smoothly!
     const isCity = ms.type === 'mega_city';
-    const innerR = ms.innerRadius || (isCity ? 54 : 24);
+    const innerR = ms.innerRadius || (isCity ? 96 : 24);
     const isPyramid = ms.type === 'great_pyramid';
     const targetVillagers = isCity ? 170 : (isPyramid ? 72 : 62);
     const targetSoldiers = isCity ? 50 : (isPyramid ? 16 : 24);
@@ -4212,7 +4212,7 @@ export class EntityManager {
     const soldierTotal = Math.max(0, targetSoldiers - Math.floor(existingCount * 0.20));
     const golemTotal = Math.max(0, targetGolems - Math.floor(existingCount * 0.08));
     const useExactY = !isCity;
-    const hRad = isCity ? 56 : 26;
+    const hRad = isCity ? 96 : 26;
 
     const pickSafeSpot = (idx, minRad = 3.5) => {
       for (let tries = 0; tries < (isCity ? 18 : 36); tries++) {

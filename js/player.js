@@ -1141,45 +1141,48 @@ export class Player {
     } else {
       const grav = moonGrav ? 9.5 : 25.0;
       const jumpV = (moonGrav ? 8.6 : (superMob ? 10.6 : 8.4)) * (hasJump ? 1.42 : 1.0);
-      this.vel.y -= grav * dt;
+      this.vel.y = Math.max(-52.0, this.vel.y - grav * dt);
       if (input.jump && this.onGround) {
         this.vel.y = jumpV;
         this.onGround = false;
       }
     }
 
-    // Horizontal move with sneak edge-clamp & authentic Minecraft liquid-to-bank climb hop!
-    const dx = this.vel.x * dt;
-    const dz = this.vel.z * dt;
+    // Horizontal move with sub-stepping (prevents fast-flight wall tunneling!), sneak edge-clamp & stair step-up!
+    const totalDx = this.vel.x * dt;
+    const totalDz = this.vel.z * dt;
     let horizBlocked = false;
+    const hSteps = Math.max(1, Math.ceil(Math.max(Math.abs(totalDx), Math.abs(totalDz)) / 0.32));
+    const stepDx = totalDx / hSteps;
+    const stepDz = totalDz / hSteps;
 
-    if (dx !== 0) {
-      const nx = this.pos.x + dx;
-      const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(nx, this.pos.y - 0.2, this.pos.z);
-      if (!this.collidesAt(nx, this.pos.y, this.pos.z) && safeEdge) {
-        this.pos.x = nx;
-      } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(nx, this.pos.y + 0.56, this.pos.z)) {
-        // Smooth Minecraft 0.5-block stair step-up!
-        this.pos.x = nx;
-        this.pos.y = this._getLandingY(nx, this.pos.y, this.pos.z);
-      } else {
-        horizBlocked = true;
-        this.vel.x = 0;
+    for (let hs = 0; hs < hSteps; hs++) {
+      if (stepDx !== 0 && this.vel.x !== 0) {
+        const nx = this.pos.x + stepDx;
+        const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(nx, this.pos.y - 0.2, this.pos.z);
+        if (!this.collidesAt(nx, this.pos.y, this.pos.z) && safeEdge) {
+          this.pos.x = nx;
+        } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(nx, this.pos.y + 0.56, this.pos.z)) {
+          this.pos.x = nx;
+          this.pos.y = this._getLandingY(nx, this.pos.y, this.pos.z);
+        } else {
+          horizBlocked = true;
+          this.vel.x = 0;
+        }
       }
-    }
 
-    if (dz !== 0) {
-      const nz = this.pos.z + dz;
-      const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(this.pos.x, this.pos.y - 0.2, nz);
-      if (!this.collidesAt(this.pos.x, this.pos.y, nz) && safeEdge) {
-        this.pos.z = nz;
-      } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(this.pos.x, this.pos.y + 0.56, nz)) {
-        // Smooth Minecraft 0.5-block stair step-up!
-        this.pos.z = nz;
-        this.pos.y = this._getLandingY(this.pos.x, this.pos.y, nz);
-      } else {
-        horizBlocked = true;
-        this.vel.z = 0;
+      if (stepDz !== 0 && this.vel.z !== 0) {
+        const nz = this.pos.z + stepDz;
+        const safeEdge = !this.sneaking || !this.onGround || this.collidesAt(this.pos.x, this.pos.y - 0.2, nz);
+        if (!this.collidesAt(this.pos.x, this.pos.y, nz) && safeEdge) {
+          this.pos.z = nz;
+        } else if (this.onGround && !this.flying && !this.sneaking && !this.collidesAt(this.pos.x, this.pos.y + 0.56, nz)) {
+          this.pos.z = nz;
+          this.pos.y = this._getLandingY(this.pos.x, this.pos.y, nz);
+        } else {
+          horizBlocked = true;
+          this.vel.z = 0;
+        }
       }
     }
 
@@ -1192,35 +1195,48 @@ export class Player {
       }
     }
 
-    // Vertical move
-    const dy = this.vel.y * dt;
-    const ny = this.pos.y + dy;
-    if (this.collidesAt(this.pos.x, ny, this.pos.z)) {
-      if (this.vel.y < 0) {
-        // Landed (supports both full blocks and 0.5-block stair steps!)
-        const landedY = this._getLandingY(this.pos.x, ny, this.pos.z);
-        if (this.fallStartY !== null && !this.inWater && this.mode === 'survival' && !moonGrav) {
-          const drop = this.fallStartY - landedY;
-          if (drop > 3.5) {
-            const rawDmg = Math.floor(drop - 3);
-            const mult = (superMob ? 0.5 : 1.0) * (hasJump ? 0.5 : 1.0);
-            this.takeDamage(Math.max(1, Math.floor(rawDmg * mult)), 'Fell from a high place');
+    // Swept Sub-Stepped Vertical Move (<= 0.28 blocks/step -> NEVER glitches/tunnels through floors even falling from Y=500!)
+    const totalDy = this.vel.y * dt;
+    const vSteps = Math.max(1, Math.ceil(Math.abs(totalDy) / 0.28));
+    const stepDy = totalDy / vSteps;
+    let landedThisFrame = false;
+    let hitCeiling = false;
+
+    for (let vs = 0; vs < vSteps; vs++) {
+      const ny = this.pos.y + stepDy;
+      if (this.collidesAt(this.pos.x, ny, this.pos.z)) {
+        if (this.vel.y < 0) {
+          const landedY = this._getLandingY(this.pos.x, ny, this.pos.z);
+          if (this.fallStartY !== null && !this.inWater && this.mode === 'survival' && !moonGrav) {
+            const drop = this.fallStartY - landedY;
+            if (drop > 3.5) {
+              const rawDmg = Math.floor(drop - 3);
+              const mult = (superMob ? 0.5 : 1.0) * (hasJump ? 0.5 : 1.0);
+              this.takeDamage(Math.max(1, Math.floor(rawDmg * mult)), 'Fell from a high place');
+            }
           }
+          this.fallStartY = null;
+          if (landedY <= this.pos.y + 0.65 && landedY >= ny - 0.1) {
+            this.pos.y = landedY;
+          }
+          this.onGround = true;
+          landedThisFrame = true;
+        } else {
+          hitCeiling = true;
         }
-        this.fallStartY = null;
-        if (landedY <= this.pos.y + 0.65) {
-          this.pos.y = landedY;
+        this.vel.y = 0;
+        break;
+      } else {
+        if (this.onGround && this.vel.y < 0) this.fallStartY = this.pos.y;
+        if (!this.onGround && this.vel.y < 0 && (this.fallStartY === null || this.pos.y > this.fallStartY)) {
+          this.fallStartY = this.pos.y;
         }
-        this.onGround = true;
+        this.pos.y = ny;
+        this.onGround = false;
       }
-      this.vel.y = 0;
-    } else {
-      if (this.onGround && this.vel.y < 0) this.fallStartY = this.pos.y;
-      if (!this.onGround && this.vel.y < 0 && (this.fallStartY === null || this.pos.y > this.fallStartY)) {
-        this.fallStartY = this.pos.y;
-      }
-      this.pos.y = ny;
-      this.onGround = false;
+    }
+    if (!landedThisFrame && !hitCeiling && this.vel.y === 0 && !this.flying) {
+      this.onGround = this.collidesAt(this.pos.x, this.pos.y - 0.04, this.pos.z);
     }
 
     // World Border clamp (keeps player cleanly inside the configured chunk border!)

@@ -14,33 +14,33 @@
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
   <link rel="manifest" href="manifest.json" />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
-  <link rel="stylesheet" href="css/style.css?v=54" />
+  <link rel="stylesheet" href="css/style.css?v=55" />
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-        "./js/blocks.js": "./js/blocks.js?v=54",
-        "./js/textures.js": "./js/textures.js?v=54",
-        "./js/mods.js": "./js/mods.js?v=54",
-        "./js/inventory.js": "./js/inventory.js?v=54",
-        "./js/recipes.js": "./js/recipes.js?v=54",
-        "./js/lod-mesher.js": "./js/lod-mesher.js?v=54",
-        "./js/world-pool.js": "./js/world-pool.js?v=54",
-        "./js/world-worker.js": "./js/world-worker.js?v=54",
-        "./js/noise.js": "./js/noise.js?v=54",
-        "./js/voxel-gi.js": "./js/voxel-gi.js?v=54",
-        "./js/world.js": "./js/world.js?v=54",
-        "./js/mobs.js": "./js/mobs.js?v=54",
-        "./js/player.js": "./js/player.js?v=54",
-        "./js/effects.js": "./js/effects.js?v=54",
-        "./js/audio.js": "./js/audio.js?v=54",
-        "./js/ui.js": "./js/ui.js?v=54",
-        "./js/controls.js": "./js/controls.js?v=54",
-        "./js/sky.js": "./js/sky.js?v=54",
-        "./js/postfx.js": "./js/postfx.js?v=54",
-        "./js/panorama.js": "./js/panorama.js?v=54",
-        "./js/multiplayer.js": "./js/multiplayer.js?v=54",
-        "./js/storage.js": "./js/storage.js?v=54"
+        "./js/blocks.js": "./js/blocks.js?v=55",
+        "./js/textures.js": "./js/textures.js?v=55",
+        "./js/mods.js": "./js/mods.js?v=55",
+        "./js/inventory.js": "./js/inventory.js?v=55",
+        "./js/recipes.js": "./js/recipes.js?v=55",
+        "./js/lod-mesher.js": "./js/lod-mesher.js?v=55",
+        "./js/world-pool.js": "./js/world-pool.js?v=55",
+        "./js/world-worker.js": "./js/world-worker.js?v=55",
+        "./js/noise.js": "./js/noise.js?v=55",
+        "./js/voxel-gi.js": "./js/voxel-gi.js?v=55",
+        "./js/world.js": "./js/world.js?v=55",
+        "./js/mobs.js": "./js/mobs.js?v=55",
+        "./js/player.js": "./js/player.js?v=55",
+        "./js/effects.js": "./js/effects.js?v=55",
+        "./js/audio.js": "./js/audio.js?v=55",
+        "./js/ui.js": "./js/ui.js?v=55",
+        "./js/controls.js": "./js/controls.js?v=55",
+        "./js/sky.js": "./js/sky.js?v=55",
+        "./js/postfx.js": "./js/postfx.js?v=55",
+        "./js/panorama.js": "./js/panorama.js?v=55",
+        "./js/multiplayer.js": "./js/multiplayer.js?v=55",
+        "./js/storage.js": "./js/storage.js?v=55"
       }
     }
   </script>
@@ -268,9 +268,8 @@
               <div id="cw-sub-world-border" class="cw-opt-sub">Infinite world with no chunk border</div>
             </div>
             <div class="cw-option-cell" id="cw-border-chunks-wrap">
-              <label for="cw-world-border-chunks" class="cw-input-label" style="margin-bottom:4px;display:block;font-size:12px;">Border Radius (Chunks)</label>
-              <input type="number" id="cw-world-border-chunks" class="cw-mc-input" min="2" max="512" step="1" value="16" />
-              <div id="cw-sub-border-chunks" class="cw-opt-sub">32×32 chunks (±256 blocks)</div>
+              <button type="button" id="cw-btn-border-size" class="mc-stone-btn cw-opt-btn">Border Radius: 512 Chunks</button>
+              <div id="cw-sub-border-chunks" class="cw-opt-sub">1024×1024 chunks (±8,192 blocks)</div>
             </div>
           </div>
 
@@ -1168,6 +1167,6 @@
   <!-- Floating Inventory Drag Ghost -->
   <div id="drag-ghost" class="drag-ghost hidden"></div>
 
-  <script type="module" src="js/main.js?v=54"></script>
+  <script type="module" src="js/main.js?v=55"></script>
 </body>
 </html>
