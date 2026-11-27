@@ -116,16 +116,47 @@ class BlockCraftGame {
     this._lastViewW = 0;
     this._lastViewH = 0;
     this._lastDpr = 0;
+    this._glContextLost = false;
     this._resumeResizeTimers = [];
-    const scheduleResumeResize = () => {
+    const recoverDisplayAndTextures = (fullReset = false) => {
+      this.lastTime = performance.now();
+      if (this._glContextLost) return;
+      if (this.textures && this.textures.markAllTexturesNeedsUpdate) {
+        this.textures.markAllTexturesNeedsUpdate();
+      }
+      if (this.postfx && this.postfx.resetTargets) {
+        this.postfx.resetTargets();
+      }
+      if (this.world && this.world.onContextRestored) {
+        this.world.onContextRestored();
+      }
+      if (this.renderer && this.renderer.shadowMap) {
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+      if (fullReset && this.titlePanorama && this.titlePanorama.tex) {
+        this.titlePanorama.tex.needsUpdate = true;
+      }
       this.onResize();
+    };
+    const scheduleResumeResize = () => {
+      recoverDisplayAndTextures(false);
       for (const tid of this._resumeResizeTimers) clearTimeout(tid);
       this._resumeResizeTimers = [
         setTimeout(() => this.onResize(), 120),
-        setTimeout(() => this.onResize(), 320),
+        setTimeout(() => recoverDisplayAndTextures(false), 320),
         setTimeout(() => this.onResize(), 650)
       ];
     };
+    // Prevent black/glitching textures on iPad PWA bookmark switch or WebGL context eviction!
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this._glContextLost = true;
+    }, false);
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this._glContextLost = false;
+      recoverDisplayAndTextures(true);
+      scheduleResumeResize();
+    }, false);
     window.addEventListener('resize', () => this.onResize());
     window.addEventListener('orientationchange', scheduleResumeResize);
     window.addEventListener('pageshow', scheduleResumeResize);
@@ -133,7 +164,7 @@ class BlockCraftGame {
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', () => this.onResize());
     }
-    // Ensure settings & world changes are NEVER lost on reload or tab close, and fix iPad PWA resume aspect ratio!
+    // Ensure settings & world changes are NEVER lost on reload or tab close, and fix iPad PWA resume aspect ratio & textures!
     window.addEventListener('pagehide', () => {
       saveSettings(this.settings);
       if (this.running) this.saveCurrentWorld(false);
@@ -144,6 +175,7 @@ class BlockCraftGame {
         saveSettings(this.settings);
         if (this.running) this.saveCurrentWorld(false);
       } else if (document.visibilityState === 'visible') {
+        this.lastTime = performance.now();
         scheduleResumeResize();
       }
     });
@@ -156,6 +188,26 @@ class BlockCraftGame {
 
     this.refreshWorldList();
     requestAnimationFrame((t) => this.loop(t));
+  }
+
+  dropInventoryStack(item) {
+    if (!item || !item.id || !this.running || !this.player || !this.entities) return;
+    const count = Math.max(1, item.count || 1);
+    const eye = this.player.getEyePosition(this._eyeVec);
+    const dir = this.player.getLookDirection(this._dirVec);
+    const sx = eye.x + dir.x * 0.65;
+    const sy = eye.y - 0.16 + dir.y * 0.35;
+    const sz = eye.z + dir.z * 0.65;
+    this.entities.spawnDrop(item.id, count, sx, sy, sz, {
+      exactY: true,
+      vx: dir.x * 5.8 + (Math.random() - 0.5) * 0.45,
+      vy: Math.max(1.5, dir.y * 4.2 + 1.85),
+      vz: dir.z * 5.8 + (Math.random() - 0.5) * 0.45,
+      pickupDelay: 1.35,
+      durability: item.durability
+    });
+    this.player.swingAnim = 0.72;
+    if (this.sound && this.sound.playPop) this.sound.playPop();
   }
 
   _getPresetMaxDpr(sh) {
@@ -1017,25 +1069,10 @@ class BlockCraftGame {
       const slot = this.inventory.slots[this.inventory.selected];
       if (!slot || slot.count <= 0) return;
       const dropCount = dropAll ? slot.count : 1;
-      const dropId = slot.id;
-      const dropDur = slot.durability;
+      const dropped = { id: slot.id, count: dropCount, durability: slot.durability };
       slot.count -= dropCount;
       if (slot.count <= 0) this.inventory.slots[this.inventory.selected] = null;
-      const eye = this.player.getEyePosition(this._eyeVec);
-      const dir = this.player.getLookDirection(this._dirVec);
-      const sx = eye.x + dir.x * 0.55;
-      const sy = eye.y - 0.18 + dir.y * 0.35;
-      const sz = eye.z + dir.z * 0.55;
-      this.entities.spawnDrop(dropId, dropCount, sx, sy, sz, {
-        exactY: true,
-        vx: dir.x * 5.6 + (Math.random() - 0.5) * 0.4,
-        vy: Math.max(1.4, dir.y * 4.2 + 1.8),
-        vz: dir.z * 5.6 + (Math.random() - 0.5) * 0.4,
-        pickupDelay: 1.25,
-        durability: dropDur
-      });
-      this.player.swingAnim = 0.72;
-      if (this.sound.playPop) this.sound.playPop();
+      this.dropInventoryStack(dropped);
       this.ui.updateHotbar();
     };
 
@@ -1967,6 +2004,10 @@ class BlockCraftGame {
   loop(now) {
     if (!this._loopCb) this._loopCb = (t) => this.loop(t);
     requestAnimationFrame(this._loopCb);
+    if (this._glContextLost) {
+      this.lastTime = now;
+      return;
+    }
     // Self-healing iPad PWA / Safari orientation & app-resume aspect guard (impossible to stay stretched!)
     // resize/orientation/visualViewport listeners handle the normal case; this safety-net poll only
     // needs to run a few times per second (reading clientWidth every frame can force a layout).
@@ -2197,10 +2238,16 @@ class BlockCraftGame {
       if (this.world.updateTorchLights) {
         const held = this.inventory ? this.inventory.getHeldDef() : null;
         const heldActive = !!(held && (held.id === 'torch' || held.id === 'glowstone'));
-        const heldInfo = heldActive
-          ? { active: true, isGlowstone: held.id === 'glowstone', x: this.player.pos.x, y: this.player.pos.y + 1.45, z: this.player.pos.z }
-          : null;
-        this.world.updateTorchLights(dt, this.player.pos, this.sky, heldInfo);
+        if (!this._heldLightInfo) this._heldLightInfo = { active: false, isGlowstone: false, x: 0, y: 0, z: 0 };
+        const hi = this._heldLightInfo;
+        hi.active = heldActive;
+        if (heldActive) {
+          hi.isGlowstone = held.id === 'glowstone';
+          hi.x = this.player.pos.x;
+          hi.y = this.player.pos.y + 1.45;
+          hi.z = this.player.pos.z;
+        }
+        this.world.updateTorchLights(dt, this.player.pos, this.sky, heldActive ? hi : null);
       }
       if (!this._tntExplodeCb) {
         this._tntExplodeCb = (ex, ey, ez) => this.triggerExplosion(ex, ey, ez, 4.5, { broadcast: true });

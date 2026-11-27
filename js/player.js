@@ -299,19 +299,15 @@ export function setSteveHurtFlash(model, active) {
   }
 }
 
-// Shared geometries/materials for sculpted 3D held torches (reused across 1st-person, 3rd-person & all multiplayer friends!)
+// Shared geometries/materials for low-poly 2-box classic 3D held torches (reused across 1st-person, 3rd-person & multiplayer!)
 let _sharedTorchAssets = null;
 function getSharedTorchAssets() {
   if (_sharedTorchAssets) return _sharedTorchAssets;
   _sharedTorchAssets = {
-    woodGeo: new THREE.BoxGeometry(0.062, 0.26, 0.062),
-    collarGeo: new THREE.BoxGeometry(0.074, 0.044, 0.074),
-    headGeo: new THREE.BoxGeometry(0.070, 0.064, 0.070),
-    tipGeo: new THREE.BoxGeometry(0.044, 0.056, 0.044),
+    woodGeo: new THREE.BoxGeometry(0.064, 0.28, 0.064),
+    headGeo: new THREE.BoxGeometry(0.068, 0.092, 0.068),
     woodMat: new THREE.MeshLambertMaterial({ color: 0x9c6e3b }),
-    collarMat: new THREE.MeshLambertMaterial({ color: 0x2c2826 }),
-    headMat: new THREE.MeshBasicMaterial({ color: 0xffa62b }),
-    flameMat: new THREE.MeshBasicMaterial({ color: 0xfff099 })
+    headMat: new THREE.MeshBasicMaterial({ color: 0xffb838 })
   };
   return _sharedTorchAssets;
 }
@@ -339,18 +335,14 @@ export function createHeldItemRig(textures, isFirstPerson = false) {
   itemPivot.visible = false;
   rig.add(itemPivot);
 
-  // Sculpted 3D Torch (wood shaft + soot collar + glowing ember + flame tip)
+  // Clean Low-Poly 2-Box 3D Torch (wood stick + glowing ember head)
   const ta = getSharedTorchAssets();
   const torchGroup = new THREE.Group();
   const tShaft = new THREE.Mesh(ta.woodGeo, ta.woodMat);
-  tShaft.position.set(0, -0.02, 0);
-  const tCollar = new THREE.Mesh(ta.collarGeo, ta.collarMat);
-  tCollar.position.set(0, 0.12, 0);
+  tShaft.position.set(0, 0.0, 0);
   const tHead = new THREE.Mesh(ta.headGeo, ta.headMat);
-  tHead.position.set(0, 0.17, 0);
-  const tTip = new THREE.Mesh(ta.tipGeo, ta.flameMat);
-  tTip.position.set(0, 0.228, 0);
-  torchGroup.add(tShaft, tCollar, tHead, tTip);
+  tHead.position.set(0, 0.184, 0);
+  torchGroup.add(tShaft, tHead);
   torchGroup.visible = false;
   rig.add(torchGroup);
 
@@ -573,6 +565,22 @@ function resolveArmorTier(item) {
   return null;
 }
 
+// Global single-context armor material cache (prevents shader recompiles, transparent-pass glitches & equip lag!)
+const _sharedArmorMatCache = new WeakMap();
+let _sharedEmptyAlphaTex = null;
+function getEmptyAlphaTex() {
+  if (_sharedEmptyAlphaTex) return _sharedEmptyAlphaTex;
+  const c = document.createElement('canvas');
+  c.width = 2;
+  c.height = 2;
+  const tex = new THREE.CanvasTexture(c);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  _sharedEmptyAlphaTex = tex;
+  return tex;
+}
+
 export function updateSteveArmor(model, armorArray) {
   if (!model || !model.armorMeshes) return;
   const t0 = resolveArmorTier(armorArray && armorArray[0]);
@@ -583,14 +591,21 @@ export function updateSteveArmor(model, armorArray) {
   if (sig === model._lastArmorSig) return;
   model._lastArmorSig = sig;
 
+  const texMgr = model._textures;
   const getTierMats = (tier) => {
-    if (!tier) return null;
-    if (model._armorMatCache[tier]) return model._armorMatCache[tier];
-    const at = model._textures && model._textures.getArmorTextures ? model._textures.getArmorTextures(tier) : null;
+    if (!tier || !texMgr || !texMgr.getArmorTextures) return null;
+    let mapByTier = _sharedArmorMatCache.get(texMgr);
+    if (!mapByTier) {
+      mapByTier = {};
+      _sharedArmorMatCache.set(texMgr, mapByTier);
+    }
+    if (mapByTier[tier]) return mapByTier[tier];
+    const at = texMgr.getArmorTextures(tier);
     if (!at) return null;
-    const clearMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
-    const helmFrontM = new THREE.MeshLambertMaterial({ map: at.helmFront, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
-    const helmSideM = new THREE.MeshLambertMaterial({ map: at.helmSide, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide });
+    // Use pure alphaTest (opaque render pass, NO transparent:true sorting glitches or mixed BasicMaterial shaders!)
+    const clearCutout = new THREE.MeshLambertMaterial({ map: getEmptyAlphaTex(), alphaTest: 0.5 });
+    const helmFrontM = new THREE.MeshLambertMaterial({ map: at.helmFront, alphaTest: 0.45, side: THREE.DoubleSide });
+    const helmSideM = new THREE.MeshLambertMaterial({ map: at.helmSide, alphaTest: 0.45, side: THREE.DoubleSide });
     const helmTopM = new THREE.MeshLambertMaterial({ map: at.helmTop });
     const chestFrontM = new THREE.MeshLambertMaterial({ map: at.chestFront });
     const chestBackM = new THREE.MeshLambertMaterial({ map: at.chestBack });
@@ -598,13 +613,13 @@ export function updateSteveArmor(model, armorArray) {
     const leggingM = new THREE.MeshLambertMaterial({ map: at.legging });
     const bootM = new THREE.MeshLambertMaterial({ map: at.boot });
     const bundle = {
-      helm: [helmSideM, helmSideM, helmTopM, clearMat, helmSideM, helmFrontM],
+      helm: [helmSideM, helmSideM, helmTopM, clearCutout, helmSideM, helmFrontM],
       chest: [chestBackM, chestBackM, chestBackM, chestBackM, chestBackM, chestFrontM],
       pauldron: pauldronM,
       legging: leggingM,
       boot: bootM
     };
-    model._armorMatCache[tier] = bundle;
+    mapByTier[tier] = bundle;
     return bundle;
   };
 

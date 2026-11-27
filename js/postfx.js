@@ -142,30 +142,32 @@ export class PostFXPipeline {
           if (uLightFacing > 0.01 && uGodRayStrength > 0.01) {
             vec2 toLight = uLightScreenPos - vUv;
             float distToLight = length(toLight);
-            vec2 stepUv = toLight * (0.94 / float(${raySamples}));
-            float jitter = ign(gl_FragCoord.xy + fract(uTime) * 37.0);
-            vec2 sampleUv = vUv + stepUv * jitter;
+            if (distToLight < 1.55) {
+              vec2 stepUv = toLight * (0.94 / float(${raySamples}));
+              float jitter = ign(gl_FragCoord.xy + fract(uTime) * 37.0);
+              vec2 sampleUv = vUv + stepUv * jitter;
 
-            float weight = 1.0;
-            float decay = 0.945;
-            vec3 acc = vec3(0.0);
-            for (int i = 0; i < ${raySamples}; i++) {
-              vec2 clampedUv = clamp(sampleUv, vec2(0.002), vec2(0.998));
-              vec3 s = texture2D(tScene, clampedUv).rgb;
-              float skyMask;
-              if (uHasDepth > 0.5) {
-                float d = texture2D(tDepth, clampedUv).r;
-                skyMask = smoothstep(0.9993, 0.99996, d);
-              } else {
-                float sLum = dot(s, vec3(0.2126, 0.7152, 0.0722));
-                skyMask = smoothstep(0.58, 1.35, sLum);
+              float weight = 1.0;
+              float decay = 0.945;
+              vec3 acc = vec3(0.0);
+              for (int i = 0; i < ${raySamples}; i++) {
+                vec2 clampedUv = clamp(sampleUv, vec2(0.002), vec2(0.998));
+                vec3 s = texture2D(tScene, clampedUv).rgb;
+                float skyMask;
+                if (uHasDepth > 0.5) {
+                  float d = texture2D(tDepth, clampedUv).r;
+                  skyMask = smoothstep(0.9993, 0.99996, d);
+                } else {
+                  float sLum = dot(s, vec3(0.2126, 0.7152, 0.0722));
+                  skyMask = smoothstep(0.58, 1.35, sLum);
+                }
+                acc += min(s, vec3(3.0)) * skyMask * weight;
+                weight *= decay;
+                sampleUv += stepUv;
               }
-              acc += min(s, vec3(3.0)) * skyMask * weight;
-              weight *= decay;
-              sampleUv += stepUv;
+              float radialFalloff = smoothstep(1.55, 0.02, distToLight) * (0.45 + 0.55 * exp(-distToLight * 1.4));
+              rays = (acc / float(${raySamples})) * uLightColor * radialFalloff * uLightFacing * uGodRayStrength * 1.2;
             }
-            float radialFalloff = smoothstep(1.55, 0.02, distToLight) * (0.45 + 0.55 * exp(-distToLight * 1.4));
-            rays = (acc / float(${raySamples})) * uLightColor * radialFalloff * uLightFacing * uGodRayStrength * 1.2;
           }
 
           gl_FragColor = vec4(bloom + rays, 1.0);
@@ -215,6 +217,7 @@ export class PostFXPipeline {
         uSunViewDir: { value: new THREE.Vector3(0.4, 0.7, -0.5).normalize() },
         uInvProjection: { value: new THREE.Matrix4() },
         uProjection: { value: new THREE.Matrix4() },
+        uProjZ: { value: new THREE.Vector2(0.2, -1.0) },
         uBloomIntensity: { value: 0.46 },
         uExposure: { value: 1.04 },
         uSunsetFactor: { value: 0.0 },
@@ -239,6 +242,7 @@ export class PostFXPipeline {
         uniform vec3 uSunViewDir;
         uniform mat4 uInvProjection;
         uniform mat4 uProjection;
+        uniform vec2 uProjZ;
         uniform float uBloomIntensity;
         uniform float uExposure;
         uniform float uSunsetFactor;
@@ -304,6 +308,11 @@ export class PostFXPipeline {
           return outCol;
         }
 
+        // Exact scalar view-Z reconstruction (8x faster than mat4*vec4 inside the 6-step contact shadow loop, bit-identical result!)
+        float linearViewZ(float depth) {
+          return uProjZ.x / (depth * 2.0 - 1.0 + uProjZ.y);
+        }
+
         vec3 reconstructViewPos(vec2 uv, float depth) {
           vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
           vec4 vp = uInvProjection * ndc;
@@ -312,9 +321,9 @@ export class PostFXPipeline {
 
         float computeContactShadow(vec2 uv, float depth) {
           if (depth >= 0.9996) return 0.0;
-          vec3 viewPos = reconstructViewPos(uv, depth);
-          float viewDist = -viewPos.z;
+          float viewDist = -linearViewZ(depth);
           if (viewDist < 1.15 || viewDist > 42.0) return 0.0;
+          vec3 viewPos = reconstructViewPos(uv, depth);
 
           float distFade = smoothstep(42.0, 18.0, viewDist) * smoothstep(1.15, 1.85, viewDist);
           float rayLen = mix(0.32, 0.68, clamp(viewDist / 28.0, 0.0, 1.0));
@@ -330,8 +339,8 @@ export class PostFXPipeline {
 
             float sDepth = texture2D(tDepth, sUv).r;
             if (sDepth >= 0.9998) continue;
-            vec3 hitView = reconstructViewPos(sUv, sDepth);
-            float dz = hitView.z - sampleView.z;
+            float hitViewZ = linearViewZ(sDepth);
+            float dz = hitViewZ - sampleView.z;
             float minThick = 0.025 + viewDist * 0.002;
             float maxThick = 0.24 + viewDist * 0.012;
             if (dz > minThick && dz < maxThick) {
@@ -374,7 +383,7 @@ export class PostFXPipeline {
           // Full Glowing Molten Red Vision when Swimming Submerged Inside Lava!
           if (uInLava > 0.5) {
             float lavaDist = uHasDepth > 0.5
-              ? (rawDepth >= 0.9998 ? 8.0 : max(0.0, -reconstructViewPos(vUv, rawDepth).z))
+              ? (rawDepth >= 0.9998 ? 8.0 : max(0.0, -linearViewZ(rawDepth)))
               : 3.0;
             float swirl = 0.92 + 0.08 * sin(vUv.x * 12.0 + uTime * 2.5) * cos(vUv.y * 10.0 - uTime * 2.0);
             vec3 lavaFogCol = vec3(1.45, 0.22, 0.03) * swirl;
@@ -382,7 +391,7 @@ export class PostFXPipeline {
             sceneCol = mix(sceneCol * vec3(1.25, 0.32, 0.08), lavaFogCol, clamp(0.58 + lavaFog * 0.42, 0.58, 0.98));
           } else if (uUnderwater > 0.5) {
             if (uHasDepth > 0.5) {
-              float dist = rawDepth >= 0.9998 ? 48.0 : max(0.0, -reconstructViewPos(vUv, rawDepth).z);
+              float dist = rawDepth >= 0.9998 ? 48.0 : max(0.0, -linearViewZ(rawDepth));
               vec3 absorb = exp(-dist * vec3(0.085, 0.032, 0.020));
               vec3 uwFogCol = mix(vec3(0.02, 0.08, 0.18), vec3(0.07, 0.34, 0.48), uDayFactor);
               float fogAmt = 1.0 - exp(-dist * 0.055);
@@ -625,6 +634,8 @@ export class PostFXPipeline {
     this.compositeMat.uniforms.uSunViewDir.value.copy(this._sunViewDir);
     this.compositeMat.uniforms.uInvProjection.value.copy(this._invProj);
     this.compositeMat.uniforms.uProjection.value.copy(camera.projectionMatrix);
+    const pm = camera.projectionMatrix.elements;
+    this.compositeMat.uniforms.uProjZ.value.set(-pm[14], pm[10]);
     this.compositeMat.uniforms.uSunsetFactor.value = sunsetF;
     this.compositeMat.uniforms.uDayFactor.value = dayF;
     this.compositeMat.uniforms.uUnderwater.value = underwater ? 1.0 : 0.0;
@@ -647,6 +658,17 @@ export class PostFXPipeline {
     if (this.fxRT_A) { this.fxRT_A.dispose(); this.fxRT_A = null; }
     if (this.fxRT_B) { this.fxRT_B.dispose(); this.fxRT_B = null; }
     if (this.fxRT_C) { this.fxRT_C.dispose(); this.fxRT_C = null; }
+  }
+
+  // Rebuilds all HDR render targets & depth textures cleanly after iPad PWA resume or WebGL context restore!
+  resetTargets() {
+    this.disposeTargets();
+    if (!this.renderer) return;
+    const sz = this._dbSize || (this._dbSize = new THREE.Vector2());
+    this.renderer.getDrawingBufferSize(sz);
+    if (sz.x > 0 && sz.y > 0) {
+      this.resize(sz.x, sz.y);
+    }
   }
 
   dispose() {

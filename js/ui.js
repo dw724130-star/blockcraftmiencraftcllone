@@ -1353,17 +1353,27 @@ export class UIManager {
   }
 
   setUnderwater(isUnder) {
-    document.getElementById('underwater-overlay').classList.toggle('hidden', !isUnder);
+    const v = Boolean(isUnder);
+    if (this._lastUnderwater === v) return;
+    this._lastUnderwater = v;
+    const el = this._uwOverlay || (this._uwOverlay = document.getElementById('underwater-overlay'));
+    if (el) el.classList.toggle('hidden', !v);
   }
 
   setInLava(isLava) {
-    const el = document.getElementById('lava-overlay');
-    if (el) el.classList.toggle('hidden', !isLava);
+    const v = Boolean(isLava);
+    if (this._lastInLava === v) return;
+    this._lastInLava = v;
+    const el = this._lavaOverlay || (this._lavaOverlay = document.getElementById('lava-overlay'));
+    if (el) el.classList.toggle('hidden', !v);
   }
 
   setOnFire(isBurning) {
-    const el = document.getElementById('fire-overlay');
-    if (el) el.classList.toggle('hidden', !isBurning);
+    const v = Boolean(isBurning);
+    if (this._lastOnFire === v) return;
+    this._lastOnFire = v;
+    const el = this._fireOverlay || (this._fireOverlay = document.getElementById('fire-overlay'));
+    if (el) el.classList.toggle('hidden', !v);
   }
 
   playSleepTransition() {
@@ -1531,39 +1541,17 @@ export class UIManager {
     this.updateStats();
   }
 
-  // Live 3D Articulated Minecraft Steve + Equipped 3D Armor Doll inside Inventory (100% identical to 3rd-person player!)
+  // Ultra-Fast Zero-WebGL-Overhead 2D Pixel-Art Steve + Live Equipped Armor Preview inside Inventory!
+  // Eliminates spawning a 2nd WebGLRenderer & cross-context texture contention (instant 0ms armor equip on iPad & Desktop!)
   _ensureInv3DPreview() {
-    if (this._inv3d) return this._inv3d;
+    if (this._inv2d) return this._inv2d;
     const canvas = document.getElementById('inv-steve-canvas');
     if (!canvas) return null;
-    try {
-      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-      renderer.setSize(canvas.width, canvas.height, false);
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.setClearColor(0x000000, 1);
-
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(32, canvas.width / canvas.height, 0.1, 20);
-      camera.position.set(0, 1.05, 3.65);
-      camera.lookAt(0, 0.96, 0);
-
-      const hemi = new THREE.HemisphereLight(0xffffff, 0x6b7280, 1.15);
-      const key = new THREE.DirectionalLight(0xfff7e6, 1.05);
-      key.position.set(2.4, 3.6, 3.4);
-      const rim = new THREE.DirectionalLight(0xb8dcff, 0.42);
-      rim.position.set(-2.5, 1.8, -2.0);
-      scene.add(hemi, key, rim);
-
-      const steve = createSteveModel(this.textures);
-      steve.root.rotation.y = Math.PI; // face directly toward the inventory camera (+Z)
-      scene.add(steve.root);
-
-      this._inv3d = { renderer, scene, camera, steve };
-      return this._inv3d;
-    } catch {
-      return null;
-    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    this._inv2d = { canvas, ctx };
+    return this._inv2d;
   }
 
   _drawInv3DFrame() {
@@ -1571,54 +1559,218 @@ export class UIManager {
       this._stevePreviewRAF = null;
       return;
     }
-    const ctx3d = this._ensureInv3DPreview();
-    if (!ctx3d) {
+    const pv = this._ensureInv3DPreview();
+    if (!pv) {
       this._stevePreviewRAF = null;
       return;
     }
 
-    // Smooth spring-like cursor following for Steve's head & gentle torso lean!
-    this._steveLookX += (this._steveTargetX - this._steveLookX) * 0.20;
-    this._steveLookY += (this._steveTargetY - this._steveLookY) * 0.20;
+    this._steveLookX += (this._steveTargetX - this._steveLookX) * 0.22;
+    this._steveLookY += (this._steveTargetY - this._steveLookY) * 0.22;
+    this._paintInvSteve2D(pv.ctx, pv.canvas.width, pv.canvas.height);
 
-    const { renderer, scene, camera, steve } = ctx3d;
-    updateSteveSkin(steve, getSavedPlayerSkin());
-    updateSteveArmor(steve, this.game.inventory.armor);
+    // Only keep animating while cursor is smoothly settling; pauses cleanly when idle (0% CPU!)
+    if (Math.abs(this._steveTargetX - this._steveLookX) > 0.008 || Math.abs(this._steveTargetY - this._steveLookY) > 0.008) {
+      this._stevePreviewRAF = requestAnimationFrame(() => this._drawInv3DFrame());
+    } else {
+      this._stevePreviewRAF = null;
+    }
+  }
 
-    const t = performance.now() * 0.001;
-    const lx = this._steveLookX;
-    const ly = this._steveLookY;
+  _paintInvSteve2D(ctx, W, H) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#080a0f';
+    ctx.fillRect(0, 0, W, H);
 
-    // Head looks cleanly toward the cursor; torso gently turns to follow just like Minecraft!
-    steve.root.rotation.y = Math.PI + lx * 0.36;
-    steve.bodyPivot.rotation.x = -ly * 0.07;
-    steve.headPivot.rotation.y = lx * 0.62;
-    steve.headPivot.rotation.x = -ly * 0.46;
+    // Subtle ground pedestal shadow
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(24, H - 22, W - 48, 8);
 
-    // Subtle living idle breath sway on arms & legs
-    const breath = Math.sin(t * 2.2) * 0.025;
-    steve.leftArm.rotation.z = 0.06 + breath;
-    steve.rightArm.rotation.z = -0.06 - breath;
-    steve.leftArm.rotation.x = Math.sin(t * 1.4) * 0.03;
-    steve.rightArm.rotation.x = -Math.sin(t * 1.4) * 0.03;
-    steve.leftLeg.rotation.x = 0.03;
-    steve.rightLeg.rotation.x = -0.03;
+    const skinId = getSavedPlayerSkin() || 'steve';
+    const sTex = this.textures && this.textures.getPlayerSkinTextures ? this.textures.getPlayerSkinTextures(skinId) : null;
+    const hex = (n, fb) => (typeof n === 'number' ? '#' + n.toString(16).padStart(6, '0') : fb);
+    const skinCol = hex(sTex?.skinHex, '#c6906c');
+    const shirtCol = hex(sTex?.sleeveHex, '#14a6ad');
+    const pantCol = hex(sTex?.pantHex, '#262169');
+    const shoeCol = hex(sTex?.shoeHex, '#303030');
+    const slim = Boolean(sTex?.slimArms);
 
-    renderer.render(scene, camera);
-    this._stevePreviewRAF = requestAnimationFrame(() => this._drawInv3DFrame());
+    const armPals = {
+      leather: { base: '#965c34', dark: '#63391c', light: '#bc7c4d', rim: '#d9a473', buckle: '#c8b282' },
+      iron:    { base: '#cfd6de', dark: '#8c96a3', light: '#edf2f7', rim: '#ffffff', buckle: '#555d69' },
+      golden:  { base: '#f2c12e', dark: '#b3740e', light: '#ffe36e', rim: '#fff9c4', buckle: '#d93829' },
+      diamond: { base: '#38d9e0', dark: '#148d9c', light: '#8ef8fc', rim: '#e0ffff', buckle: '#1a4966' }
+    };
+    const tierOf = (it) => {
+      if (!it || !it.id) return null;
+      if (it.id.startsWith('diamond')) return 'diamond';
+      if (it.id.startsWith('iron')) return 'iron';
+      if (it.id.startsWith('golden') || it.id.startsWith('gold')) return 'golden';
+      if (it.id.startsWith('leather')) return 'leather';
+      return null;
+    };
+    const arm = (this.game && this.game.inventory && this.game.inventory.armor) || [];
+    const tHelm = tierOf(arm[0]);
+    const tChest = tierOf(arm[1]);
+    const tLeg = tierOf(arm[2]);
+    const tBoot = tierOf(arm[3]);
+
+    const cx = Math.round(W * 0.5 + this._steveLookX * 3);
+    const headOffX = Math.round(this._steveLookX * 4);
+    const headOffY = Math.round(this._steveLookY * 3);
+    const u = 5; // 5px per Minecraft voxel unit -> 32 units = 160px tall cleanly centered in 128x196!
+    const topY = 18;
+    const armW = slim ? 16 : 20;
+
+    // 1. Legs (y = 20..32 -> 12 units = 60px)
+    const legY = topY + 20 * u;
+    const legW = 4 * u;
+    const legH = 12 * u;
+    for (const side of [-1, 1]) {
+      const lx = side < 0 ? cx - legW : cx;
+      if (sTex && sTex.legFront && sTex.legFront.image) {
+        ctx.drawImage(sTex.legFront.image, lx, legY, legW, legH);
+      } else {
+        ctx.fillStyle = pantCol;
+        ctx.fillRect(lx, legY, legW, legH - 12);
+        ctx.fillStyle = shoeCol;
+        ctx.fillRect(lx, legY + legH - 12, legW, 12);
+      }
+      // Subtle center seam between legs
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillRect(cx - 1, legY, 2, legH);
+
+      // Leggings overlay
+      if (tLeg) {
+        const p = armPals[tLeg];
+        ctx.fillStyle = p.base;
+        ctx.fillRect(lx - 1, legY, legW + 2, 38);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(lx + 4, legY + 4, legW - 8, 24);
+        ctx.fillStyle = p.rim;
+        ctx.fillRect(lx + 5, legY + 18, legW - 10, 5);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(lx - 1, legY, legW + 2, 4);
+        ctx.fillRect(lx - 1, legY + 34, legW + 2, 4);
+      }
+      // Boots overlay
+      if (tBoot) {
+        const p = armPals[tBoot];
+        const by = legY + legH - 20;
+        ctx.fillStyle = p.base;
+        ctx.fillRect(lx - 2, by, legW + 4, 21);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(lx - 2, by, legW + 4, 5);
+        ctx.fillStyle = p.rim;
+        ctx.fillRect(lx + 4, by + 6, legW - 8, 6);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(lx - 2, by + 16, legW + 4, 5);
+      }
+    }
+
+    // 2. Torso (8x12 units = 40x60px)
+    const torsoW = 8 * u;
+    const torsoH = 12 * u;
+    const torsoX = cx - (torsoW >> 1);
+    const torsoY = topY + 8 * u;
+    if (sTex && sTex.torsoFront && sTex.torsoFront.image) {
+      ctx.drawImage(sTex.torsoFront.image, torsoX, torsoY, torsoW, torsoH);
+    } else {
+      ctx.fillStyle = shirtCol;
+      ctx.fillRect(torsoX, torsoY, torsoW, torsoH);
+    }
+    // Waist leggings belt
+    if (tLeg) {
+      const p = armPals[tLeg];
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(torsoX - 1, torsoY + torsoH - 9, torsoW + 2, 10);
+      ctx.fillStyle = p.buckle;
+      ctx.fillRect(cx - 5, torsoY + torsoH - 8, 10, 7);
+    }
+    // Chestplate overlay
+    if (tChest) {
+      const p = armPals[tChest];
+      ctx.fillStyle = p.base;
+      ctx.fillRect(torsoX - 2, torsoY - 1, torsoW + 4, torsoH + 2);
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(cx - 10, torsoY - 1, 20, 10); // collar notch
+      ctx.fillStyle = p.light;
+      ctx.fillRect(torsoX + 4, torsoY + 10, torsoW - 8, 16);
+      ctx.fillStyle = p.rim;
+      ctx.fillRect(torsoX + 9, torsoY + 14, torsoW - 18, 5);
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(torsoX - 2, torsoY + 45, torsoW + 4, 10);
+      ctx.fillStyle = p.buckle;
+      ctx.fillRect(cx - 5, torsoY + 45, 10, 10);
+    }
+
+    // 3. Arms (left & right beside torso)
+    for (const side of [-1, 1]) {
+      const ax = side < 0 ? torsoX - armW - 1 : torsoX + torsoW + 1;
+      const ay = torsoY;
+      if (sTex && sTex.armFront && sTex.armFront.image) {
+        ctx.drawImage(sTex.armFront.image, ax, ay, armW, torsoH);
+      } else {
+        ctx.fillStyle = shirtCol;
+        ctx.fillRect(ax, ay, armW, 20);
+        ctx.fillStyle = skinCol;
+        ctx.fillRect(ax, ay + 20, armW, torsoH - 20);
+      }
+      // Pauldron overlay when chestplate equipped
+      if (tChest) {
+        const p = armPals[tChest];
+        ctx.fillStyle = p.base;
+        ctx.fillRect(ax - 2, ay - 2, armW + 4, 28);
+        ctx.fillStyle = p.rim;
+        ctx.fillRect(ax - 2, ay - 2, armW + 4, 5);
+        ctx.fillStyle = p.light;
+        ctx.fillRect(ax + 3, ay + 5, armW - 6, 13);
+        ctx.fillStyle = p.dark;
+        ctx.fillRect(ax - 2, ay + 21, armW + 4, 5);
+      }
+    }
+
+    // 4. Head (8x8 units = 40x40px, gently looking toward cursor!)
+    const headS = 8 * u;
+    const headX = cx - (headS >> 1) + headOffX;
+    const headY = topY + headOffY;
+    if (sTex && sTex.headFront && sTex.headFront.image) {
+      ctx.drawImage(sTex.headFront.image, headX, headY, headS, headS);
+    } else {
+      ctx.fillStyle = skinCol;
+      ctx.fillRect(headX, headY, headS, headS);
+    }
+    // Helmet overlay (with open face visor so eyes & expression remain crisp!)
+    if (tHelm) {
+      const p = armPals[tHelm];
+      const hx = headX - 3, hy = headY - 3, hs = headS + 6;
+      ctx.fillStyle = p.base;
+      ctx.fillRect(hx, hy, hs, 16); // brow crown
+      ctx.fillStyle = p.light;
+      ctx.fillRect(hx, hy, hs, 5);
+      ctx.fillStyle = p.rim;
+      ctx.fillRect(hx + 6, hy + 5, hs - 12, 5);
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(hx, hy + 12, hs, 4);
+      // Noseguard & cheek guards
+      ctx.fillStyle = p.base;
+      ctx.fillRect(hx + (hs >> 1) - 5, hy + 12, 10, 10);
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(hx + (hs >> 1) - 5, hy + 18, 10, 4);
+      ctx.fillStyle = p.base;
+      ctx.fillRect(hx, hy + 15, 6, 16);
+      ctx.fillRect(hx + hs - 6, hy + 15, 6, 16);
+      ctx.fillStyle = p.dark;
+      ctx.fillRect(hx, hy + 28, 6, 4);
+      ctx.fillRect(hx + hs - 6, hy + 28, 6, 4);
+    }
   }
 
   renderPlayerPreview() {
-    if (!this.game) return;
-    const ctx3d = this._ensureInv3DPreview();
-    if (!ctx3d) return;
-    updateSteveSkin(ctx3d.steve, getSavedPlayerSkin());
-    updateSteveArmor(ctx3d.steve, this.game.inventory.armor);
-    if (!this._stevePreviewRAF && this.activeModal === 'inventory-modal') {
-      this._drawInv3DFrame();
-    } else if (this.activeModal === 'inventory-modal') {
-      ctx3d.renderer.render(ctx3d.scene, ctx3d.camera);
-    }
+    if (!this.game || this.activeModal !== 'inventory-modal') return;
+    const pv = this._ensureInv3DPreview();
+    if (!pv) return;
+    this._paintInvSteve2D(pv.ctx, pv.canvas.width, pv.canvas.height);
   }
 
   _bindCraftOutputSlot(outEl, size) {
@@ -1875,7 +2027,14 @@ export class UIManager {
 
         const rawEl = document.elementFromPoint(e.clientX, e.clientY);
         const target = rawEl?.closest('[data-slot-type], #inv-trash-slot');
-        if (!target) return;
+        if (!target) {
+          // Released outside the inventory/container window -> drop the dragged item stack into the world!
+          const insideWindow = rawEl && rawEl.closest('.mc-classic-panel, .mc-classic-shell, .modal-card, .mc-modal-box');
+          if (!insideWindow) {
+            this.dropSlotItem(srcRef);
+          }
+          return;
+        }
 
         if (target.id === 'inv-trash-slot' || target.dataset.dropTrash === 'true') {
           this.deleteSlotItem(srcRef);
@@ -1890,6 +2049,18 @@ export class UIManager {
 
     window.addEventListener('pointerup', finishDrag);
     window.addEventListener('pointercancel', finishDrag);
+
+    // Click outside the inventory/container panel while an item is selected -> drop that item into the world!
+    for (const modalId of ['inventory-modal', 'crafting-modal', 'chest-modal', 'furnace-modal']) {
+      const mEl = document.getElementById(modalId);
+      if (!mEl) continue;
+      mEl.addEventListener('click', (e) => {
+        if (this._suppressNextClick) return;
+        if (e.target === mEl && this.pickedSource) {
+          this.dropSlotItem(this.pickedSource);
+        }
+      });
+    }
   }
 
   cancelInventoryDrag() {
@@ -1946,6 +2117,20 @@ export class UIManager {
     this.pickedSource = null;
     this.sound.playPop();
     this.toast(`Deleted ${qty}${label}`);
+    this.refreshActiveContainerModal();
+  }
+
+  dropSlotItem(ref) {
+    const item = this.getSlotByRef(ref);
+    if (!item || !this.game || !this.game.dropInventoryStack) return;
+    const def = ITEMS[item.id];
+    const label = def ? def.name : item.id;
+    const qty = item.count > 1 ? `${item.count}× ` : '';
+    const dropped = { ...item };
+    this.setSlotByRef(ref, null);
+    this.pickedSource = null;
+    this.game.dropInventoryStack(dropped);
+    this.toast(`Dropped ${qty}${label}`);
     this.refreshActiveContainerModal();
   }
 

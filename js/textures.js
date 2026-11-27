@@ -85,6 +85,46 @@ export class TextureManager {
     this.buildCrackTextures();
   }
 
+  // Re-uploads all CanvasTextures cleanly after iPad PWA/tab resume or WebGL context restore so textures NEVER go black!
+  markAllTexturesNeedsUpdate() {
+    const touch = (tex) => {
+      if (tex && tex.isTexture) tex.needsUpdate = true;
+    };
+    touch(this.atlasTexture);
+    touch(this.normalTexture);
+    touch(this.pbrTexture);
+    if (this.crackTextures) {
+      for (let i = 0; i < this.crackTextures.length; i++) touch(this.crackTextures[i]);
+    }
+    if (this.itemTextures) {
+      for (const tex of Object.values(this.itemTextures)) touch(tex);
+    }
+    if (this.mobCoatCache) {
+      for (const tex of Object.values(this.mobCoatCache)) touch(tex);
+    }
+    if (this.villagerTexCache) {
+      for (const bundle of Object.values(this.villagerTexCache)) {
+        if (bundle && typeof bundle === 'object') {
+          for (const tex of Object.values(bundle)) touch(tex);
+        }
+      }
+    }
+    if (this._skinTexCache) {
+      for (const bundle of Object.values(this._skinTexCache)) {
+        if (bundle && typeof bundle === 'object') {
+          for (const tex of Object.values(bundle)) touch(tex);
+        }
+      }
+    }
+    if (this._armorTexCache) {
+      for (const bundle of Object.values(this._armorTexCache)) {
+        if (bundle && typeof bundle === 'object') {
+          for (const tex of Object.values(bundle)) touch(tex);
+        }
+      }
+    }
+  }
+
   addTile(name, drawFn) {
     const idx = this.nextTile++;
     const col = idx % ATLAS_COLS;
@@ -152,7 +192,8 @@ export class TextureManager {
         return { rough: 0.64, metal: 0.0, f0: 0.09, bump: 2.85, emit: 0.0, ore: false };
       }
       if (name === 'iron_ore' || name === 'gold_ore' || name === 'diamond_ore' || name === 'coal_ore') {
-        return { rough: 0.80, metal: 0.0, f0: 0.05, bump: 2.4, emit: name === 'diamond_ore' ? 0.18 : 0.0, ore: true };
+        const oreEmit = name === 'diamond_ore' ? 0.26 : (name === 'gold_ore' ? 0.18 : (name === 'iron_ore' ? 0.12 : 0.08));
+        return { rough: 0.78, metal: 0.0, f0: 0.06, bump: 2.4, emit: oreEmit, ore: true };
       }
       if (name === 'stone' || name === 'bedrock' || name === 'furnace_top' || name === 'furnace_front' || name.startsWith('sandstone') ||
           name.startsWith('deepslate') || name === 'granite' || name === 'diorite' || name === 'andesite' || name === 'tuff' || name.startsWith('basalt')) {
@@ -226,12 +267,12 @@ export class TextureManager {
           let f0 = prof.f0;
           let emit = prof.emit;
 
-          // Make ore crystal veins sparkle with metallic/gem reflectivity inside rough matte stone!
-          if (prof.ore && (sat > 0.14 || (name === 'coal_ore' && mc < 0.22))) {
-            rough = name === 'coal_ore' ? 0.42 : 0.18;
-            metal = name === 'diamond_ore' ? 0.25 : (name === 'coal_ore' ? 0.08 : 0.85);
-            f0 = name === 'coal_ore' ? 0.12 : 0.82;
-            emit = name === 'diamond_ore' ? 0.35 : 0.0;
+          // Make ore crystal veins glow & sparkle clearly inside dark caves while surrounding rock stays natural stone!
+          if (prof.ore && (sat > 0.12 || (name === 'coal_ore' && mc < 0.25) || (name === 'iron_ore' && mc > 0.56))) {
+            rough = name === 'coal_ore' ? 0.38 : 0.16;
+            metal = name === 'diamond_ore' ? 0.28 : (name === 'coal_ore' ? 0.12 : 0.85);
+            f0 = name === 'coal_ore' ? 0.16 : 0.86;
+            emit = name === 'diamond_ore' ? 0.96 : (name === 'gold_ore' ? 0.86 : (name === 'iron_ore' ? 0.72 : 0.62));
           }
           // Mask emission strictly onto hot glowing texels (lava magma, glowstone crystals, furnace embers, torch flame!)
           if (name === 'furnace_front') {
@@ -710,6 +751,67 @@ export class TextureManager {
       px(c, x, y, 0, 7, '#8f6032', 16, 5);
       px(c, x, y, 0, 7, '#a87442', 16, 1);
       px(c, x, y, 0, 11, '#5e3c1c', 16, 5);
+    });
+    // Dedicated seamless 2-block Minecraft Red Bed tiles (head half + foot half + clean sides & oak ends!)
+    this.addTile('bed_top_head', (c, x, y) => {
+      // Top of head block: pillow at top (y=1..6), folded white sheet (y=7..9), seamless red quilt (y=10..15)
+      fillNoise(c, x, y, '#c92e2e', 8, 761);
+      px(c, x, y, 0, 0, '#e5ecf2', 16, 10);
+      px(c, x, y, 0, 0, '#c5d0dc', 16, 1);
+      // Plump white pillow centered near head edge
+      px(c, x, y, 2, 1, '#d3dde6', 12, 6);
+      px(c, x, y, 3, 2, '#ffffff', 10, 4);
+      px(c, x, y, 3, 5, '#c2ced9', 10, 1);
+      // Folded white sheet collar meeting crimson blanket cleanly
+      px(c, x, y, 0, 8, '#f5f8fb', 16, 2);
+      px(c, x, y, 0, 9, '#c7d2dc', 16, 1);
+      px(c, x, y, 0, 10, '#df4040', 16, 1);
+      px(c, x, y, 1, 13, '#a31e1e', 14, 1);
+    });
+    this.addTile('bed_top_foot', (c, x, y) => {
+      // Top of foot block: exact matching seamless crimson quilted blanket!
+      fillNoise(c, x, y, '#c92e2e', 8, 762);
+      px(c, x, y, 1, 2, '#a31e1e', 14, 1);
+      px(c, x, y, 1, 6, '#a31e1e', 14, 1);
+      px(c, x, y, 1, 10, '#a31e1e', 14, 1);
+      px(c, x, y, 0, 14, '#9b1a1a', 16, 2);
+      px(c, x, y, 0, 0, '#b92626', 1, 16);
+      px(c, x, y, 15, 0, '#b92626', 1, 16);
+    });
+    this.addTile('bed_side_head', (c, x, y) => {
+      // Long side of head half: crisp white sheet edge on head side (x=0..9) + red blanket (x=10..15) over warm oak rail!
+      px(c, x, y, 0, 0, '#eef3f7', 10, 10);
+      px(c, x, y, 0, 8, '#cfd8e0', 10, 2);
+      px(c, x, y, 10, 0, '#c92e2e', 6, 10);
+      px(c, x, y, 10, 8, '#9e1c1c', 6, 2);
+      px(c, x, y, 0, 10, '#a67442', 16, 2);
+      px(c, x, y, 0, 12, '#82572d', 16, 3);
+      px(c, x, y, 0, 15, '#5c3b1c', 16, 1);
+    });
+    this.addTile('bed_side_foot', (c, x, y) => {
+      // Long side of foot half: seamless red quilted blanket drape over warm oak bedframe rail!
+      px(c, x, y, 0, 0, '#c92e2e', 16, 10);
+      px(c, x, y, 0, 0, '#dc3d3d', 16, 2);
+      px(c, x, y, 0, 8, '#9b1b1b', 16, 2);
+      px(c, x, y, 0, 10, '#a67442', 16, 2);
+      px(c, x, y, 0, 12, '#82572d', 16, 3);
+      px(c, x, y, 0, 15, '#5c3b1c', 16, 1);
+    });
+    this.addTile('bed_end_head', (c, x, y) => {
+      // Headboard outer end: white mattress trim over solid paneled oak headboard rail
+      px(c, x, y, 0, 0, '#edf2f7', 16, 9);
+      px(c, x, y, 0, 7, '#ccd5de', 16, 2);
+      px(c, x, y, 0, 9, '#a67442', 16, 2);
+      px(c, x, y, 0, 11, '#7c5128', 16, 4);
+      px(c, x, y, 0, 15, '#593819', 16, 1);
+    });
+    this.addTile('bed_end_foot', (c, x, y) => {
+      // Footboard outer end: red blanket tuck over warm oak footboard rail
+      px(c, x, y, 0, 0, '#c92e2e', 16, 9);
+      px(c, x, y, 0, 7, '#991a1a', 16, 2);
+      px(c, x, y, 0, 9, '#a67442', 16, 2);
+      px(c, x, y, 0, 11, '#7c5128', 16, 4);
+      px(c, x, y, 0, 15, '#593819', 16, 1);
     });
 
     this.addTile('stone_bricks', (c, x, y) => {

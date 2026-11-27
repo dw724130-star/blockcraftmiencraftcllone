@@ -37,6 +37,10 @@ setEmit(BLOCK.GLOWSTONE, 15, 14, 9);
 setEmit(BLOCK.LAVA, 15, 6, 2);
 setEmit(BLOCK.FIRE, 15, 8, 3);
 setEmit(BLOCK.DIAMOND_BLOCK, 3, 13, 15); // Luminous crystalline cyan-blue radiance (matches RTX showcase!)
+setEmit(BLOCK.DIAMOND_ORE, 3, 11, 14);   // Glowing cyan diamond crystal veins in dark caves!
+setEmit(BLOCK.GOLD_ORE, 11, 9, 2);       // Warm gleaming gold veins!
+setEmit(BLOCK.IRON_ORE, 9, 7, 5);        // Warm metallic iron ore shimmer!
+setEmit(BLOCK.COAL_ORE, 6, 5, 5);        // Subtle warm mineral coal ore glint!
 setEmit(BLOCK.PACKED_ICE, 2, 5, 7);
 setEmit(BLOCK.ICE, 1, 4, 6);
 setEmit(BLOCK.GOLD_BLOCK, 5, 4, 1);

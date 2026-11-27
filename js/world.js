@@ -532,6 +532,8 @@ export class World {
       uDynLightCount: { value: 0.0 },
       uDynLightPos: { value: this._dynLightPos },
       uDynLightCol: { value: this._dynLightCol },
+      uHeldLightPos: { value: new THREE.Vector4(0, -9999, 0, 15.5) },
+      uHeldLightCol: { value: new THREE.Vector4(1.0, 0.74, 0.34, 0.0) },
       uLodInnerCenter: { value: new THREE.Vector2(0, 0) },
       uLodInnerRadiusSq: { value: 0.0 },
       uLodBlendInner: { value: 0.0 },
@@ -590,6 +592,8 @@ export class World {
       uniform float uFogFar;
       uniform vec4 uDynLightPos[8];
       uniform vec4 uDynLightCol[8];
+      uniform vec4 uHeldLightPos;
+      uniform vec4 uHeldLightCol;
 
       // Cook-Torrance GGX PBR Microfacet BRDF (Metallic Iron/Gold, Crystalline Diamond/Ores, Bevelled Stone Bricks!)
       float D_GGX(float NoH, float rough) {
@@ -663,7 +667,7 @@ export class World {
 
       float computeCSMShadow(vec3 worldPos, vec3 N, bool isFoliage) {
         if (uShadowsOn < 0.5) return 1.0;
-        vec3 Ls = normalize(uShadowDir);
+        vec3 Ls = uShadowDir;
         float ndl = dot(N, Ls);
         float slope = clamp(1.0 - max(0.0, ndl), 0.0, 1.0);
         // Slope-scaled world-normal offset eliminates shadow acne & Peter-Panning on voxel edges!
@@ -698,10 +702,24 @@ export class World {
       }
 
       vec3 computeDynamicPointLights(vec3 worldPos, vec3 N) {
-        if (uDynLightCount < 0.5) return vec3(0.0);
-        // Slot 0 = player held torch/glowstone when active (lights caves smoothly!); slots 1..3 = close local flicker accents
         vec3 acc = vec3(0.0);
+        // Dedicated Held Torch / Glowstone light using the EXACT SAME Voxel-GI brightness & ~15.5-block falloff curve as placed torches!
+        if (uHeldLightCol.w > 0.001) {
+          vec3 toH = uHeldLightPos.xyz - worldPos;
+          float hd2 = dot(toH, toH);
+          float hMaxR = uHeldLightPos.w;
+          if (hd2 < hMaxR * hMaxR) {
+            float hd = sqrt(hd2);
+            float hf = clamp(1.0 - hd / hMaxR, 0.0, 1.0);
+            float hNdl = 0.72 + 0.28 * max(0.0, dot(N, toH / max(hd, 0.001)));
+            // Matches placed torch blockGI = vBlockLight^2 * 2.28 + vBlockLight * 0.26!
+            acc += uHeldLightCol.rgb * ((hf * hf * 2.28 + hf * 0.26) * uHeldLightCol.w * hNdl);
+          }
+        }
+        if (uDynLightCount < 0.5) return acc;
+        // Close local placed-torch flicker accents
         for (int i = 0; i < 4; i++) {
+          if (float(i) >= uDynLightCount) break;
           float inten = uDynLightCol[i].w;
           if (inten <= 0.001) continue;
           vec3 toL = uDynLightPos[i].xyz - worldPos;
@@ -794,9 +812,12 @@ export class World {
             if (puddle > 0.35) N = normalize(mix(N, geomN, puddle * uWetness * 0.72));
           }
 
-          // 2-Cascade Rotated Poisson PCF Shadow (using geometric normal for acne-free bias, occluded in caves by skyVis!)
-          float shadow = computeCSMShadow(vWorldPos, geomN, false) * smoothstep(0.08, 0.55, skyVis);
+          // 2-Cascade Rotated Poisson PCF Shadow — early-skips 100% of dark cave pixels & sunlit backfaces (zero visual diff, huge GPU win!)
           float ndl = max(0.0, dot(N, activeL));
+          float skyShadowMask = smoothstep(0.08, 0.55, skyVis);
+          float shadow = (skyShadowMask > 0.001 && (ndl > 0.001 || uDayFactor <= 0.67))
+            ? (computeCSMShadow(vWorldPos, geomN, false) * skyShadowMask)
+            : 0.0;
           float directTerm = ndl * shadow;
 
           vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, N.y * 0.5 + 0.5) * uHemiIntensity;
@@ -1181,7 +1202,8 @@ export class World {
           float emissive = clamp(vColor.b, 0.0, 1.0);
 
           float outdoorLift = smoothstep(0.05, 0.45, skyVis);
-          float shadow = computeCSMShadow(vWorldPos, N, true) * smoothstep(0.06, 0.45, skyVis);
+          float csmMaskC = smoothstep(0.06, 0.45, skyVis);
+          float shadow = csmMaskC > 0.001 ? (computeCSMShadow(vWorldPos, N, true) * csmMaskC) : 0.0;
           float ndl = clamp(dot(N, activeL) * 0.65 + 0.35, 0.0, 1.0);
           vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, 0.68) * uHemiIntensity;
           vec3 directLight = uSunLightColor * (uSunLightIntensity * ndl * (0.20 * outdoorLift + 0.80 * shadow) * 0.90);
@@ -1272,8 +1294,11 @@ export class World {
           vec3 N = perturbVoxelNormal(geomN, vLocalUv, dist);
 
           float outdoorLiftS = smoothstep(0.05, 0.45, skyVis);
-          float shadow = computeCSMShadow(vWorldPos, geomN, false) * smoothstep(0.08, 0.55, skyVis);
           float ndl = max(0.0, dot(N, activeL));
+          float csmMaskS = smoothstep(0.08, 0.55, skyVis);
+          float shadow = (csmMaskS > 0.001 && (ndl > 0.001 || (uPbrOn > 0.5 && roughness < 0.35)))
+            ? (computeCSMShadow(vWorldPos, geomN, false) * csmMaskS)
+            : 0.0;
           vec3 hemi = mix(uHemiGroundColor, uHemiSkyColor, N.y * 0.5 + 0.5) * uHemiIntensity;
           vec3 directLight = uSunLightColor * (uSunLightIntensity * ndl * shadow * 0.92);
           vec3 skyIndirect = hemi * (skyVis * skyVis * 0.90) * ao + vec3(0.030, 0.034, 0.042) * ao;
@@ -1965,6 +1990,12 @@ export class World {
       this._uvTable[id] = faceUVs;
     }
     this._bedTopUV = this.textures.getUV('bed_top');
+    this._bedTopHeadUV = this.textures.getUV('bed_top_head');
+    this._bedTopFootUV = this.textures.getUV('bed_top_foot');
+    this._bedSideHeadUV = this.textures.getUV('bed_side_head');
+    this._bedSideFootUV = this.textures.getUV('bed_side_foot');
+    this._bedEndHeadUV = this.textures.getUV('bed_end_head');
+    this._bedEndFootUV = this.textures.getUV('bed_end_foot');
     this._bedSideUV = this.textures.getUV('bed_side');
     this._bedWoodUV = this.textures.getUV('oak_planks');
     this._bedRedUV = this.textures.getUV('wool_red');
@@ -5720,7 +5751,25 @@ export class World {
         const spurSeg = buildSegment(jn.gate.x, jn.gate.y, jn.gate.z, jn.x, jn.y, jn.z, 0, i, i);
         if (spurSeg) segs.push(spurSeg);
         if (jn.deg >= 2) {
-          hubs.push({ x: jn.x, z: jn.z, y: jn.y, isWater: jn.isWater });
+          // Canonical region ownership + structure-clear check so crossroads stalls ALWAYS generate 100% intact across chunk/region borders!
+          const hCx = Math.floor(jn.x / 16);
+          const hCz = Math.floor(jn.z / 16);
+          const inThisReg = hCx >= rgx * 32 && hCx < (rgx + 1) * 32 && hCz >= rgz * 32 && hCz < (rgz + 1) * 32;
+          if (inThisReg) {
+            let stallClear = true;
+            for (const [oxS, ozS] of [[-5, -5], [5, -5], [-5, 5], [5, 5]]) {
+              const scx = Math.floor((jn.x + oxS) / 16);
+              const scz = Math.floor((jn.z + ozS) / 16);
+              if (this.getMegaStructureForChunk(scx, scz) || this.getVillageForChunk(scx, scz) ||
+                  this.getStructureTypeForChunk(scx, scz) || this.getUndergroundVillageForChunk(scx, scz)) {
+                stallClear = false;
+                break;
+              }
+            }
+            if (stallClear) {
+              hubs.push({ x: jn.x, z: jn.z, y: jn.y, isWater: jn.isWater });
+            }
+          }
         }
       }
       // Add the clean MST branch highways between junctions (curving cleanly around all intermediate structures!)
@@ -5759,9 +5808,34 @@ export class World {
       hits.push(s);
     }
     const nearHubs = [];
-    for (let i = 0; i < hubs.length; i++) {
-      const h = hubs[i];
-      if (cMaxX >= h.x - 10 && ox <= h.x + 10 && cMaxZ >= h.z - 10 && oz <= h.z + 10) nearHubs.push(h);
+    const seenHubKeys = new Set();
+    const collectNearHubs = (hubList) => {
+      if (!hubList) return;
+      for (let i = 0; i < hubList.length; i++) {
+        const h = hubList[i];
+        if (cMaxX >= h.x - 10 && ox <= h.x + 10 && cMaxZ >= h.z - 10 && oz <= h.z + 10) {
+          const hk = `${h.x},${h.z}`;
+          if (!seenHubKeys.has(hk)) {
+            seenHubKeys.add(hk);
+            nearHubs.push(h);
+          }
+        }
+      }
+    };
+    collectNearHubs(hubs);
+    // On 32-chunk region borders, also pull canonically owned hubs from adjacent regions so stalls NEVER slice in half!
+    const rxMod = ((cx % 32) + 32) % 32;
+    const rzMod = ((cz % 32) + 32) % 32;
+    if (rxMod === 0 || rxMod === 31 || rzMod === 0 || rzMod === 31) {
+      const dxs = rxMod === 0 ? [-1, 0] : (rxMod === 31 ? [0, 1] : [0]);
+      const dzs = rzMod === 0 ? [-1, 0] : (rzMod === 31 ? [0, 1] : [0]);
+      for (const ddx of dxs) {
+        for (const ddz of dzs) {
+          if (ddx === 0 && ddz === 0) continue;
+          const nb = this._getRoadSegmentsForChunk(cx + ddx, cz + ddz);
+          if (nb && nb.hubs) collectNearHubs(nb.hubs);
+        }
+      }
     }
     if (hits.length === 0 && nearHubs.length === 0) return;
 
@@ -5980,12 +6054,12 @@ export class World {
       }
     }
 
-    // Stamp Road-Aligned Crossroads Split Plaza wherever a single entrance road splits into 2+ branches!
+    // Stamp Complete 9x9 Road-Aligned Crossroads Stall Pavilion wherever a road splits (pillars directly touching the wool roof!)
     for (let hi = 0; hi < nearHubs.length; hi++) {
       const hub = nearHubs[hi];
       const hubY = hub.y;
       const isWaterHub = hub.isWater;
-      const R = 5; // Spacious 11x11 open split junction plaza!
+      const R = 4; // Crisp 9x9 pavilion: 4 Oak Log pillars at (±4, ±4) directly supporting the 9x9 striped wool canopy!
 
       for (let lz = 0; lz < 16; lz++) {
         const wz = oz + lz;
@@ -6001,7 +6075,7 @@ export class World {
           const isCorner = adx === R && adz === R;
           const isEdge = adx === R || adz === R;
           const roadDistHere = evalDistToHits(wx, wz).minD;
-          const isRoadOpening = roadDistHere <= 2.75;
+          const isRoadOpening = roadDistHere <= 2.65;
 
           const curH = heights[lx + (lz << 4)];
           setLocal(lx, hubY, lz, (isEdge && !isRoadOpening) ? BLOCK.COBBLESTONE : (((dx + dz) & 1) ? BLOCK.OAK_PLANKS : BLOCK.DIRT_PATH));
@@ -6010,26 +6084,35 @@ export class World {
               setLocal(lx, py, lz, isCorner ? BLOCK.OAK_LOG : BLOCK.COBBLESTONE);
             }
           }
-          const clearTop = Math.min(CHUNK_HEIGHT - 2, Math.max(curH + 4, hubY + 6));
+          const clearTop = Math.min(CHUNK_HEIGHT - 2, Math.max(curH + 4, hubY + 7));
           for (let py = hubY + 1; py <= clearTop; py++) setLocal(lx, py, lz, BLOCK.AIR);
 
-          // Place corner roof pillars & railings STRICTLY where NO splitting road passes!
-          if (isCorner && !isRoadOpening) {
+          // 4 Sturdy Corner Oak-Log Pillars ALWAYS built at (±4, ±4) from hubY+1..hubY+4 DIRECTLY TOUCHING the wool canopy at hubY+5!
+          if (isCorner) {
             for (let py = 1; py <= 4; py++) setLocal(lx, hubY + py, lz, BLOCK.OAK_LOG);
-            setLocal(lx, hubY + 5, lz, BLOCK.TORCH);
-          } else if (isEdge && !isRoadOpening && roadDistHere > 3.25) {
+          } else if (isEdge && !isRoadOpening && roadDistHere > 3.0) {
             setLocal(lx, hubY + 1, lz, BLOCK.OAK_FENCE);
           }
 
-          if (adx <= 4 && adz <= 4) {
-            const roofY = hubY + 5 + (adx <= 2 && adz <= 2 ? 1 : 0);
-            setLocal(lx, roofY, lz, ((adx + adz) & 1) === 0 ? BLOCK.WOOL_RED : BLOCK.WOOL_WHITE);
+          // Full 9x9 Striped Red & White Wool Canopy resting directly on all 4 corner pillars (hubY+5, raised center peak at hubY+6)!
+          const roofY = hubY + 5 + (adx <= 2 && adz <= 2 ? 1 : 0);
+          setLocal(lx, roofY, lz, ((adx + adz) & 1) === 0 ? BLOCK.WOOL_RED : BLOCK.WOOL_WHITE);
+          // Connect inner roof step seamlessly so there's zero air gap between outer brim (hubY+5) and raised center (hubY+6)
+          if (adx <= 2 && adz <= 2 && (adx === 2 || adz === 2)) {
+            setLocal(lx, hubY + 5, lz, BLOCK.OAK_PLANKS);
+          }
+          // Warm corner torches mounted on the inside of all 4 pillars + central hanging Glowstone lantern!
+          if ((adx === 3 && adz === 4) || (adx === 4 && adz === 3)) {
+            if (dx === -3 || dz === -3 || dx === 3 || dz === 3) {
+              if (adx === 3 && adz === 4) setLocal(lx, hubY + 3, lz, BLOCK.TORCH);
+            }
           }
           if (dx === 0 && dz === 0) {
+            setLocal(lx, hubY + 5, lz, BLOCK.OAK_FENCE);
             setLocal(lx, hubY + 4, lz, BLOCK.GLOWSTONE);
           }
-          if (dx === -4 && dz === -4 && roadDistHere > 2.8) setLocal(lx, hubY + 1, lz, BLOCK.CRAFTING_TABLE);
-          if (dx === 4 && dz === -4 && roadDistHere > 2.8) {
+          if (dx === -3 && dz === -3) setLocal(lx, hubY + 1, lz, BLOCK.CRAFTING_TABLE);
+          if (dx === 3 && dz === -3) {
             setLocal(lx, hubY + 1, lz, BLOCK.CHEST);
             const wKey = `${wx},${hubY + 1},${wz}`;
             if (!this.chests.has(wKey)) {
@@ -6110,8 +6193,29 @@ export class World {
     for (let i = 0; i < nodes.length; i++) {
       obstacles.push({ x: nodes[i].cxW, z: nodes[i].czW, r: 30, nodeIdx: i });
     }
-    // Starter Sprawling Dungeon obstacle (cx 2..6, cz -8..-4)
-    obstacles.push({ x: 4.5 * 16, z: -5.5 * 16, r: 46, nodeIdx: -1 });
+    // Collect nearby Massive Sprawling Dungeons (Starter + repeating 26x26) — ~55% get a wooden mineshaft branch right to their loot!
+    const dungeonLinks = [];
+    const addDungeonCandidate = (originCx, originCz, baseY, forceLink) => {
+      const dgCx = (originCx + 2.5) * CHUNK_SIZE;
+      const dgCz = (originCz + 2.5) * CHUNK_SIZE;
+      const obsIdx = obstacles.length;
+      obstacles.push({ x: dgCx, z: dgCz, r: 46, nodeIdx: -1, dgIdx: dungeonLinks.length });
+      if (forceLink || coordHash(originCx * 19, originCz * 37, this.seed + 7199) > 0.45) {
+        // South mineshaft portal of the 5x5 (80x80) Sprawling Dungeon at gx=40, gz=80 (upper level = baseY + 11)
+        const portalX = originCx * CHUNK_SIZE + 40;
+        const portalZ = (originCz + 5) * CHUNK_SIZE;
+        const portalY = baseY + 11;
+        dungeonLinks.push({
+          obsIdx,
+          portalX, portalY, portalZ,
+          hubX: portalX,
+          hubY: portalY,
+          hubZ: portalZ + 12
+        });
+      }
+    };
+    // Starter Sprawling Dungeon (cx 2..6, cz -8..-4, baseY=16) is ALWAYS linked by a wooden mineshaft branch!
+    addDungeonCandidate(2, -8, 16, true);
     // Repeating 26x26 Sprawling Dungeons in search window (exact match to _computeSprawlingDungeonForChunk!)
     for (let gx = Math.floor(minCx / 26) - 1; gx <= Math.floor(maxCx / 26) + 1; gx++) {
       for (let gz = Math.floor(minCz / 26) - 1; gz <= Math.floor(maxCz / 26) + 1; gz++) {
@@ -6119,7 +6223,8 @@ export class World {
         if (coordHash(gx * 61, gz * 97, this.seed + 7103) < 0.30) continue;
         const oxD = gx * 26 + 3 + Math.floor(coordHash(gx * 43, gz * 29, this.seed + 7121) * 16);
         const ozD = gz * 26 + 3 + Math.floor(coordHash(gx * 73, gz * 59, this.seed + 7159) * 16);
-        obstacles.push({ x: (oxD + 2.5) * 16, z: (ozD + 2.5) * 16, r: 46, nodeIdx: -1 });
+        const dBaseY = 14 + Math.floor(coordHash(oxD, ozD, this.seed + 7177) * 6);
+        addDungeonCandidate(oxD, ozD, dBaseY, false);
       }
     }
 
@@ -6274,6 +6379,28 @@ export class World {
       if (seg) segments.push(seg);
     }
 
+    // 3. Wooden Mineshaft Branches sometimes leading directly into Massive Sprawling Dungeons (with lots of loot!)
+    for (let di = 0; di < dungeonLinks.length; di++) {
+      const dl = dungeonLinks[di];
+      let bestNode = -1, bestD = 720;
+      for (let i = 0; i < nCount; i++) {
+        const d = Math.hypot(nodes[i].hubX - dl.hubX, nodes[i].hubZ - dl.hubZ);
+        if (d < bestD) { bestD = d; bestNode = i; }
+      }
+      if (bestNode >= 0) {
+        const nd = nodes[bestNode];
+        const spurDg = buildTunnelSegment(dl.portalX, dl.portalY, dl.portalZ, dl.hubX, dl.hubY, dl.hubZ, true, -1, -1);
+        if (spurDg) segments.push(spurDg);
+        hubs.push({ x: dl.hubX, y: dl.hubY, z: dl.hubZ, isDungeonHub: true });
+        // Temporarily mark this dungeon's own obstacle as skipped at its endpoint
+        const prevNodeIdx = obstacles[dl.obsIdx].nodeIdx;
+        obstacles[dl.obsIdx].nodeIdx = -999;
+        const branch = buildTunnelSegment(nd.hubX, nd.hubY, nd.hubZ, dl.hubX, dl.hubY, dl.hubZ, false, bestNode, -999);
+        obstacles[dl.obsIdx].nodeIdx = prevNodeIdx;
+        if (branch) segments.push(branch);
+      }
+    }
+
     const res = { segments, hubs };
     if (this._mineshaftRegionCache.size > 48) this._mineshaftRegionCache.clear();
     this._mineshaftRegionCache.set(rKey, res);
@@ -6368,32 +6495,38 @@ export class World {
               setLocal(lx, tY + 4, lz, BLOCK.COBBLESTONE);
             }
 
-            // Iconic Minecraft Wooden Mineshaft Support Arches every 4 blocks!
+            // Super-Lit Iconic Minecraft Wooden Mineshaft Support Arches every 4 blocks!
             if (onFrame) {
               if (isOuterPost) {
                 setLocal(lx, tY + 1, lz, BLOCK.OAK_FENCE);
                 setLocal(lx, tY + 2, lz, BLOCK.OAK_FENCE);
               }
-              setLocal(lx, tY + 3, lz, BLOCK.OAK_PLANKS);
-            } else if (bestDist >= 0.85 && bestDist <= 1.35 && Math.abs((bestAlong % 8.0) - 4.0) < 0.55) {
-              // Warm mineshaft torches mounted along tunnel sides every 8 blocks!
-              setLocal(lx, tY + 2, lz, BLOCK.TORCH);
-            } else if (bestDist >= 1.15 && bestDist <= 1.75 && Math.abs((bestAlong % 64.0) - 32.0) < 0.55 &&
-                       coordHash(wx, wz, this.seed + 7297) > 0.45) {
-              // Occasional abandoned minecart-style supply chest tucked along the tunnel side!
+              // Embed bright glowing lanterns in the overhead oak beam every 8 blocks so tunnels stay super bright!
+              if (bestDist <= 0.65 && (bestAlong % 8.0) < 0.95) {
+                setLocal(lx, tY + 3, lz, BLOCK.GLOWSTONE);
+              } else {
+                setLocal(lx, tY + 3, lz, BLOCK.OAK_PLANKS);
+              }
+            } else if (bestDist >= 1.35 && bestDist <= 2.05 && Math.abs((bestAlong % 4.0) - 2.0) < 0.62) {
+              // Grounded warm mineshaft torches standing solidly on the OAK_PLANKS floor every 4 blocks along both sides!
+              setLocal(lx, tY + 1, lz, BLOCK.TORCH);
+            } else if (bestDist >= 1.15 && bestDist <= 1.75 && Math.abs((bestAlong % 40.0) - 20.0) < 0.55 &&
+                       coordHash(wx, wz, this.seed + 7297) > 0.35) {
+              // Frequent minecart-style supply chests tucked along the tunnel side!
               setLocal(lx, tY + 1, lz, BLOCK.CHEST);
               const wKey = `${wx},${tY + 1},${wz}`;
               if (!this.chests.has(wKey)) {
                 const loot = new Array(27).fill(null);
                 const r = Math.floor(coordHash(wx, wz, this.seed + 7309) * 4);
-                loot[0] = { id: 'iron_ingot', count: 3 + r };
-                loot[1] = { id: 'coal', count: 8 + r * 3 };
-                loot[2] = { id: 'torch', count: 16 };
+                loot[0] = { id: 'iron_ingot', count: 4 + r };
+                loot[1] = { id: 'coal', count: 10 + r * 3 };
+                loot[2] = { id: 'torch', count: 24 };
                 loot[3] = { id: 'oak_planks', count: 16 };
-                loot[4] = { id: 'bread', count: 5 };
-                loot[5] = { id: 'gold_ingot', count: 1 + r };
-                if (r === 3) loot[6] = { id: 'iron_pickaxe', count: 1, durability: 251 };
-                else loot[6] = { id: 'emerald', count: 2 + r };
+                loot[4] = { id: 'bread', count: 6 };
+                loot[5] = { id: 'gold_ingot', count: 2 + r };
+                if (r === 3) loot[6] = { id: 'diamond', count: 1 + (r & 1) };
+                else if (r === 2) loot[6] = { id: 'iron_pickaxe', count: 1, durability: 251 };
+                else loot[6] = { id: 'emerald', count: 3 + r };
                 this.chests.set(wKey, loot);
               }
             }
@@ -7029,6 +7162,42 @@ export class World {
                 }
               }
             }
+          }
+        }
+      }
+    }
+
+    // Pass 3: South Wooden Mineshaft Entry Corridor (Upper Level) so connecting Mineshaft Tunnels lead straight into the Dungeon!
+    // Connects central stair hub (sGx, sGz) -> South boundary (gx=40, gz=79) with timber frames, torches & treasure chests!
+    const upY = plan.levelYs[0];
+    if (cGz0 + 15 >= sGz + 2 && cGx0 <= Math.max(sGx, 40) + 3 && cGx0 + 15 >= Math.min(sGx, 40) - 3) {
+      for (let lz = 0; lz < 16; lz++) {
+        const gz = cGz0 + lz;
+        if (gz < sGz + 2 || gz > 79) continue;
+        const frac = Math.min(1, Math.max(0, (gz - (sGz + 2)) / Math.max(1, 79 - (sGz + 2))));
+        const midX = Math.round(sGx + (40 - sGx) * frac);
+        for (let lx = 0; lx < 16; lx++) {
+          const gx = cGx0 + lx;
+          const dxM = gx - midX;
+          if (Math.abs(dxM) > 2) continue;
+          const isOuter = Math.abs(dxM) === 2;
+          const isFrame = (gz % 4) === 0;
+          setLocal(lx, upY - 1, lz, BLOCK.DEEPSLATE);
+          setLocal(lx, upY, lz, BLOCK.OAK_PLANKS);
+          for (let dy = 1; dy <= 3; dy++) setLocal(lx, upY + dy, lz, BLOCK.AIR);
+          setLocal(lx, upY + 4, lz, isFrame ? BLOCK.OAK_PLANKS : BLOCK.STONE_BRICKS);
+          if (isFrame) {
+            if (isOuter) {
+              setLocal(lx, upY + 1, lz, BLOCK.OAK_FENCE);
+              setLocal(lx, upY + 2, lz, BLOCK.OAK_FENCE);
+            }
+            setLocal(lx, upY + 3, lz, dxM === 0 && (gz % 12 === 0) ? BLOCK.GLOWSTONE : BLOCK.OAK_PLANKS);
+          } else if (Math.abs(dxM) === 2 && (gz % 4) === 2) {
+            setLocal(lx, upY + 1, lz, BLOCK.TORCH);
+          }
+          // Bonus dungeon-entry treasure chests tucked just inside the mineshaft portal!
+          if (gz === 74 && (dxM === -1 || dxM === 1)) {
+            placeChest(lx, upY + 1, lz, 900 + dxM, 3);
           }
         }
       }
@@ -8698,7 +8867,11 @@ export class World {
         if (GI_EMIT_TMP[2] > bb) bb = GI_EMIT_TMP[2];
         emit = (selfId === BLOCK.LAVA || selfId === BLOCK.GLOWSTONE || selfId === BLOCK.TORCH || selfId === BLOCK.FIRE)
           ? 1.0
-          : (selfId === BLOCK.DIAMOND_BLOCK ? 0.65 : 0.22);
+          : (selfId === BLOCK.DIAMOND_BLOCK ? 0.65
+            : (selfId === BLOCK.DIAMOND_ORE ? 0.85
+              : (selfId === BLOCK.GOLD_ORE ? 0.72
+                : (selfId === BLOCK.IRON_ORE ? 0.58
+                  : (selfId === BLOCK.COAL_ORE ? 0.48 : 0.22)))));
       }
       bucket.setGI(sky, br, bg, bb, gr, gg, gb, emit);
     };
@@ -8738,11 +8911,12 @@ export class World {
             lights.push(wx, y, wz, id === BLOCK.GLOWSTONE ? 1 : 0);
           }
 
-          // Low-Poly Optimized 2-Block-Long × 1-Block-Wide Classic Minecraft Bed (only 13 quads/half vs 36, 5 in farMode!)
+          // Crisp Low-Poly 2-Block-Long × 1-Block-Wide Classic Minecraft Red Bed (52 tris near, 20 far, seamless 2-half UVs!)
           if (isBedBlock(id)) {
             const info = getBedInfo(id);
-            const bedRedUV = this._bedRedUV;
-            const bedWhiteUV = this._bedWhiteUV;
+            const topUV = info.isHead ? this._bedTopHeadUV : this._bedTopFootUV;
+            const sideUV = info.isHead ? this._bedSideHeadUV : this._bedSideFootUV;
+            const endUV = info.isHead ? this._bedEndHeadUV : this._bedEndFootUV;
             const bx0 = wx + 0.02, bx1 = wx + 0.98;
             const bz0 = wz + 0.02, bz1 = wz + 0.98;
             const my0 = y + 0.18, my1 = y + 0.56;
@@ -8753,31 +8927,47 @@ export class World {
             const z0 = skipNZ ? wz : bz0;
             const z1 = skipPZ ? wz + 1 : bz1;
 
-            // Top face: Head half uses oriented bed_top (pillow + sheet + red quilt), Foot half uses crisp red blanket!
-            if (info.isHead) {
-              const u = bedTopUV;
-              if (info.dir === 'N') {
-                bOpaque.pushQuad(x0,my1,z1,u.u0,u.v0,1.0, x1,my1,z1,u.u1,u.v0,1.0, x1,my1,z0,u.u1,u.v1,1.0, x0,my1,z0,u.u0,u.v1,1.0, 0,1,0);
-              } else if (info.dir === 'S') {
-                bOpaque.pushQuad(x0,my1,z1,u.u1,u.v1,1.0, x1,my1,z1,u.u0,u.v1,1.0, x1,my1,z0,u.u0,u.v0,1.0, x0,my1,z0,u.u1,u.v0,1.0, 0,1,0);
-              } else if (info.dir === 'E') {
-                bOpaque.pushQuad(x0,my1,z1,u.u0,u.v1,1.0, x1,my1,z1,u.u0,u.v0,1.0, x1,my1,z0,u.u1,u.v0,1.0, x0,my1,z0,u.u1,u.v1,1.0, 0,1,0);
-              } else {
-                bOpaque.pushQuad(x0,my1,z1,u.u1,u.v0,1.0, x1,my1,z1,u.u1,u.v1,1.0, x1,my1,z0,u.u0,u.v1,1.0, x0,my1,z0,u.u0,u.v0,1.0, 0,1,0);
-              }
+            // Top face: oriented cleanly so pillow is always at head outer edge & red quilt flows seamlessly into foot half!
+            if (info.dir === 'N') {
+              bOpaque.pushQuad(x0,my1,z1,topUV.u0,topUV.v0,1.0, x1,my1,z1,topUV.u1,topUV.v0,1.0, x1,my1,z0,topUV.u1,topUV.v1,1.0, x0,my1,z0,topUV.u0,topUV.v1,1.0, 0,1,0);
+            } else if (info.dir === 'S') {
+              bOpaque.pushQuad(x0,my1,z1,topUV.u1,topUV.v1,1.0, x1,my1,z1,topUV.u0,topUV.v1,1.0, x1,my1,z0,topUV.u0,topUV.v0,1.0, x0,my1,z0,topUV.u1,topUV.v0,1.0, 0,1,0);
+            } else if (info.dir === 'E') {
+              bOpaque.pushQuad(x0,my1,z1,topUV.u0,topUV.v0,1.0, x1,my1,z1,topUV.u0,topUV.v1,1.0, x1,my1,z0,topUV.u1,topUV.v1,1.0, x0,my1,z0,topUV.u1,topUV.v0,1.0, 0,1,0);
             } else {
-              bOpaque.pushQuad(x0,my1,z1,bedRedUV.u0,bedRedUV.v0,1.0, x1,my1,z1,bedRedUV.u1,bedRedUV.v0,1.0, x1,my1,z0,bedRedUV.u1,bedRedUV.v1,1.0, x0,my1,z0,bedRedUV.u0,bedRedUV.v1,1.0, 0,1,0);
+              bOpaque.pushQuad(x0,my1,z1,topUV.u1,topUV.v1,1.0, x1,my1,z1,topUV.u1,topUV.v0,1.0, x1,my1,z0,topUV.u0,topUV.v0,1.0, x0,my1,z0,topUV.u0,topUV.v1,1.0, 0,1,0);
             }
             // Bottom wooden underside
             bOpaque.pushQuad(x0,my0,z0,bedWoodUV.u0,bedWoodUV.v0,0.58, x1,my0,z0,bedWoodUV.u1,bedWoodUV.v0,0.58, x1,my0,z1,bedWoodUV.u1,bedWoodUV.v1,0.58, x0,my0,z1,bedWoodUV.u0,bedWoodUV.v1,0.58, 0,-1,0);
-            // Outer mattress + frame side faces (using bedSideUV so mattress + oak frame are 1 single low-poly box!)
-            const su = bedSideUV;
-            if (!skipPX) bOpaque.pushQuad(x1,my0,z1,su.u0,su.v0,0.84, x1,my0,z0,su.u1,su.v0,0.84, x1,my1,z0,su.u1,su.v1,0.84, x1,my1,z1,su.u0,su.v1,0.84, 1,0,0);
-            if (!skipNX) bOpaque.pushQuad(x0,my0,z0,su.u0,su.v0,0.84, x0,my0,z1,su.u1,su.v0,0.84, x0,my1,z1,su.u1,su.v1,0.84, x0,my1,z0,su.u0,su.v1,0.84, -1,0,0);
-            if (!skipPZ) bOpaque.pushQuad(x0,my0,z1,su.u0,su.v0,0.74, x1,my0,z1,su.u1,su.v0,0.74, x1,my1,z1,su.u1,su.v1,0.74, x0,my1,z1,su.u0,su.v1,0.74, 0,0,1);
-            if (!skipNZ) bOpaque.pushQuad(x1,my0,z0,su.u0,su.v0,0.74, x0,my0,z0,su.u1,su.v0,0.74, x0,my1,z0,su.u1,su.v1,0.74, x1,my1,z0,su.u0,su.v1,0.74, 0,0,-1);
 
-            // 2 Low-Poly Wooden Corner Legs (4 side quads each, no hidden top/bottom quads; skipped completely in farMode!)
+            // Side & outer headboard/footboard faces mapped strictly per bed axis (NS vs EW) so white sheet always aligns with pillow!
+            const alongZ = (info.dir === 'N' || info.dir === 'S');
+            if (!skipPX) {
+              const u = alongZ ? sideUV : endUV;
+              const flipU = alongZ && info.dir === 'N'; // +X quad sweeps z1->z0; for dir=N head is at z0 -> flipU puts white sheet at z0!
+              const ua = flipU ? u.u1 : u.u0, ub = flipU ? u.u0 : u.u1;
+              bOpaque.pushQuad(x1,my0,z1,ua,u.v0,0.84, x1,my0,z0,ub,u.v0,0.84, x1,my1,z0,ub,u.v1,0.84, x1,my1,z1,ua,u.v1,0.84, 1,0,0);
+            }
+            if (!skipNX) {
+              const u = alongZ ? sideUV : endUV;
+              const flipU = alongZ && info.dir === 'S'; // -X quad sweeps z0->z1; for dir=S head is at z1 -> flipU puts white sheet at z1!
+              const ua = flipU ? u.u1 : u.u0, ub = flipU ? u.u0 : u.u1;
+              bOpaque.pushQuad(x0,my0,z0,ua,u.v0,0.84, x0,my0,z1,ub,u.v0,0.84, x0,my1,z1,ub,u.v1,0.84, x0,my1,z0,ua,u.v1,0.84, -1,0,0);
+            }
+            if (!skipPZ) {
+              const u = alongZ ? endUV : sideUV;
+              const flipU = !alongZ && info.dir === 'E'; // +Z quad sweeps x0->x1; for dir=E head is at x1 -> flipU puts white sheet at x1!
+              const ua = flipU ? u.u1 : u.u0, ub = flipU ? u.u0 : u.u1;
+              bOpaque.pushQuad(x0,my0,z1,ua,u.v0,0.74, x1,my0,z1,ub,u.v0,0.74, x1,my1,z1,ub,u.v1,0.74, x0,my1,z1,ua,u.v1,0.74, 0,0,1);
+            }
+            if (!skipNZ) {
+              const u = alongZ ? endUV : sideUV;
+              const flipU = !alongZ && info.dir === 'W'; // -Z quad sweeps x1->x0; for dir=W head is at x0 -> flipU puts white sheet at x0!
+              const ua = flipU ? u.u1 : u.u0, ub = flipU ? u.u0 : u.u1;
+              bOpaque.pushQuad(x1,my0,z0,ua,u.v0,0.74, x0,my0,z0,ub,u.v0,0.74, x0,my1,z0,ub,u.v1,0.74, x1,my1,z0,ua,u.v1,0.74, 0,0,-1);
+            }
+
+            // 2 Clean Low-Poly Oak Corner Legs at the outer corners of each half (4 side quads each; skipped in farMode!)
             if (!farMode) {
               const wu = bedWoodUV;
               const addLegSides = (lx0, lz0, lx1, lz1) => {
@@ -9008,7 +9198,7 @@ export class World {
             continue;
           }
 
-          // Sculpted 3D Voxel Torch Model (wooden shaft + charred ember collar + blazing emissive flame tip + auto wall-mount tilt!)
+          // Classic Low-Poly 2-Box 3D Minecraft Torch (only 10 quads / 20 tris vs 72! Clean stick + glowing tip + wall tilt!)
           if (id === BLOCK.TORCH) {
             const belowB = fastGet(lx, y - 1, lz);
             const hasFloor = belowB !== 0 && belowB !== BLOCK.TORCH && belowB !== BLOCK.LADDER && !isBedBlock(belowB) && !isDoorBlock(belowB) && solidTable[belowB] === 1;
@@ -9022,7 +9212,7 @@ export class World {
               else continue; // Never render an unsupported floating torch!
             }
 
-            const addTorchBox = (x0, y0, z0, x1, y1, z1, uv, sTop, sSide, sBot) => {
+            const addTorchPart = (x0, y0, z0, x1, y1, z1, uv, sTop, sSide, sBot, drawTop, drawBot) => {
               const tx0 = tiltX * y0 + offX, tz0 = tiltZ * y0 + offZ;
               const tx1 = tiltX * y1 + offX, tz1 = tiltZ * y1 + offZ;
               const bx00 = wx + x0 + tx0, bx10 = wx + x1 + tx0;
@@ -9030,8 +9220,8 @@ export class World {
               const bx01 = wx + x0 + tx1, bx11 = wx + x1 + tx1;
               const bz01 = wz + z0 + tz1, bz11 = wz + z1 + tz1;
               const by0 = y + y0 + offY, by1 = y + y1 + offY;
-              bOpaque.pushQuad(bx01,by1,bz11,uv.u0,uv.v0,sTop, bx11,by1,bz11,uv.u1,uv.v0,sTop, bx11,by1,bz01,uv.u1,uv.v1,sTop, bx01,by1,bz01,uv.u0,uv.v1,sTop, 0,1,0);
-              bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sBot, bx10,by0,bz00,uv.u1,uv.v0,sBot, bx10,by0,bz10,uv.u1,uv.v1,sBot, bx00,by0,bz10,uv.u0,uv.v1,sBot, 0,-1,0);
+              if (drawTop) bOpaque.pushQuad(bx01,by1,bz11,uv.u0,uv.v0,sTop, bx11,by1,bz11,uv.u1,uv.v0,sTop, bx11,by1,bz01,uv.u1,uv.v1,sTop, bx01,by1,bz01,uv.u0,uv.v1,sTop, 0,1,0);
+              if (drawBot) bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sBot, bx10,by0,bz00,uv.u1,uv.v0,sBot, bx10,by0,bz10,uv.u1,uv.v1,sBot, bx00,by0,bz10,uv.u0,uv.v1,sBot, 0,-1,0);
               bOpaque.pushQuad(bx10,by0,bz10,uv.u0,uv.v0,sSide, bx10,by0,bz00,uv.u1,uv.v0,sSide, bx11,by1,bz01,uv.u1,uv.v1,sSide, bx11,by1,bz11,uv.u0,uv.v1,sSide, 1,0,0);
               bOpaque.pushQuad(bx00,by0,bz00,uv.u0,uv.v0,sSide, bx00,by0,bz10,uv.u1,uv.v0,sSide, bx01,by1,bz11,uv.u1,uv.v1,sSide, bx01,by1,bz01,uv.u0,uv.v1,sSide, -1,0,0);
               bOpaque.pushQuad(bx00,by0,bz10,uv.u0,uv.v0,sSide * 0.94, bx10,by0,bz10,uv.u1,uv.v0,sSide * 0.94, bx11,by1,bz11,uv.u1,uv.v1,sSide * 0.94, bx01,by1,bz11,uv.u0,uv.v1,sSide * 0.94, 0,0,1);
@@ -9039,14 +9229,10 @@ export class World {
             };
 
             const woodUV = this._torchWoodUV;
-            const coalUV = this._torchCoalUV;
             const glowUV = this._torchGlowUV;
-            if (hasFloor) addTorchBox(0.39, 0.0, 0.39, 0.61, 0.06, 0.61, woodUV, 0.9, 0.78, 0.58);
-            addTorchBox(0.425, 0.0, 0.425, 0.575, 0.54, 0.575, woodUV, 0.95, 0.86, 0.62);
-            addTorchBox(0.405, 0.53, 0.405, 0.595, 0.63, 0.595, coalUV, 0.55, 0.46, 0.38);
-            addTorchBox(0.415, 0.63, 0.415, 0.585, 0.77, 0.585, glowUV, 1.54, 1.48, 1.32);
-            addTorchBox(0.445, 0.77, 0.445, 0.555, 0.88, 0.555, glowUV, 1.72, 1.66, 1.5);
-            addTorchBox(0.47, 0.88, 0.47, 0.53, 0.96, 0.53, glowUV, 1.82, 1.76, 1.6);
+            // 1 slim wooden stick (0..0.56) + 1 glowing amber flame head (0.56..0.74) = 10 quads total (20 tris)!
+            addTorchPart(0.4375, 0.0, 0.4375, 0.5625, 0.56, 0.5625, woodUV, 0.95, 0.86, 0.62, false, !hasFloor);
+            addTorchPart(0.4375, 0.56, 0.4375, 0.5625, 0.74, 0.5625, glowUV, 1.80, 1.68, 1.40, true, false);
             continue;
           }
 
@@ -11108,6 +11294,21 @@ export class World {
     return false;
   }
 
+  // Refresh GPU textures & shadows after iPad PWA app-resume or WebGL context restore!
+  onContextRestored() {
+    this._shadowNeedsUpdate = true;
+    if (this.textures) {
+      if (this.textures.atlasTexture) this.textures.atlasTexture.needsUpdate = true;
+      if (this.textures.normalTexture) this.textures.normalTexture.needsUpdate = true;
+      if (this.textures.pbrTexture) this.textures.pbrTexture.needsUpdate = true;
+    }
+    if (this.shaderUniforms) {
+      if (this.shaderUniforms.uAtlas && this.textures?.atlasTexture) this.shaderUniforms.uAtlas.value = this.textures.atlasTexture;
+      if (this.shaderUniforms.uNormalAtlas && this.textures?.normalTexture) this.shaderUniforms.uNormalAtlas.value = this.textures.normalTexture;
+      if (this.shaderUniforms.uPbrAtlas && this.textures?.pbrTexture) this.shaderUniforms.uPbrAtlas.value = this.textures.pbrTexture;
+    }
+  }
+
   // Update pooled real-time PointLights for player held torch/glowstone + closest placed/generated light sources!
   updateTorchLights(dt, playerPos, sky = null, heldLight = null) {
     if (!this.torchLightPool || this.torchLightPool.length === 0 || !playerPos) return;
@@ -11116,51 +11317,87 @@ export class World {
 
     if (this._lightDirty || this._lightRefreshTimer <= 0) {
       this._lightDirty = false;
-      this._lightRefreshTimer = 0.16;
+      this._lightRefreshTimer = 0.22;
 
-      // Only pull local torches within 18 blocks so surface torches NEVER bleed through stone into caves!
+      // Zero-GC top-4 scan within 18 blocks (eliminates per-tick array + object allocations!)
       const maxDistSq = 18 * 18;
-      const near = [];
+      const poolLen = this.torchLightPool.length;
+      const bestD2 = this._bestLightD2 || (this._bestLightD2 = new Float64Array(4));
+      const bestSrc = this._bestLightSrc || (this._bestLightSrc = new Array(4));
+      let count = 0;
+      const px = playerPos.x, py = playerPos.y, pz = playerPos.z;
       for (const src of this.lightSources.values()) {
-        const dx = src.x + 0.5 - playerPos.x;
-        const dy = src.y + 0.8 - playerPos.y;
-        const dz = src.z + 0.5 - playerPos.z;
+        const dx = src.x + 0.5 - px;
+        const dy = src.y + 0.8 - py;
+        const dz = src.z + 0.5 - pz;
         const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 <= maxDistSq) near.push({ src, d2 });
+        if (d2 > maxDistSq) continue;
+        if (count < poolLen) {
+          let ins = count++;
+          while (ins > 0 && d2 < bestD2[ins - 1]) {
+            bestD2[ins] = bestD2[ins - 1];
+            bestSrc[ins] = bestSrc[ins - 1];
+            ins--;
+          }
+          bestD2[ins] = d2;
+          bestSrc[ins] = src;
+        } else if (d2 < bestD2[poolLen - 1]) {
+          let ins = poolLen - 1;
+          while (ins > 0 && d2 < bestD2[ins - 1]) {
+            bestD2[ins] = bestD2[ins - 1];
+            bestSrc[ins] = bestSrc[ins - 1];
+            ins--;
+          }
+          bestD2[ins] = d2;
+          bestSrc[ins] = src;
+        }
       }
-      near.sort((a, b) => a.d2 - b.d2);
-      const count = Math.min(this.torchLightPool.length, near.length);
       this._activeLightSources.length = count;
-      for (let i = 0; i < count; i++) {
-        this._activeLightSources[i] = near[i].src;
-      }
+      for (let i = 0; i < count; i++) this._activeLightSources[i] = bestSrc[i];
     }
 
     const dayFactor = sky && sky.skyUniforms ? sky.skyUniforms.uDayFactor.value : 0.5;
     const nightFactor = Math.max(0, Math.min(1, 1.0 - dayFactor));
     const t = this._lightClock;
     const hasHeld = !!(heldLight && heldLight.active);
-    const activeCount = this._activeLightSources.length;
-    this.shaderUniforms.uDynLightCount.value = (hasHeld ? 1 : 0) + activeCount;
 
-    let slot = 0;
-    if (hasHeld && this._dynLightPos[0] && this._dynLightCol[0]) {
-      const flick = Math.sin(t * 9.5) * 0.45 + Math.cos(t * 17.3) * 0.22;
+    // Held Torch / Glowstone matches placed Voxel-GI Torch brightness & ~15.5-block radius identically!
+    const uHPos = this.shaderUniforms.uHeldLightPos.value;
+    const uHCol = this.shaderUniforms.uHeldLightCol.value;
+    if (hasHeld) {
+      const flick = Math.sin(t * 8.5) * 0.035 + Math.cos(t * 15.7) * 0.018;
       const isGlow = heldLight.isGlowstone;
-      this._dynLightPos[0].set(heldLight.x, heldLight.y, heldLight.z, isGlow ? 16.5 : 14.0);
-      this._dynLightCol[0].set(1.0, isGlow ? 0.88 : 0.72, isGlow ? 0.58 : 0.34, (isGlow ? 15.0 : 12.5) + flick);
-      slot = 1;
+      uHPos.set(heldLight.x, heldLight.y, heldLight.z, isGlow ? 17.5 : 15.5);
+      // Matches placed Voxel GI torch EMIT_RGB=(15,11,5) -> (1.0, 0.733, 0.333) & glowstone (15,14,9) -> (1.0, 0.933, 0.60)
+      uHCol.set(1.0, isGlow ? 0.93 : 0.74, isGlow ? 0.60 : 0.34, (isGlow ? 1.12 : 1.04) + flick);
+    } else {
+      uHPos.set(0, -9999, 0, 1.0);
+      uHCol.set(0, 0, 0, 0.0);
+    }
+
+    const activeCount = this._activeLightSources.length;
+    this.shaderUniforms.uDynLightCount.value = activeCount;
+
+    // Also drive PointLight slot 0 at the player's hand when holding a torch/glowstone so mobs & 3D entities light up equally!
+    let poolStart = 0;
+    if (hasHeld) {
+      const pl0 = this.torchLightPool[0];
+      const isGlow = heldLight.isGlowstone;
+      pl0.position.set(heldLight.x, heldLight.y, heldLight.z);
+      pl0.intensity = isGlow ? 22.0 : 19.0;
+      pl0.distance = isGlow ? 24 : 20;
+      pl0.color.setHex(isGlow ? 0xffdf94 : 0xffb84d);
+      poolStart = 1;
     }
 
     for (let i = 0; i < this.torchLightPool.length; i++) {
-      const pl = this.torchLightPool[i];
-      const dlIdx = i + slot;
-      const dlPos = dlIdx < this._dynLightPos.length ? this._dynLightPos[dlIdx] : null;
-      const dlCol = dlIdx < this._dynLightCol.length ? this._dynLightCol[dlIdx] : null;
+      const dlPos = i < this._dynLightPos.length ? this._dynLightPos[i] : null;
+      const dlCol = i < this._dynLightCol.length ? this._dynLightCol[i] : null;
+      const plIdx = i + poolStart;
+      const pl = plIdx < this.torchLightPool.length ? this.torchLightPool[plIdx] : null;
       if (i < activeCount) {
         const s = this._activeLightSources[i];
         const lx = s.x + 0.5, ly = s.y + (s.isGlowstone ? 0.6 : 1.18), lz = s.z + 0.5;
-        pl.position.set(lx, ly, lz);
         const phase = s.x * 1.7 + s.z * 2.3 + s.y * 0.9;
         const flicker = s.isGlowstone
           ? Math.sin(t * 3.5 + phase) * 0.25
@@ -11170,16 +11407,19 @@ export class World {
           : (10.0 + nightFactor * 13.0);
         const inten = Math.max(1.5, baseIntensity + flicker);
         const range = 16 + nightFactor * 4;
-        pl.intensity = inten;
-        pl.distance = range;
-        pl.color.setHex(s.isGlowstone ? 0xffd584 : 0xffb64e);
+        const colHex = s.isGlowstone ? 0xffd584 : 0xffb64e;
+        if (pl) {
+          pl.position.set(lx, ly, lz);
+          pl.intensity = inten;
+          pl.distance = range;
+          pl.color.setHex(colHex);
+        }
         if (dlPos && dlCol) {
-          // Local 11-block accent radius (Voxel GI handles full wall-occluded propagation!)
           dlPos.set(lx, ly, lz, 11.5);
-          dlCol.set(pl.color.r, pl.color.g, pl.color.b, inten * 0.24);
+          dlCol.set(1.0, s.isGlowstone ? 0.84 : 0.71, s.isGlowstone ? 0.52 : 0.31, inten * 0.24);
         }
       } else {
-        pl.intensity = 0;
+        if (pl) pl.intensity = 0;
         if (dlPos && dlCol) {
           dlPos.set(0, -9999, 0, 1);
           dlCol.set(0, 0, 0, 0);

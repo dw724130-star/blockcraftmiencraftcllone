@@ -2042,26 +2042,23 @@ export class EntityManager {
     mob.vel.y = Math.max(mob.vel.y, 5.4);
     this.setMobTint(mob, 'hurt');
 
-    // Authentic Minecraft Iron Golem & Villager Soldier Provocation:
-    // - Attacking an Iron Golem or Soldier directly -> immediately aggros that guard!
-    // - Attacking a Villager -> ONLY Iron Golems & Soldiers who have clear Line-of-Sight SEE it and attack you!
-    if (player) {
+    // Authentic Village & City Garrison Defense:
+    // Attacking ANY Villager, Armored Villager Soldier, or Iron Golem rallies ALL nearby Iron Golems & Armored Soldiers!
+    if (player && (mob.def.guard || mob.def.villager || mob.def.golem)) {
       if (mob.def.guard) {
         mob.aggroPlayer = true;
-        mob.aggroTimer = 45;
-      } else if (mob.def.villager && !mob.def.guard) {
-        for (let gi = 0; gi < this.mobs.length; gi++) {
-          const g = this.mobs[gi];
-          if (!g.def.guard || g === mob) continue;
-          const dG = g.pos.distanceTo(mob.pos);
-          if (dG > 26) continue;
-          const gEyeY = g.pos.y + g.height * 0.82;
-          const seesPlayer = this.hasLineOfSight(g.pos.x, gEyeY, g.pos.z, player.pos.x, player.pos.y + 1.25, player.pos.z);
-          const seesVictim = this.hasLineOfSight(g.pos.x, gEyeY, g.pos.z, mob.pos.x, mob.pos.y + 1.25, mob.pos.z);
-          if (seesPlayer || seesVictim) {
-            g.aggroPlayer = true;
-            g.aggroTimer = 38;
-          }
+        mob.aggroTimer = 50;
+      }
+      const alertR2 = 48 * 48;
+      for (let gi = 0; gi < this.mobs.length; gi++) {
+        const g = this.mobs[gi];
+        if (!g.def.guard || g.hp <= 0) continue;
+        const dxG = g.pos.x - mob.pos.x;
+        const dyG = g.pos.y - mob.pos.y;
+        const dzG = g.pos.z - mob.pos.z;
+        if (dxG * dxG + dyG * dyG + dzG * dzG <= alertR2) {
+          g.aggroPlayer = true;
+          g.aggroTimer = 50;
         }
       }
     }
@@ -2293,6 +2290,9 @@ export class EntityManager {
       }
       this._updateMegaCrowds(dt, player);
     }
+
+    // 0c. Underground Mineshaft Villager Trade Patrols (Groups of 3 with at least 1 Armored Villager Soldier!)
+    this._updateMineshaftPatrols(dt, player, isChunkLoadedAt);
 
     if (this._pendingVillageSpawns.length > 0) {
       let spawnedThisFrame = 0;
@@ -2768,7 +2768,7 @@ export class EntityManager {
         let guardTarget = null;
         let guardTargetIsPlayer = false;
         let guardTargetDist = 24;
-        if (m.aggroPlayer && player.mode === 'survival' && !player.dead && distToPlayer < 26) {
+        if (m.aggroPlayer && player.mode === 'survival' && !player.dead && distToPlayer < 44) {
           guardTarget = player;
           guardTargetIsPlayer = true;
           guardTargetDist = distToPlayer;
@@ -3167,6 +3167,25 @@ export class EntityManager {
               } else {
                 m._exitMorningTimer = 0;
               }
+            } else if (m.mineshaftPatrol) {
+              // Underground Mineshaft Patrol Trio walking along wooden mineshaft tunnel waypoints!
+              const mp = m.mineshaftPatrol;
+              const seg = mp.seg;
+              const tx = seg.ptsX[mp.idx];
+              const tz = seg.ptsZ[mp.idx];
+              const wdx = tx - m.pos.x;
+              const wdz = tz - m.pos.z;
+              if (wdx * wdx + wdz * wdz < 2.25) {
+                mp.idx += mp.dir;
+                if (mp.idx >= seg.numSamples) { mp.idx = seg.numSamples - 1; mp.dir = -1; }
+                else if (mp.idx < 0) { mp.idx = 1; mp.dir = 1; }
+              }
+              m.wanderDir = Math.atan2(wdx, wdz);
+              m.yaw = lerpAngle(m.yaw, m.wanderDir, Math.min(1, dt * 8));
+              const pSpd = m.def.speed * (mp.speedMul || 0.78);
+              moveX = Math.sin(m.yaw) * pSpd;
+              moveZ = Math.cos(m.yaw) * pSpd;
+              m.moving = true;
             } else {
               if (m.aiTimer <= 0) {
                 m.aiTimer = 2.4 + Math.random() * 4.2;
@@ -4195,6 +4214,65 @@ export class EntityManager {
           im.instanceMatrix.needsUpdate = true;
           if (im.instanceColor) im.instanceColor.needsUpdate = true;
         }
+      }
+    }
+  }
+
+  // Spawns underground traveling groups of 3 villagers (1 Armored Villager Soldier + 2 Villagers) walking along Mineshaft Tunnels!
+  _updateMineshaftPatrols(dt, player, isChunkLoadedAt) {
+    if (!this.world || !this.world._getMineshaftTunnelsForChunk || !player) return;
+    if (player.pos.y > 54) return; // Only active when player is underground!
+    this._mineshaftPatrolTimer = (this._mineshaftPatrolTimer || 0) - dt;
+    if (this._mineshaftPatrolTimer > 0) return;
+    this._mineshaftPatrolTimer = 2.0;
+
+    let activePatrolMobs = 0;
+    for (let i = 0; i < this.mobs.length; i++) {
+      if (this.mobs[i].mineshaftPatrol) activePatrolMobs++;
+    }
+    if (activePatrolMobs >= 6) return; // Up to 2 active 3-villager groups (6 total) near the player!
+
+    const pcx = Math.floor(player.pos.x / 16);
+    const pcz = Math.floor(player.pos.z / 16);
+    const net = this.world._getMineshaftTunnelsForChunk(pcx, pcz);
+    if (!net || !net.segments || net.segments.length === 0) return;
+
+    const px = player.pos.x, pz = player.pos.z;
+    for (let si = 0; si < net.segments.length; si++) {
+      const seg = net.segments[si];
+      if (!seg || seg.numSamples < 6) continue;
+      if (px + 44 < seg.minX || px - 44 > seg.maxX || pz + 44 < seg.minZ || pz - 44 > seg.maxZ) continue;
+      // Pick a waypoint 14..40 blocks away from player along the tunnel
+      for (let i = 3; i < seg.numSamples - 3; i += 3) {
+        const wx = seg.ptsX[i], wz = seg.ptsZ[i];
+        const d = Math.hypot(wx - px, wz - pz);
+        if (d < 14 || d > 40) continue;
+        if (!isChunkLoadedAt(wx, wz)) continue;
+        const wy = Math.round(seg.profileY[i]) + 1;
+        const bFoot = this.world.getBlock(wx, wy, wz);
+        const bHead = this.world.getBlock(wx, wy + 1, wz);
+        const bFloor = this.world.getBlock(wx, wy - 1, wz);
+        if (isBlockSolid(bFoot) || isBlockSolid(bHead) || !isBlockSolid(bFloor)) continue;
+
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        const groupDefs = [
+          { mType: 'villager_soldier', prof: null, off: 0, speedMul: 0.78 },
+          { mType: 'villager', prof: VILLAGER_PROFESSIONS[(i + 1) % VILLAGER_PROFESSIONS.length], off: -dir, speedMul: 0.78 },
+          { mType: 'villager', prof: VILLAGER_PROFESSIONS[(i + 3) % VILLAGER_PROFESSIONS.length], off: -dir * 2, speedMul: 0.78 }
+        ];
+        for (const gd of groupDefs) {
+          const sIdx = Math.max(1, Math.min(seg.numSamples - 1, i + gd.off));
+          const sx = seg.ptsX[sIdx];
+          const sz = seg.ptsZ[sIdx];
+          const sy = Math.round(seg.profileY[sIdx]) + 1;
+          if (!isChunkLoadedAt(sx, sz)) continue;
+          const mob = this.spawnMob(gd.mType, sx, sy, sz, gd.prof);
+          if (mob) {
+            mob.homeRadius = 180;
+            mob.mineshaftPatrol = { seg, idx: sIdx, dir, speedMul: gd.speedMul };
+          }
+        }
+        return;
       }
     }
   }
