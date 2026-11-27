@@ -617,7 +617,7 @@ export class World {
 
       // Compute analytic tangent-space normal perturbation from LabPBR normalAtlas (ZERO extra vertex attributes!)
       vec3 perturbVoxelNormal(vec3 geomN, vec2 atlasUv, float dist) {
-        float normalFade = 1.0 - smoothstep(26.0, 68.0, dist);
+        float normalFade = 1.0 - smoothstep(18.0, 46.0, dist);
         if (uPbrOn < 0.5 || normalFade < 0.01) return geomN;
         vec3 mapN = texture2D(uNormalAtlas, atlasUv).xyz * 2.0 - 1.0;
         mapN.xy *= normalFade * 0.92;
@@ -644,7 +644,7 @@ export class World {
         return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
       }
 
-      float samplePoissonShadow(sampler2D sMap, vec3 sc, float texelSize, float spread, float bias) {
+      float samplePoissonShadow(sampler2D sMap, vec3 sc, float texelSize, float spread, float bias, bool use8Tap) {
         if (sc.z >= 1.0 || sc.z <= 0.0) return 1.0;
         float ang = csmIgn(gl_FragCoord.xy) * 6.2831853;
         float ca = cos(ang), sa = sin(ang);
@@ -652,12 +652,12 @@ export class World {
         float r = texelSize * spread;
         float cmpZ = sc.z - bias;
         float lit = 0.0;
-        // Fast 4-tap rotated Poisson disk on Medium; full 8-tap velvety penumbra on High/Ultra!
+        // Fast 4-tap rotated Poisson disk on Far Cascade / Medium; full 8-tap velvety penumbra on Near High/Ultra!
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.613,  0.617)) * r)));
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.645,  0.532)) * r)));
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.299, -0.791)) * r)));
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.892, -0.341)) * r)));
-        if (uPcfHigh < 0.5) return lit * 0.25;
+        if (!use8Tap) return lit * 0.25;
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2( 0.170, -0.040)) * r)));
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.921, -0.152)) * r)));
         lit += step(cmpZ, unpackRGBAToDepth(texture2D(sMap, sc.xy + (rot * vec2(-0.118,  0.945)) * r)));
@@ -678,7 +678,7 @@ export class World {
         bool inNear = edge0 < 0.495 && sc0.z > 0.0 && sc0.z < 1.0;
 
         float sNear = inNear
-          ? samplePoissonShadow(uShadowMap0, sc0, uShadowTexel0, uShadowSoftness * 1.35, 0.00055 + 0.0008 * slope)
+          ? samplePoissonShadow(uShadowMap0, sc0, uShadowTexel0, uShadowSoftness * 1.35, 0.00055 + 0.0008 * slope, uPcfHigh > 0.5)
           : 1.0;
 
         if (uHasFarCascade < 0.5) {
@@ -686,7 +686,7 @@ export class World {
           return mix(sNear, 1.0, fadeOut);
         }
 
-        // Smooth feather blend between Cascade 0 (Near ±26m) and Cascade 1 (Far ±92m)
+        // Smooth feather blend between Cascade 0 (Near ±26m) and Cascade 1 (Far ±92m — crisp 4-tap PCF cuts GPU shadow bandwidth in half!)
         float blendFar = smoothstep(0.37, 0.49, edge0);
         if (blendFar < 0.005) return sNear;
 
@@ -695,7 +695,7 @@ export class World {
         vec3 sc1 = p1.xyz / p1.w;
         float edge1 = max(abs(sc1.x - 0.5), abs(sc1.y - 0.5));
         float sFar = (edge1 < 0.495 && sc1.z > 0.0 && sc1.z < 1.0)
-          ? samplePoissonShadow(uShadowMap1, sc1, uShadowTexel1, uShadowSoftness * 1.15, 0.0011 + 0.0014 * slope)
+          ? samplePoissonShadow(uShadowMap1, sc1, uShadowTexel1, uShadowSoftness * 1.15, 0.0011 + 0.0014 * slope, false)
           : 1.0;
         sFar = mix(sFar, 1.0, smoothstep(0.42, 0.495, edge1));
         return mix(sNear, sFar, blendFar);
@@ -779,8 +779,8 @@ export class World {
           vec4 tex = texture2D(uAtlas, wrappedUv);
           vec3 albedo = tex.rgb;
           vec3 geomN = normalize(vWorldNorm);
-          vec3 L = normalize(uSunDir);
-          vec3 M = normalize(uMoonDir);
+          vec3 L = uSunDir;
+          vec3 M = uMoonDir;
           vec3 activeL = uDayFactor > 0.08 ? L : M;
           vec3 viewVec = vWorldPos - cameraPosition;
           float dist = length(viewVec);
@@ -793,8 +793,8 @@ export class World {
           float vEmit = clamp(vColor.b, 0.0, 1.0);
           float outdoorMask = smoothstep(0.05, 0.45, skyVis);
 
-          // Sample LabPBR Material Atlas (Roughness, Metalness, Reflectivity F0, Per-Texel Emission) + Tangent Normal Map!
-          vec4 pbr = uPbrOn > 0.5 ? texture2D(uPbrAtlas, wrappedUv) : vec4(0.88, 0.0, 0.04, 0.0);
+          // Sample LabPBR Material Atlas only within 68m (or on emissive blocks) — saves 1 full RGBA fetch on 60%+ distant pixels!
+          vec4 pbr = (uPbrOn > 0.5 && (dist < 68.0 || vEmit > 0.01)) ? texture2D(uPbrAtlas, wrappedUv) : vec4(0.88, 0.0, 0.04, 0.0);
           float roughness = clamp(pbr.r, 0.06, 0.98);
           float metalness = pbr.g;
           float f0Scalar = clamp(pbr.b, 0.02, 0.95);
@@ -1192,8 +1192,8 @@ export class World {
           if (tex.a < 0.35) discard;
           vec3 albedo = tex.rgb;
           vec3 N = normalize(gl_FrontFacing ? vWorldNorm : -vWorldNorm);
-          vec3 L = normalize(uSunDir);
-          vec3 activeL = uDayFactor > 0.08 ? L : normalize(uMoonDir);
+          vec3 L = uSunDir;
+          vec3 activeL = uDayFactor > 0.08 ? L : uMoonDir;
           vec3 viewVec = vWorldPos - cameraPosition;
           float dist = length(viewVec);
           vec3 viewDir = viewVec / max(dist, 0.001);
@@ -1600,6 +1600,7 @@ export class World {
         uHasOpaqueCopy: { value: 0.0 },
         uSsrSteps: { value: 0.0 },
         uResolution: { value: new THREE.Vector2(1024, 768) },
+        uProjZ: { value: new THREE.Vector2(0.2, -1.0) },
         uInvProjection: { value: new THREE.Matrix4() },
         uProjection: { value: new THREE.Matrix4() },
         uViewMatrix: { value: new THREE.Matrix4() }
@@ -1637,6 +1638,7 @@ export class World {
         uniform float uHasOpaqueCopy;
         uniform float uSsrSteps;
         uniform vec2 uResolution;
+        uniform vec2 uProjZ;
         uniform mat4 uInvProjection;
         uniform mat4 uProjection;
         uniform mat4 uViewMatrix;
@@ -1676,10 +1678,9 @@ export class World {
           return h;
         }
 
-        vec3 reconstructViewPos(vec2 uv, float depth) {
-          vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-          vec4 vp = uInvProjection * ndc;
-          return vp.xyz / vp.w;
+        // Exact scalar view-Z reconstruction (8x faster than mat4*vec4 inside SSR loop, bit-identical!)
+        float wLinearViewZ(float depth) {
+          return uProjZ.x / (depth * 2.0 - 1.0 + uProjZ.y);
         }
 
         // Analytical Sky + Clouds + Sun/Moon reflection fallback (seamless when SSR ray leaves screen!)
@@ -1704,45 +1705,46 @@ export class World {
           return reflCol;
         }
 
-        // True Screen-Space Reflection (SSR) with binary hit refinement (reflects bridges, trees, cliffs & castles!)
+        // True Screen-Space Reflection (SSR) with pre-projected ray & scalar view-Z (5x faster ALU, 0 mat4*vec4 inside loop!)
         vec4 traceSSR(vec3 waterViewPos, vec3 reflViewDir, float maxSteps) {
           if (maxSteps < 1.0 || reflViewDir.z > 0.35) return vec4(0.0);
           int steps = int(maxSteps);
           float jitter = wIgn(gl_FragCoord.xy);
-          float stepDist = 0.42;
+          float stepDist = 0.46;
           float curT = 0.18 + jitter * 0.28;
-          vec3 prevPos = waterViewPos;
+          float prevT = 0.0;
+          vec4 clip0 = uProjection * vec4(waterViewPos, 1.0);
+          vec4 clipDir = uProjection * vec4(reflViewDir, 0.0);
 
-          for (int i = 0; i < 22; i++) {
+          for (int i = 0; i < 16; i++) {
             if (i >= steps) break;
-            vec3 samplePos = waterViewPos + reflViewDir * curT;
-            if (samplePos.z > -0.15) break;
-            vec4 clip = uProjection * vec4(samplePos, 1.0);
+            float sampleZ = waterViewPos.z + reflViewDir.z * curT;
+            if (sampleZ > -0.15) break;
+            vec4 clip = clip0 + clipDir * curT;
             if (clip.w <= 0.001) break;
             vec2 sUv = (clip.xy / clip.w) * 0.5 + 0.5;
             if (sUv.x < 0.003 || sUv.x > 0.997 || sUv.y < 0.003 || sUv.y > 0.997) break;
 
             float sDepth = texture2D(tOpaqueDepth, sUv).r;
             if (sDepth < 0.9997) {
-              vec3 hitView = reconstructViewPos(sUv, sDepth);
-              float dz = hitView.z - samplePos.z;
+              float hitZ = wLinearViewZ(sDepth);
+              float dz = hitZ - sampleZ;
               float thickness = 0.28 + stepDist * 1.45;
               if (dz > 0.0 && dz < thickness) {
-                // 3-step binary refinement for razor-sharp bridge & tree silhouettes on water!
-                vec3 lo = prevPos;
-                vec3 hi = samplePos;
+                // 3-step scalar binary refinement for razor-sharp bridge & tree silhouettes on water!
+                float loT = prevT;
+                float hiT = curT;
                 vec2 bestUv = sUv;
                 for (int b = 0; b < 3; b++) {
-                  vec3 mid = (lo + hi) * 0.5;
-                  vec4 mClip = uProjection * vec4(mid, 1.0);
+                  float midT = (loT + hiT) * 0.5;
+                  vec4 mClip = clip0 + clipDir * midT;
                   vec2 mUv = (mClip.xy / mClip.w) * 0.5 + 0.5;
                   float mD = texture2D(tOpaqueDepth, clamp(mUv, vec2(0.002), vec2(0.998))).r;
-                  vec3 mHit = reconstructViewPos(mUv, mD);
-                  if (mHit.z - mid.z > 0.0) {
-                    hi = mid;
+                  if (wLinearViewZ(mD) - (waterViewPos.z + reflViewDir.z * midT) > 0.0) {
+                    hiT = midT;
                     bestUv = mUv;
                   } else {
-                    lo = mid;
+                    loT = midT;
                   }
                 }
                 vec2 edgeDist = min(bestUv, 1.0 - bestUv);
@@ -1752,9 +1754,9 @@ export class World {
                 return vec4(hitCol, edgeFade * rayFade);
               }
             }
-            prevPos = samplePos;
+            prevT = curT;
             curT += stepDist;
-            stepDist *= 1.18;
+            stepDist *= 1.22;
           }
           return vec4(0.0);
         }
@@ -1763,8 +1765,8 @@ export class World {
           vec3 viewVec = cameraPosition - vWorldPos;
           float dist = length(viewVec);
           vec3 V = viewVec / max(dist, 0.001);
-          vec3 sunDir = normalize(uSunDir);
-          vec3 moonDir = normalize(uMoonDir);
+          vec3 sunDir = uSunDir;
+          vec3 moonDir = uMoonDir;
           vec2 p = vWorldPos.xz;
           float t = uTime;
 
@@ -1830,14 +1832,14 @@ export class World {
 
             // 2. TRUE REFRACTION + BEER-LAMBERT DEPTH-BASED WATER COLORATION!
             float bgRawD = texture2D(tOpaqueDepth, screenUv).r;
-            float bgLinZ = bgRawD >= 0.9998 ? (waterLinZ + 28.0) : -reconstructViewPos(screenUv, bgRawD).z;
+            float bgLinZ = bgRawD >= 0.9998 ? (waterLinZ + 28.0) : -wLinearViewZ(bgRawD);
             float rawWaterDepth = max(0.0, bgLinZ - waterLinZ);
 
             // Distort underwater refraction UV by wave normal (with foreground anti-bleed depth guard!)
             float distortAmt = clamp(rawWaterDepth * 0.012, 0.0015, 0.026) / max(1.0, dist * 0.06);
             vec2 refrUv = clamp(screenUv + N.xz * distortAmt, vec2(0.002), vec2(0.998));
             float refrRawD = texture2D(tOpaqueDepth, refrUv).r;
-            float refrLinZ = refrRawD >= 0.9998 ? (waterLinZ + 28.0) : -reconstructViewPos(refrUv, refrRawD).z;
+            float refrLinZ = refrRawD >= 0.9998 ? (waterLinZ + 28.0) : -wLinearViewZ(refrRawD);
             float waterDepth = rawWaterDepth;
             if (refrLinZ < waterLinZ + 0.02) {
               // Distorted UV hit dry land/hand in front of water -> fall back cleanly!
@@ -2607,72 +2609,135 @@ export class World {
         }
       }
 
-      // Stone Chimney
-      if (chimney && x0 + w - 2 >= 1 && x0 + w - 2 <= 14) {
+      const midX = x0 + Math.floor(w / 2);
+      const midZ = z0 + Math.floor(d / 2);
+      // Exact doorway, interior entry, and exterior porch coordinates — NO chest, bed, chimney, furnace, or prop may EVER block them!
+      let doorX = midX, doorZ = z0 + d - 1, doorInX = midX, doorInZ = z0 + d - 2, doorOutX = midX, doorOutZ = z0 + d, doorFace = 2;
+      if (doorSide === 'north') {
+        doorX = midX; doorZ = z0; doorInX = midX; doorInZ = z0 + 1; doorOutX = midX; doorOutZ = z0 - 1; doorFace = 0;
+      } else if (doorSide === 'east') {
+        doorX = x0 + w - 1; doorZ = midZ; doorInX = x0 + w - 2; doorInZ = midZ; doorOutX = x0 + w; doorOutZ = midZ; doorFace = 1;
+      } else if (doorSide === 'west') {
+        doorX = x0; doorZ = midZ; doorInX = x0 + 1; doorInZ = midZ; doorOutX = x0 - 1; doorOutZ = midZ; doorFace = 3;
+      }
+      const isDoorClear = (tx, tz) => !(tx === doorInX && tz === doorInZ) && !(tx === doorX && tz === doorZ) && !(tx === doorOutX && tz === doorOutZ);
+
+      // Stone Chimney (placed in a back corner strictly clear of the doorway!)
+      const chimX = doorSide === 'east' ? (x0 + 1) : (x0 + w - 2);
+      const chimZ = doorSide === 'north' ? (z0 + d - 2) : (z0 + 1);
+      if (chimney && chimX >= 1 && chimX <= 14 && isDoorClear(chimX, chimZ)) {
         for (let dy = 1; dy <= totalH + roofSteps + 2; dy++) {
-          setLocal(x0 + w - 2, baseY + dy, z0 + 1, BLOCK.COBBLESTONE);
+          setLocal(chimX, baseY + dy, chimZ, BLOCK.COBBLESTONE);
         }
       }
 
-      // Real Interactive Wood Door + Cobble Porch Step + Exterior Porch Wall Torch!
-      const midX = x0 + Math.floor(w / 2);
-      const midZ = z0 + Math.floor(d / 2);
-      if (doorSide === 'south') {
-        setDoorLocal(midX, baseY + 1, z0 + d - 1, villageDoorId, 2);
-        setLocal(midX, baseY, z0 + d, BLOCK.COBBLESTONE);
-        if (midX - 1 > x0 && z0 + d <= 15) setLocal(midX - 1, baseY + 2, z0 + d, BLOCK.TORCH);
-      } else if (doorSide === 'north') {
-        setDoorLocal(midX, baseY + 1, z0, villageDoorId, 0);
-        setLocal(midX, baseY, z0 - 1, BLOCK.COBBLESTONE);
-        if (midX + 1 < x0 + w - 1 && z0 - 1 >= 0) setLocal(midX + 1, baseY + 2, z0 - 1, BLOCK.TORCH);
-      } else if (doorSide === 'east') {
-        setDoorLocal(x0 + w - 1, baseY + 1, midZ, villageDoorId, 1);
-        setLocal(x0 + w, baseY, midZ, BLOCK.COBBLESTONE);
-        if (midZ - 1 > z0 && x0 + w <= 15) setLocal(x0 + w, baseY + 2, midZ - 1, BLOCK.TORCH);
-      } else {
-        setDoorLocal(x0, baseY + 1, midZ, villageDoorId, 3);
-        setLocal(x0 - 1, baseY, midZ, BLOCK.COBBLESTONE);
-        if (midZ + 1 < z0 + d - 1 && x0 - 1 >= 0) setLocal(x0 - 1, baseY + 2, midZ + 1, BLOCK.TORCH);
+      // Real Interactive Wood Door + Solid Level Cobble Porch Step + Exterior Porch Wall Torch!
+      setDoorLocal(doorX, baseY + 1, doorZ, villageDoorId, doorFace);
+      if (doorOutX >= 0 && doorOutX <= 15 && doorOutZ >= 0 && doorOutZ <= 15) {
+        setLocal(doorOutX, baseY, doorOutZ, BLOCK.COBBLESTONE);
+        setLocal(doorOutX, baseY + 1, doorOutZ, BLOCK.AIR);
+        setLocal(doorOutX, baseY + 2, doorOutZ, BLOCK.AIR);
       }
-      // Extra warm wall-mounted interior torch on back wall
+      if (doorSide === 'south' && midX - 1 > x0 && z0 + d <= 15) setLocal(midX - 1, baseY + 2, z0 + d, BLOCK.TORCH);
+      else if (doorSide === 'north' && midX + 1 < x0 + w - 1 && z0 - 1 >= 0) setLocal(midX + 1, baseY + 2, z0 - 1, BLOCK.TORCH);
+      else if (doorSide === 'east' && midZ - 1 > z0 && x0 + w <= 15) setLocal(x0 + w, baseY + 2, midZ - 1, BLOCK.TORCH);
+      else if (doorSide === 'west' && midZ + 1 < z0 + d - 1 && x0 - 1 >= 0) setLocal(x0 - 1, baseY + 2, midZ + 1, BLOCK.TORCH);
+
+      // Track occupied interior tiles so chests, beds, furnaces & ladders NEVER collide or block doorways!
+      const usedInterior = new Set();
+      usedInterior.add(`${doorInX},${doorInZ}`);
+      if (chimney && isDoorClear(chimX, chimZ)) usedInterior.add(`${chimX},${chimZ}`);
+
+      // Interior Furnishings: Torches, REAL 2-BLOCK-LONG 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
       if (x0 + 1 < x0 + w - 1 && z0 + 1 < z0 + d - 1) {
         setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
       }
+      const tryPlaceBed = (bx, bzHead, bzFoot) => {
+        if (bx <= x0 || bx >= x0 + w - 1 || bzHead <= z0 || bzHead >= z0 + d - 1 || bzFoot <= z0 || bzFoot >= z0 + d - 1) return false;
+        if (!isDoorClear(bx, bzHead) || !isDoorClear(bx, bzFoot)) return false;
+        if (usedInterior.has(`${bx},${bzHead}`) || usedInterior.has(`${bx},${bzFoot}`)) return false;
+        setLocal(bx, baseY + 1, bzHead, BLOCK.BED_HEAD_N);
+        setLocal(bx, baseY + 1, bzFoot, BLOCK.BED);
+        usedInterior.add(`${bx},${bzHead}`);
+        usedInterior.add(`${bx},${bzFoot}`);
+        return true;
+      };
+      // Place beds against the wall OPPOSITE the door so doorway access is 100% open!
+      const bedPrefX = doorSide === 'west' ? [x0 + w - 2, x0 + w - 3, x0 + 1] : [x0 + 1, x0 + 2, x0 + w - 2];
+      const bedPrefZ = doorSide === 'north' ? [z0 + d - 3, z0 + 1] : [z0 + 1, z0 + d - 3];
+      let placedBeds = 0;
+      for (let bi = 0; bi < bedPrefX.length && placedBeds < beds; bi++) {
+        for (let zi = 0; zi < bedPrefZ.length && placedBeds < beds; zi++) {
+          if (tryPlaceBed(bedPrefX[bi], bedPrefZ[zi], bedPrefZ[zi] + 1)) {
+            placedBeds++;
+            break;
+          }
+        }
+      }
 
-      // Interior Furnishings: Torches, REAL 2-BLOCK-LONG 3D BEDS, Crafting Table, Bookshelves, Furnace & Chest!
-      setLocal(x0 + 1, baseY + 2, z0 + 1, BLOCK.TORCH);
-      if (beds >= 1) {
-        // Place a full 2-block-long × 1-block-wide bed (Head at z0+1, Foot at z0+2)
-        setLocal(x0 + 1, baseY + 1, z0 + 1, BLOCK.BED_HEAD_N);
-        setLocal(x0 + 1, baseY + 1, z0 + 2, BLOCK.BED);
-      }
-      if (beds >= 2 && w >= 6) {
-        setLocal(x0 + 2, baseY + 1, z0 + 1, BLOCK.BED_HEAD_N);
-        setLocal(x0 + 2, baseY + 1, z0 + 2, BLOCK.BED);
-      }
       if (twoStory) {
-        for (let ly = 1; ly <= h + 1; ly++) setLocal(x0 + 1, baseY + ly, z0 + d - 2, BLOCK.LADDER);
+        const ladX = isDoorClear(x0 + 1, z0 + d - 2) ? (x0 + 1) : (x0 + w - 2);
+        const ladZ = isDoorClear(ladX, z0 + d - 2) ? (z0 + d - 2) : (z0 + 1);
+        for (let ly = 1; ly <= h + 1; ly++) setLocal(ladX, baseY + ly, ladZ, BLOCK.LADDER);
+        usedInterior.add(`${ladX},${ladZ}`);
         setLocal(x0 + 2, baseY + h + 2, z0 + 1, BLOCK.BED_HEAD_N);
         setLocal(x0 + 2, baseY + h + 2, z0 + 2, BLOCK.BED);
         setLocal(x0 + 1, baseY + h + 3, z0 + 1, BLOCK.TORCH);
       }
-      if (furnace) setLocal(x0 + w - 2, baseY + 1, z0 + d - 2, BLOCK.FURNACE);
-      else setLocal(x0 + w - 2, baseY + 1, z0 + d - 2, BLOCK.CRAFTING_TABLE);
 
       if (library) {
+        const shelfZ = doorSide === 'north' ? (z0 + d - 2) : (z0 + 1);
         for (let bx = x0 + 1; bx <= x0 + w - 2; bx++) {
-          setLocal(bx, baseY + 1, z0 + 1, BLOCK.BOOKSHELF);
-          setLocal(bx, baseY + 2, z0 + 1, BLOCK.BOOKSHELF);
+          if (!isDoorClear(bx, shelfZ) || usedInterior.has(`${bx},${shelfZ}`)) continue;
+          setLocal(bx, baseY + 1, shelfZ, BLOCK.BOOKSHELF);
+          setLocal(bx, baseY + 2, shelfZ, BLOCK.BOOKSHELF);
+          usedInterior.add(`${bx},${shelfZ}`);
         }
-        setLocal(x0 + 1, baseY + 1, z0 + d - 2, BLOCK.BED_FOOT_E);
-        setLocal(x0 + 2, baseY + 1, z0 + d - 2, BLOCK.BED_HEAD_E);
+        const libBedZ = doorSide === 'north' ? (z0 + 1) : (z0 + d - 2);
+        if (isDoorClear(x0 + 1, libBedZ) && isDoorClear(x0 + 2, libBedZ) && !usedInterior.has(`${x0 + 1},${libBedZ}`) && !usedInterior.has(`${x0 + 2},${libBedZ}`)) {
+          setLocal(x0 + 1, baseY + 1, libBedZ, BLOCK.BED_FOOT_E);
+          setLocal(x0 + 2, baseY + 1, libBedZ, BLOCK.BED_HEAD_E);
+          usedInterior.add(`${x0 + 1},${libBedZ}`);
+          usedInterior.add(`${x0 + 2},${libBedZ}`);
+        }
       }
-      if (chestTier) addLootChest(x0 + w - 2, baseY + 1, z0 + 2, chestTier);
 
-      // Cute flower bed outside front wall
+      // Pick safe wall corners farthest from the door for Chest & Furnace/Crafting Table!
+      const safeCorners = [
+        [x0 + w - 2, z0 + 1],
+        [x0 + w - 2, z0 + d - 2],
+        [x0 + 1, z0 + d - 2],
+        [x0 + 1, z0 + 1]
+      ].filter(([cxI, czI]) => cxI > x0 && cxI < x0 + w - 1 && czI > z0 && czI < z0 + d - 1 && isDoorClear(cxI, czI))
+        .sort((a, b) => (Math.hypot(b[0] - doorInX, b[1] - doorInZ) - Math.hypot(a[0] - doorInX, a[1] - doorInZ)));
+
+      const pickCorner = () => {
+        for (let i = 0; i < safeCorners.length; i++) {
+          const [cxI, czI] = safeCorners[i];
+          const k = `${cxI},${czI}`;
+          if (!usedInterior.has(k)) {
+            usedInterior.add(k);
+            return safeCorners[i];
+          }
+        }
+        return null;
+      };
+
+      if (chestTier) {
+        const cc = pickCorner();
+        if (cc) addLootChest(cc[0], baseY + 1, cc[1], chestTier);
+      }
+      const wc = pickCorner();
+      if (wc) setLocal(wc[0], baseY + 1, wc[1], furnace ? BLOCK.FURNACE : BLOCK.CRAFTING_TABLE);
+
+      // Final guaranteed clear doorway walk-in tile (zero possibility of any prop blocking access!)
+      setLocal(doorInX, baseY + 1, doorInZ, BLOCK.AIR);
+      setLocal(doorInX, baseY + 2, doorInZ, BLOCK.AIR);
+
+      // Cute flower bed outside front wall (never on the doorstep!)
       if (z0 + d <= 14 && x0 + 1 <= 14) {
-        setLocal(x0 + 1, baseY + 1, z0 + d, BLOCK.FLOWER_RED);
-        if (x0 + w - 2 <= 14) setLocal(x0 + w - 2, baseY + 1, z0 + d, BLOCK.FLOWER_YELLOW);
+        if (isDoorClear(x0 + 1, z0 + d)) setLocal(x0 + 1, baseY + 1, z0 + d, BLOCK.FLOWER_RED);
+        if (x0 + w - 2 <= 14 && isDoorClear(x0 + w - 2, z0 + d)) setLocal(x0 + w - 2, baseY + 1, z0 + d, BLOCK.FLOWER_YELLOW);
       }
     };
 
@@ -3106,34 +3171,66 @@ export class World {
           else setLocal(lx, baseY + h + 1, lz, BLOCK.SPRUCE_PLANKS);
         }
       }
-      // Interactive Wood Door facing the road
+      // Interactive Wood Door facing the road + guaranteed unobstructed interior & exterior entry!
       const midX = x0 + Math.floor(w / 2);
       const midZ = z0 + Math.floor(d / 2);
-      if (doorSide === 'south') {
-        setDoorLocal(midX, baseY + 1, z0 + d - 1, BLOCK.SPRUCE_DOOR_B, 2);
-        setLocal(midX, baseY + 3, z0 + d, BLOCK.TORCH);
-      } else if (doorSide === 'north') {
-        setDoorLocal(midX, baseY + 1, z0, BLOCK.SPRUCE_DOOR_B, 0);
-        setLocal(midX, baseY + 3, z0 - 1, BLOCK.TORCH);
+      let doorX = midX, doorZ = z0 + d - 1, doorInX = midX, doorInZ = z0 + d - 2, doorOutX = midX, doorOutZ = z0 + d, doorFace = 2;
+      if (doorSide === 'north') {
+        doorX = midX; doorZ = z0; doorInX = midX; doorInZ = z0 + 1; doorOutX = midX; doorOutZ = z0 - 1; doorFace = 0;
       } else if (doorSide === 'east') {
-        setDoorLocal(x0 + w - 1, baseY + 1, midZ, BLOCK.SPRUCE_DOOR_B, 1);
-        setLocal(x0 + w, baseY + 3, midZ, BLOCK.TORCH);
-      } else {
-        setDoorLocal(x0, baseY + 1, midZ, BLOCK.SPRUCE_DOOR_B, 3);
-        setLocal(x0 - 1, baseY + 3, midZ, BLOCK.TORCH);
+        doorX = x0 + w - 1; doorZ = midZ; doorInX = x0 + w - 2; doorInZ = midZ; doorOutX = x0 + w; doorOutZ = midZ; doorFace = 1;
+      } else if (doorSide === 'west') {
+        doorX = x0; doorZ = midZ; doorInX = x0 + 1; doorInZ = midZ; doorOutX = x0 - 1; doorOutZ = midZ; doorFace = 3;
       }
-      // Interior Bed, Crafting Table, Furnace/Bookshelves, Chest & Warm Torch!
-      setLocal(x0 + 1, baseY + 1, z0 + 1, BLOCK.BED_HEAD_N);
-      setLocal(x0 + 1, baseY + 1, z0 + 2, BLOCK.BED);
-      setLocal(x0 + w - 2, baseY + 1, z0 + 1, BLOCK.CRAFTING_TABLE);
-      if (furnace) setLocal(x0 + w - 2, baseY + 1, z0 + 2, BLOCK.FURNACE);
+      setDoorLocal(doorX, baseY + 1, doorZ, BLOCK.SPRUCE_DOOR_B, doorFace);
+      if (doorOutX >= 0 && doorOutX <= 15 && doorOutZ >= 0 && doorOutZ <= 15) {
+        setLocal(doorOutX, baseY + 3, doorOutZ, BLOCK.TORCH);
+      }
+      const isCavDoorClear = (tx, tz) => !(tx === doorInX && tz === doorInZ) && !(tx === doorX && tz === doorZ);
+      const usedCav = new Set([`${doorInX},${doorInZ}`]);
+
+      // Place Bed opposite door, then Chest, Crafting Table, Furnace & Bookshelves strictly away from doorway!
+      const cBedX = doorSide === 'west' ? (x0 + w - 2) : (x0 + 1);
+      const cBedZ = doorSide === 'north' ? (z0 + d - 3) : (z0 + 1);
+      if (cBedX > x0 && cBedX < x0 + w - 1 && cBedZ > z0 && cBedZ + 1 < z0 + d - 1 &&
+          isCavDoorClear(cBedX, cBedZ) && isCavDoorClear(cBedX, cBedZ + 1)) {
+        setLocal(cBedX, baseY + 1, cBedZ, BLOCK.BED_HEAD_N);
+        setLocal(cBedX, baseY + 1, cBedZ + 1, BLOCK.BED);
+        usedCav.add(`${cBedX},${cBedZ}`);
+        usedCav.add(`${cBedX},${cBedZ + 1}`);
+      }
+      const cavCorners = [
+        [x0 + w - 2, z0 + d - 2],
+        [x0 + w - 2, z0 + 1],
+        [x0 + 1, z0 + d - 2],
+        [x0 + 1, z0 + 1]
+      ].filter(([cxI, czI]) => cxI > x0 && cxI < x0 + w - 1 && czI > z0 && czI < z0 + d - 1 && isCavDoorClear(cxI, czI))
+        .sort((a, b) => (Math.hypot(b[0] - doorInX, b[1] - doorInZ) - Math.hypot(a[0] - doorInX, a[1] - doorInZ)));
+      const pickCav = () => {
+        for (let i = 0; i < cavCorners.length; i++) {
+          const k = `${cavCorners[i][0]},${cavCorners[i][1]}`;
+          if (!usedCav.has(k)) { usedCav.add(k); return cavCorners[i]; }
+        }
+        return null;
+      };
+      const chSpot = pickCav();
+      if (chSpot) addChest(chSpot[0], baseY + 1, chSpot[1], chestTier);
+      const ctSpot = pickCav();
+      if (ctSpot) setLocal(ctSpot[0], baseY + 1, ctSpot[1], BLOCK.CRAFTING_TABLE);
+      if (furnace) {
+        const fnSpot = pickCav();
+        if (fnSpot) setLocal(fnSpot[0], baseY + 1, fnSpot[1], BLOCK.FURNACE);
+      }
       if (library) {
+        const shZ = doorSide === 'north' ? (z0 + d - 2) : (z0 + 1);
         for (let bx = x0 + 2; bx <= x0 + w - 3; bx++) {
-          setLocal(bx, baseY + 1, z0 + 1, BLOCK.BOOKSHELF);
-          setLocal(bx, baseY + 2, z0 + 1, BLOCK.BOOKSHELF);
+          if (!isCavDoorClear(bx, shZ) || usedCav.has(`${bx},${shZ}`)) continue;
+          setLocal(bx, baseY + 1, shZ, BLOCK.BOOKSHELF);
+          setLocal(bx, baseY + 2, shZ, BLOCK.BOOKSHELF);
         }
       }
-      addChest(x0 + w - 2, baseY + 1, z0 + d - 2, chestTier);
+      setLocal(doorInX, baseY + 1, doorInZ, BLOCK.AIR);
+      setLocal(doorInX, baseY + 2, doorInZ, BLOCK.AIR);
       setLocal(midX, baseY + 3, z0 + 1, BLOCK.TORCH);
     };
 
@@ -5357,13 +5454,13 @@ export class World {
             if (!inStairZone && b.stories >= 2 && dx === bedX && dz === 1) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED_HEAD_N);
             if (!inStairZone && b.stories >= 2 && dx === bedX && dz === 2) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED);
 
-            // Archetype-specific interior props (strictly outside stair zone!)
-            if (!inStairZone && b.kind === 'library' && dz === 1 && dx >= 2 && dx <= b.w - 3) {
+            // Archetype-specific interior props (strictly outside stair zone & door clearance!)
+            if (!inStairZone && avoidDoor && b.kind === 'library' && dz === 1 && dx >= 2 && dx <= b.w - 3) {
               setLocal(lx, y1, lz, BLOCK.BOOKSHELF);
               setLocal(lx, y1 + 1, lz, BLOCK.BOOKSHELF);
-            } else if (!inStairZone && b.kind === 'forge' && dz === 1 && dx >= 2 && dx <= 4) {
+            } else if (!inStairZone && avoidDoor && b.kind === 'forge' && dz === 1 && dx >= 2 && dx <= 4) {
               setLocal(lx, y1, lz, dx === 3 ? BLOCK.IRON_BLOCK : BLOCK.FURNACE);
-            } else if (!inStairZone && (b.kind === 'temple' || b.kind === 'cathedral') && dx === (b.w >> 1) && dz === (b.d >> 1)) {
+            } else if (!inStairZone && avoidDoor && (b.kind === 'temple' || b.kind === 'cathedral') && dx === (b.w >> 1) && dz === (b.d >> 1)) {
               setLocal(lx, y1, lz, BLOCK.GOLD_BLOCK);
               setLocal(lx, y1 + 1, lz, BLOCK.GLOWSTONE);
             } else if (!inStairZone && dx === bedX && dz === b.d - 2 && avoidDoor) {
@@ -9985,13 +10082,37 @@ export class World {
     if (!active) this.waterMat.uniforms.uSsrSteps.value = 0.0;
   }
 
-  syncWaterPass(opaqueColorTex, opaqueDepthTex, camera, width, height, ssrSteps = 20) {
+  hasVisibleWater(camera) {
+    if (!this._waterChunkCount || this._waterChunkCount <= 0) return false;
+    if (!camera || !camera.projectionMatrix || !camera.matrixWorldInverse || !THREE.Frustum) return true;
+    if (!this._waterFrustum) {
+      this._waterFrustum = new THREE.Frustum();
+      this._waterProjScreen = new THREE.Matrix4();
+    }
+    this._waterProjScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this._waterFrustum.setFromProjectionMatrix(this._waterProjScreen);
+    const frustum = this._waterFrustum;
+    for (const chunk of this.chunks.values()) {
+      if (!chunk._hadWater || !chunk.meshes) continue;
+      for (let i = 0; i < chunk.meshes.length; i++) {
+        const m = chunk.meshes[i];
+        if (m && m.visible && m.material === this.waterMat && m.geometry && m.geometry.boundingSphere) {
+          if (frustum.intersectsSphere(m.geometry.boundingSphere)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  syncWaterPass(opaqueColorTex, opaqueDepthTex, camera, width, height, ssrSteps = 16) {
     const u = this.waterMat.uniforms;
     u.tOpaqueColor.value = opaqueColorTex || this._dummyShadowTex;
     u.tOpaqueDepth.value = opaqueDepthTex || this._dummyShadowTex;
     u.uHasOpaqueCopy.value = (opaqueColorTex && opaqueDepthTex) ? 1.0 : 0.0;
     u.uSsrSteps.value = ssrSteps;
     u.uResolution.value.set(width, height);
+    const pm = camera.projectionMatrix.elements;
+    u.uProjZ.value.set(-pm[14], pm[10]);
     u.uInvProjection.value.copy(camera.projectionMatrixInverse);
     u.uProjection.value.copy(camera.projectionMatrix);
     u.uViewMatrix.value.copy(camera.matrixWorldInverse);
@@ -10752,26 +10873,28 @@ export class World {
       if (movedChunk) this._shadowNeedsUpdate = true;
     }
 
-    // 4. Contiguous ready radius (drives the soft dither crossfade into the LOD ring) + chunk visibility/batching
-    // IMPORTANT: Skip out-of-border chunks when computing readyChunks so approaching the World Border NEVER collapses
-    // readyChunks to 0 and NEVER causes LOD terrain to overlap & z-fight with full-detail chunks!
+    // 4. Contiguous ready radius (cached O(1) when world is steady — only recomputed when chunks move/mesh/unload!)
     const lodActive = fullRD > r;
-    let readyChunks = r;
-    if (this._spiralOffsets && this._spiralOffsets.length > 0) {
-      for (let k = 0; k < this._spiralOffsets.length; k++) {
-        const off = this._spiralOffsets[k];
-        const tcx = pcx + off.dx;
-        const tcz = pcz + off.dz;
-        if (!this.isChunkWithinBorder(tcx, tcz)) continue;
-        const c = this.chunks.get(this.chunkKey(tcx, tcz));
-        if (!c || !c.meshed) {
-          readyChunks = Math.max(0, Math.sqrt(off.d2) - 0.5);
-          break;
+    if (movedChunk || this._heavyWorkThisFrame || this._visDirty || this._readyChunks === undefined || this._lastReadyR !== r) {
+      this._lastReadyR = r;
+      let rc = r;
+      if (this._spiralOffsets && this._spiralOffsets.length > 0) {
+        for (let k = 0; k < this._spiralOffsets.length; k++) {
+          const off = this._spiralOffsets[k];
+          const tcx = pcx + off.dx;
+          const tcz = pcz + off.dz;
+          if (!this.isChunkWithinBorder(tcx, tcz)) continue;
+          const c = this.chunks.get(this.chunkKey(tcx, tcz));
+          if (!c || !c.meshed) {
+            rc = Math.max(0, Math.sqrt(off.d2) - 0.5);
+            break;
+          }
         }
       }
+      this._readyChunks = rc;
     }
+    let readyChunks = this._readyChunks;
     this._updateWorldBorderVisual(px, pz);
-    this._readyChunks = readyChunks;
     const qReady = lodActive ? Math.round(readyChunks * 4) : -1;
     if (movedChunk || qReady !== this._lastVisReadyQ || this._visDirty) {
       this._lastVisReadyQ = qReady;

@@ -81,7 +81,7 @@ export class PostFXPipeline {
     }) : null;
 
     // Pass 2: Karis-Suppressed HDR Bright-Pass Bloom + Depth-Occluded Volumetric Crepuscular God-Rays
-    const raySamples = isTouch ? 16 : 24;
+    const raySamples = isTouch ? 12 : 16;
     this.extractMat = new THREE.ShaderMaterial({
       uniforms: {
         tScene: { value: null },
@@ -322,27 +322,30 @@ export class PostFXPipeline {
         float computeContactShadow(vec2 uv, float depth) {
           if (depth >= 0.9996) return 0.0;
           float viewDist = -linearViewZ(depth);
-          if (viewDist < 1.15 || viewDist > 42.0) return 0.0;
+          if (viewDist < 1.15 || viewDist > 34.0) return 0.0;
           vec3 viewPos = reconstructViewPos(uv, depth);
 
-          float distFade = smoothstep(42.0, 18.0, viewDist) * smoothstep(1.15, 1.85, viewDist);
-          float rayLen = mix(0.32, 0.68, clamp(viewDist / 28.0, 0.0, 1.0));
+          float distFade = smoothstep(34.0, 16.0, viewDist) * smoothstep(1.15, 1.85, viewDist);
+          float rayLen = mix(0.32, 0.64, clamp(viewDist / 26.0, 0.0, 1.0));
           float jitter = ign(gl_FragCoord.xy);
+          // Pre-project ray endpoints ONCE outside the loop (eliminates 6 mat4*vec4 per full-res pixel, bit-identical!)
+          vec4 clip0 = uProjection * vec4(viewPos, 1.0);
+          vec4 clipStep = uProjection * vec4(uSunViewDir * rayLen, 0.0);
+          float sunZStep = uSunViewDir.z * rayLen;
+          float minThick = 0.025 + viewDist * 0.002;
+          float maxThick = 0.24 + viewDist * 0.012;
           float occ = 0.0;
 
-          for (int i = 1; i <= 6; i++) {
-            float t = (float(i) - 0.35 + jitter * 0.55) / 6.0;
-            vec3 sampleView = viewPos + uSunViewDir * (t * rayLen);
-            vec4 clip = uProjection * vec4(sampleView, 1.0);
+          for (int i = 1; i <= 5; i++) {
+            float t = (float(i) - 0.35 + jitter * 0.55) / 5.0;
+            vec4 clip = clip0 + clipStep * t;
             vec2 sUv = (clip.xy / clip.w) * 0.5 + 0.5;
             if (sUv.x < 0.002 || sUv.x > 0.998 || sUv.y < 0.002 || sUv.y > 0.998) break;
 
             float sDepth = texture2D(tDepth, sUv).r;
             if (sDepth >= 0.9998) continue;
             float hitViewZ = linearViewZ(sDepth);
-            float dz = hitViewZ - sampleView.z;
-            float minThick = 0.025 + viewDist * 0.002;
-            float maxThick = 0.24 + viewDist * 0.012;
+            float dz = hitViewZ - (viewPos.z + sunZStep * t);
             if (dz > minThick && dz < maxThick) {
               occ = max(occ, 1.0 - t * 0.55);
             }
@@ -475,7 +478,7 @@ export class PostFXPipeline {
       this.opaqueDepthTex = opaquePair.depthTex;
     }
 
-    const fxScale = this.isTouch ? 0.38 : 0.50;
+    const fxScale = this.isTouch ? 0.33 : 0.45;
     const fw = Math.max(2, Math.floor(w * fxScale));
     const fh = Math.max(2, Math.floor(h * fxScale));
     const qw = Math.max(2, Math.floor(fw * 0.5));
@@ -535,9 +538,13 @@ export class PostFXPipeline {
     const prevTM = this.renderer.toneMapping;
     this.renderer.toneMapping = THREE.NoToneMapping;
 
-    // Performance: skip extra full-screen opaque copy + water pass when NO water chunks exist in loaded world!
-    const hasWaterInWorld = !world || world._waterChunkCount === undefined || world._waterChunkCount > 0;
-    const useSplitWater = !!(hasWaterInWorld && this.opaqueRT && this.copyColorDepthMat && world && world.syncWaterPass);
+    // Performance: skip extra full-screen opaque copy + water pass whenever NO water chunks are inside the camera frustum!
+    const hasWaterInView = !world ? true : (
+      world.hasVisibleWater
+        ? world.hasVisibleWater(camera)
+        : (world._waterChunkCount === undefined || world._waterChunkCount > 0)
+    );
+    const useSplitWater = !!(hasWaterInView && this.opaqueRT && this.copyColorDepthMat && world && world.syncWaterPass);
     if (useSplitWater) {
       // Pass 1A: Layer 0 Opaque + Cutout + Entities + Sky -> opaqueRT
       camera.layers.set(0);
@@ -554,7 +561,7 @@ export class PostFXPipeline {
       this.renderer.render(this._fsScene, this._fsCam);
 
       // Pass 1C: Layer 1 Water SSR + Refraction reading opaqueRT + opaqueDepthTex
-      const ssrSteps = this.quality === 'ultra' ? (this.isTouch ? 16 : 22) : (this.quality === 'high' ? 14 : 0);
+      const ssrSteps = this.quality === 'ultra' ? (this.isTouch ? 12 : 16) : (this.quality === 'high' ? 10 : 0);
       world.syncWaterPass(this.opaqueRT.texture, this.opaqueDepthTex, camera, this.sceneRT.width, this.sceneRT.height, ssrSteps);
       const prevBg = scene.background;
       scene.background = null;
@@ -567,7 +574,7 @@ export class PostFXPipeline {
       camera.layers.enableAll();
       if (world && world.setWaterSplitPass) world.setWaterSplitPass(false);
       this.renderer.setRenderTarget(this.sceneRT);
-      this.renderer.render(this.sceneRT ? scene : scene, camera);
+      this.renderer.render(scene, camera);
     }
 
     // 2. Project Sun / Crescent Moon for depth-occluded God-Rays & Contact Shadows

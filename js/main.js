@@ -214,14 +214,14 @@ class BlockCraftGame {
     const farLod = this.settings.renderDistance > 256;
     if (this.isTouch) {
       if (sh === 'low') return 1.0;
-      if (sh === 'medium') return farLod ? 1.0 : 1.1;
-      if (sh === 'high') return farLod ? 1.05 : 1.2;
-      return farLod ? 1.15 : 1.3;
+      if (sh === 'medium') return 1.0;
+      if (sh === 'high') return farLod ? 1.0 : 1.1;
+      return farLod ? 1.05 : 1.2;
     }
-    if (sh === 'low') return 1.15;
-    if (sh === 'medium') return 1.25;
-    if (sh === 'high') return 1.35;
-    return 1.5;
+    if (sh === 'low') return 1.1;
+    if (sh === 'medium') return 1.15;
+    if (sh === 'high') return 1.25;
+    return 1.35;
   }
 
   onResize() {
@@ -2305,33 +2305,34 @@ class BlockCraftGame {
         this.saveCurrentWorld(false);
       }
 
-      // Adaptive Dynamic Resolution Scaling (DRS) & Auto-Quality Governor for silky Apple Silicon iPad playability!
+      // Proactive 60-FPS Adaptive Dynamic Resolution Scaling (DRS) & Shadow Governor for locked 60 FPS on ALL devices!
       if (this.settings.adaptiveQuality !== false && this.postfx && this.postfx.enabled) {
         this._drsTimer += dt;
-        if (this._drsTimer >= 1.25) {
+        if (this._drsTimer >= 0.9) {
           this._drsTimer = 0;
-          const minScale = this.isTouch ? 0.68 : 0.75;
-          if (this._avgFrameMs > 23.5) {
+          const minScale = this.isTouch ? 0.60 : 0.68;
+          if (this._avgFrameMs > 18.2) {
             this._drsGoodStreak = 0;
             this._drsBadStreak++;
-            if (this.postfx.renderScale > minScale + 0.04) {
-              this.postfx.setRenderScale(Math.max(minScale, this.postfx.renderScale - 0.10));
-            } else if (this._avgFrameMs > 30.0 && this._drsBadStreak >= 3) {
+            if (this.postfx.renderScale > minScale + 0.03) {
+              const step = this._avgFrameMs > 24.0 ? 0.10 : 0.05;
+              this.postfx.setRenderScale(Math.max(minScale, this.postfx.renderScale - step));
+            } else if (this._avgFrameMs > 25.0 && this._drsBadStreak >= 4) {
               const curQ = this.settings.shaders || 'ultra';
               const nextQ = curQ === 'ultra' ? 'high' : (curQ === 'high' ? 'medium' : null);
               if (nextQ) {
                 this._drsBadStreak = 0;
                 this.settings.shaders = nextQ;
-                this.postfx.setRenderScale(0.90);
+                this.postfx.setRenderScale(0.85);
                 this.applySettings();
                 this.ui.syncSettingsUI(this.settings);
-                this.ui.toast(`Auto-Performance: Scaled graphics to ${nextQ.toUpperCase()} for smooth FPS`);
+                this.ui.toast(`Auto-Performance: Scaled graphics to ${nextQ.toUpperCase()} for 60 FPS`);
               }
             }
-          } else if (this._avgFrameMs < 18.0) {
+          } else if (this._avgFrameMs < 15.2) {
             this._drsBadStreak = 0;
             this._drsGoodStreak++;
-            if (this._drsGoodStreak >= 3 && this.postfx.renderScale < 0.99) {
+            if (this._drsGoodStreak >= 4 && this.postfx.renderScale < 0.99) {
               this._drsGoodStreak = 0;
               this.postfx.setRenderScale(Math.min(1.0, this.postfx.renderScale + 0.05));
             }
@@ -2342,10 +2343,11 @@ class BlockCraftGame {
         }
       }
 
-      // Staggered shadow map refresh cadence (never stacks on top of heavy chunk mesh/batch upload frames!)
+      // Dynamic staggered shadow map refresh cadence (adapts to frame time & never stacks on heavy chunk upload frames!)
       if (this.renderer.shadowMap.enabled) {
         this._shadowFrame++;
-        const shadowStride = this.isTouch ? 4 : (this.settings.shaders === 'ultra' ? 2 : 3);
+        const baseStride = this.isTouch ? 5 : (this.settings.shaders === 'ultra' ? 3 : 4);
+        const shadowStride = this._avgFrameMs > 18.0 ? (baseStride + 2) : baseStride;
         const wantShadowTick = this.world._shadowNeedsUpdate || (this._shadowFrame % shadowStride) === 0;
         if (wantShadowTick && (!this.world._heavyWorkThisFrame || this._shadowFrame % (shadowStride * 2) === 0)) {
           this.renderer.shadowMap.needsUpdate = true;

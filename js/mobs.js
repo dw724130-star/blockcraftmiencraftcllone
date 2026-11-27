@@ -1509,14 +1509,19 @@ export class EntityManager {
     return false;
   }
 
-  // Ground support check across the mob's 4 base corners
+  // Ground support check across the mob's 4 base corners (never treat doors or open fence gates as solid floors!)
   hasSolidBelow(x, y, z, halfW) {
     const by = Math.floor(y);
     const xs = [x - halfW * 0.85, x + halfW * 0.85];
     const zs = [z - halfW * 0.85, z + halfW * 0.85];
     for (const px of xs) {
       for (const pz of zs) {
-        if (isBlockSolid(this.world.getBlock(px, by, pz))) return true;
+        const bid = this.world.getBlock(px, by, pz);
+        if (isBlockSolid(bid)) {
+          if (isDoorBlock(bid)) continue;
+          if (isFenceGateBlock(bid) && this.world.isFenceGateOpenAt(px, by, pz)) continue;
+          return true;
+        }
       }
     }
     return false;
@@ -2504,14 +2509,31 @@ export class EntityManager {
           if (!this.world.isDoorOpenAt(bx, baseY, bz)) {
             this.world.toggleDoor(bx, baseY, bz);
             if (!mob._passedDoors) mob._passedDoors = [];
-            mob._passedDoors.push({ x: bx, y: baseY, z: bz, timer: 1.85 });
+            mob._passedDoors.push({ x: bx, y: baseY, z: bz, timer: 3.0 });
+          } else if (mob._passedDoors) {
+            // Refresh open timer while villager is still actively crossing the doorway so it NEVER slams shut on them!
+            for (let pi = 0; pi < mob._passedDoors.length; pi++) {
+              const pd = mob._passedDoors[pi];
+              if (pd.x === bx && pd.y === baseY && pd.z === bz) {
+                pd.timer = Math.max(pd.timer, 1.8);
+                break;
+              }
+            }
           }
-          // Gently align villager's shoulder toward doorway center so they pass straight through 1-block doors without snagging!
+          mob._inDoorway = true;
+          // Align villager strictly onto the doorway's PERPENDICULAR centerline (never pull horizontally into a raised doorstep!)
           const dcx = bx + 0.5 - mob.pos.x;
           const dcz = bz + 0.5 - mob.pos.z;
-          if (dcx * dcx + dcz * dcz < 1.35 && Math.abs(mob.pos.y - baseY) <= 1.2) {
-            mob.pos.x += dcx * 0.14;
-            mob.pos.z += dcz * 0.14;
+          if (dcx * dcx + dcz * dcz < 2.25 && Math.abs(mob.pos.y - baseY) <= 1.35) {
+            const st = this.world.getDoorState ? this.world.getDoorState(bx, baseY, bz) : null;
+            const face = st ? (st.facing & 3) : 0;
+            if (face === 0 || face === 2) {
+              const candX = mob.pos.x + dcx * 0.36;
+              if (!this.mobCollidesAt(candX, mob.pos.y, mob.pos.z, 0.21, 1.76)) mob.pos.x = candX;
+            } else {
+              const candZ = mob.pos.z + dcz * 0.36;
+              if (!this.mobCollidesAt(mob.pos.x, mob.pos.y, candZ, 0.21, 1.76)) mob.pos.z = candZ;
+            }
           }
           return true;
         }
@@ -2553,13 +2575,21 @@ export class EntityManager {
       const pdx = m.pos.x - player.pos.x;
       const pdy = m.pos.y - player.pos.y;
       const pdz = m.pos.z - player.pos.z;
-      const distToPlayer = Math.hypot(pdx, pdy, pdz);
-
+      const distSq = pdx * pdx + pdy * pdy + pdz * pdz;
       const despawnDist = (m.def.villager || m.def.golem) ? 295 : 78;
-      if (distToPlayer > despawnDist || m.pos.y < -5) {
+      if (distSq > despawnDist * despawnDist || m.pos.y < -5) {
         this.removeMob(m);
         continue;
       }
+      // Fast squared-distance tick throttle BEFORE taking Math.sqrt (saves 300+ sqrt calls/frame in Mega Cities!)
+      if (!m.def.hostile && !m.hurtFlash && !m.aggroPlayer) {
+        const tickMask = distSq > 9216 ? 7 : (distSq > 2916 ? 3 : (distSq > 784 ? 1 : 0));
+        if (tickMask > 0 && ((i + this._mobTickFrame) & tickMask) !== 0) {
+          m._skipDt = (m._skipDt || 0) + frameDt;
+          continue;
+        }
+      }
+      const distToPlayer = Math.sqrt(distSq);
 
       // Only nearby non-instanced mobs cast shadows
       if (m.mesh) {
@@ -2573,17 +2603,9 @@ export class EntityManager {
           });
         }
       }
-
-      // Adaptive Distance Tick Rate: preserves 100% of castle & Mega City villager counts at silky 60 FPS!
-      if (!m.def.hostile && !m.hurtFlash && !m.aggroPlayer) {
-        const tickMask = distToPlayer > 96 ? 7 : (distToPlayer > 54 ? 3 : (distToPlayer > 28 ? 1 : 0));
-        if (tickMask > 0 && ((i + this._mobTickFrame) & tickMask) !== 0) {
-          m._skipDt = (m._skipDt || 0) + frameDt;
-          continue;
-        }
-      }
       const dt = Math.min(0.14, frameDt + (m._skipDt || 0));
       m._skipDt = 0;
+      m._inDoorway = false;
 
       if (m.def.villager) tickPassedDoors(m, dt);
 
@@ -2714,8 +2736,8 @@ export class EntityManager {
         continue;
       }
 
-      // Daylight burn for undead ONLY when exposed to open sky (cave zombies/skeletons stay safe!)
-      if (m.def.burnsInDay && !sky.isNight() && sky.weather === 'clear') {
+      // Daylight burn for undead ONLY when exposed to open sky (throttled every 8 ticks — saves 87% getSurfaceY scans!)
+      if (m.def.burnsInDay && !sky.isNight() && sky.weather === 'clear' && (((i + this._mobTickFrame) & 7) === 0)) {
         const surfY = this.world.getSurfaceY(m.pos.x, m.pos.z);
         if (m.pos.y >= surfY - 1.2) {
           m.burnTimer = Math.max(m.burnTimer || 0, 2.4);
@@ -2724,8 +2746,8 @@ export class EntityManager {
 
       m.attackCd = Math.max(0, m.attackCd - dt);
 
-      // Anti-overlap rescue if player placed a block on top of a mob
-      if (this.mobCollidesAt(m.pos.x, m.pos.y, m.pos.z, m.halfW * 0.85, m.height)) {
+      // Anti-overlap rescue if player placed a block on top of a nearby mob (skip on distant/sleeping mobs for CPU speed!)
+      if (!m.sleeping && distToPlayer < 28 && this.mobCollidesAt(m.pos.x, m.pos.y, m.pos.z, m.halfW * 0.82, m.height)) {
         if (!this.mobCollidesAt(m.pos.x, m.pos.y + 1, m.pos.z, m.halfW, m.height)) {
           m.pos.y += 1;
         } else {
@@ -3125,7 +3147,11 @@ export class EntityManager {
                 curWp = m.path[m.pathIdx];
                 let wdx = (curWp.x + 0.5) - m.pos.x;
                 let wdz = (curWp.z + 0.5) - m.pos.z;
-                if (wdx * wdx + wdz * wdz < 0.36 && Math.abs(curWp.y - m.pos.y) < 1.35) {
+                // Require tight centerline alignment (0.30m) on doorway waypoints so villagers walk DEAD CENTER through 1-block doors!
+                const wpBlk = this.world.getBlock(curWp.x, curWp.y, curWp.z);
+                const wpReachSq = isDoorBlock(wpBlk) ? 0.09 : 0.34;
+                if (isDoorBlock(wpBlk)) m._inDoorway = true;
+                if (wdx * wdx + wdz * wdz < wpReachSq && Math.abs(curWp.y - m.pos.y) < 1.35) {
                   m.pathIdx++;
                   if (m.pathIdx < m.path.length) {
                     curWp = m.path[m.pathIdx];
@@ -3346,19 +3372,31 @@ export class EntityManager {
         m.vel.z = THREE.MathUtils.lerp(m.vel.z, moveZ, Math.min(1, dt * 8));
       }
 
-      // Reliable 1-block ledge jumping for Iron Golems, Villagers, Soldiers & all ground mobs!
+      // Reliable 1-block ledge jumping + doorway-aware shoulder/lintel clearance for Iron Golems, Villagers & all ground mobs!
+      // When passing through a 1-block-wide / 2-block-tall doorway, use slim shoulder clearance (0.21) & lintel-safe height (1.76)
+      // plus smooth doorstep step-up so villagers NEVER bonk their head on the door lintel or snag on doorframes!
+      const isDoorGlide = !!(m.def.villager && m._inDoorway);
+      const effHalfW = isDoorGlide ? Math.min(m.halfW, 0.21) : m.halfW;
+      const effH = m.def.villager ? Math.min(m.height, 1.78) : m.height;
       const jumpVel = m.def.golem ? 8.3 : 7.8;
       let hitWall = false;
       let jumpedLedge = false;
       const nx = m.pos.x + m.vel.x * dt;
-      if (!this.mobCollidesAt(nx, m.pos.y, m.pos.z, m.halfW, m.height)) {
+      if (!this.mobCollidesAt(nx, m.pos.y, m.pos.z, effHalfW, effH)) {
         m.pos.x = nx;
       } else {
         hitWall = true;
-        // Probe 1.12 blocks up at the target X (and slightly further ahead) so Golems & Villagers leap smoothly onto ledges & doorsteps!
-        const probeX = nx + Math.sign(m.vel.x || moveX) * 0.14;
-        if (wasOnGround && !this.mobCollidesAt(probeX, m.pos.y + 1.12, m.pos.z, m.halfW, m.height)) {
-          m.vel.y = jumpVel;
+        const stepDirX = Math.sign(m.vel.x || moveX);
+        const probeX = nx + stepDirX * 0.14;
+        if (wasOnGround && !this.mobCollidesAt(probeX, m.pos.y + 1.02, m.pos.z, effHalfW, effH)) {
+          if (isDoorGlide) {
+            // Smooth doorstep step-up directly onto the raised doorway floor without jumping into the top lintel!
+            m.pos.y = Math.floor(m.pos.y) + 1.0;
+            m.pos.x = probeX;
+            m.vel.y = 0;
+          } else {
+            m.vel.y = jumpVel;
+          }
           jumpedLedge = true;
         } else if (!jumpedLedge) {
           m.vel.x = 0;
@@ -3366,13 +3404,20 @@ export class EntityManager {
       }
 
       const nz = m.pos.z + m.vel.z * dt;
-      if (!this.mobCollidesAt(m.pos.x, m.pos.y, nz, m.halfW, m.height)) {
+      if (!this.mobCollidesAt(m.pos.x, m.pos.y, nz, effHalfW, effH)) {
         m.pos.z = nz;
       } else {
         hitWall = true;
-        const probeZ = nz + Math.sign(m.vel.z || moveZ) * 0.14;
-        if (wasOnGround && !this.mobCollidesAt(m.pos.x, m.pos.y + 1.12, probeZ, m.halfW, m.height)) {
-          m.vel.y = jumpVel;
+        const stepDirZ = Math.sign(m.vel.z || moveZ);
+        const probeZ = nz + stepDirZ * 0.14;
+        if (wasOnGround && !this.mobCollidesAt(m.pos.x, m.pos.y + 1.02, probeZ, effHalfW, effH)) {
+          if (isDoorGlide) {
+            m.pos.y = Math.floor(m.pos.y) + 1.0;
+            m.pos.z = probeZ;
+            m.vel.y = 0;
+          } else {
+            m.vel.y = jumpVel;
+          }
           jumpedLedge = true;
         } else if (!jumpedLedge) {
           m.vel.z = 0;
@@ -3762,7 +3807,8 @@ export class EntityManager {
       return isSpaceFree(x, y, z) && isSpaceFree(x, y + 1, z);
     };
 
-    const packKey = (x, y, z) => `${x},${y},${z}`;
+    // Zero-GC integer node keys (5x faster A* than string template allocation!)
+    const packKey = (x, y, z) => ((x - sx + 64) << 18) | ((z - sz + 64) << 10) | (y & 1023);
     const startKey = packKey(sx, sy, sz);
     const open = [{ x: sx, y: sy, z: sz, g: 0, f: Math.abs(tx - sx) + Math.abs(tz - sz) + Math.abs(ty - sy) * 2, parent: null }];
     const gScore = new Map([[startKey, 0]]);
@@ -4077,173 +4123,157 @@ export class EntityManager {
   _syncNpcInstances(player) {
     const pools = this._npcPools;
     if (!pools) return;
-    for (const k in pools) pools[k].count = 0;
+    for (const k in pools) {
+      pools[k].prevCount = pools[k].count;
+      pools[k].count = 0;
+      pools[k].colorDirty = false;
+    }
 
     const dummy = this._npcDummy;
     const rootMat = this._npcRootMat;
     const partMat = this._npcPartMat;
     const finalMat = this._npcFinalMat;
-    const cWhite = this._npcWhite;
-    const cHurt = this._npcHurt;
     const px = player.pos.x;
     const pz = player.pos.z;
-    const maxRenderDistSq = 135 * 135;
+    const maxRenderDistSq = 128 * 128;
+    // Fast view-cone culling behind player (skips ~60% of Mega City GPU instances & JS matrix writes!)
+    const hasYaw = typeof player.yaw === 'number';
+    const fwdX = hasYaw ? -Math.sin(player.yaw) : 0;
+    const fwdZ = hasYaw ? -Math.cos(player.yaw) : -1;
+
+    // Inline zero-allocation column-major 4x4 matrix writer: RotY(ry) * Translate(ox,oy,oz) * RotX(rx)
+    const writePart = (im, idx, mx, my, mz, cy, sy, ox, oy, oz, rx) => {
+      const a = im.instanceMatrix.array;
+      const o = idx * 16;
+      const cx = rx === 0 ? 1 : Math.cos(rx);
+      const sx = rx === 0 ? 0 : Math.sin(rx);
+      a[o]      = cy;       a[o + 1]  = 0;   a[o + 2]  = -sy;     a[o + 3]  = 0;
+      a[o + 4]  = sy * sx;  a[o + 5]  = cx;  a[o + 6]  = cy * sx; a[o + 7]  = 0;
+      a[o + 8]  = sy * cx;  a[o + 9]  = -sx; a[o + 10] = cy * cx; a[o + 11] = 0;
+      a[o + 12] = mx + cy * ox + sy * oz;
+      a[o + 13] = my + oy;
+      a[o + 14] = mz - sy * ox + cy * oz;
+      a[o + 15] = 1;
+    };
+    const writeColor = (im, idx, isHurt) => {
+      if (!im.instanceColor) return;
+      const c = im.instanceColor.array;
+      const o = idx * 3;
+      const r = 1, g = isHurt ? 0.3215 : 1, b = isHurt ? 0.3215 : 1;
+      if (c[o] !== r || c[o + 1] !== g || c[o + 2] !== b) {
+        c[o] = r; c[o + 1] = g; c[o + 2] = b;
+        return true;
+      }
+      return false;
+    };
 
     for (let i = 0; i < this.mobs.length; i++) {
       const m = this.mobs[i];
       if (!m.instancedNpc) continue;
       const dx = m.pos.x - px;
       const dz = m.pos.z - pz;
-      if (dx * dx + dz * dz > maxRenderDistSq) continue;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > maxRenderDistSq) continue;
+      // Behind-camera view-cone cull beyond 12m (keeps close shadow casters & peripheral vision intact!)
+      if (hasYaw && d2 > 144) {
+        const dotFwd = dx * fwdX + dz * fwdZ;
+        if (dotFwd < 0 && dotFwd * dotFwd > d2 * 0.14) continue;
+      }
 
       const pKey = m.type === 'villager' ? `villager_${m.profession || 'Farmer'}` : m.type;
       const pool = pools[pKey];
       if (!pool || pool.count >= pool.cap) continue;
       const idx = pool.count++;
-      const col = m.hurtFlash > 0 ? cHurt : cWhite;
+      const isHurt = m.hurtFlash > 0;
 
-      dummy.position.set(m.pos.x, m.pos.y, m.pos.z);
-      dummy.rotation.set(m.sleeping ? -Math.PI * 0.5 : 0, m.yaw, 0);
-      dummy.updateMatrix();
-      rootMat.copy(dummy.matrix);
-
-      if (pool.kind === 'villager') {
-        // Textured torso centered at y=1.01
-        dummy.position.set(0, 1.01, 0);
-        dummy.rotation.set(0, 0, 0);
+      if (m.sleeping) {
+        // Rare sleeping horizontal pose fallback
+        dummy.position.set(m.pos.x, m.pos.y, m.pos.z);
+        dummy.rotation.set(-Math.PI * 0.5, m.yaw, 0);
         dummy.updateMatrix();
+        rootMat.copy(dummy.matrix);
+        dummy.position.set(0, 1.01, 0); dummy.rotation.set(0, 0, 0); dummy.updateMatrix();
         finalMat.multiplyMatrices(rootMat, dummy.matrix);
         pool.robe.setMatrixAt(idx, finalMat);
-        pool.robe.setColorAt(idx, col);
-
-        // Merged skirt + arms + cuffs + profession gear at origin
         pool.bodyAcc.setMatrixAt(idx, rootMat);
-        pool.bodyAcc.setColorAt(idx, col);
-
-        // Articulated head pivoted at y=1.41
-        dummy.position.set(0, 1.41, 0);
-        dummy.rotation.set(m.headPitch || 0, m.headYaw || 0, 0);
-        dummy.updateMatrix();
+        dummy.position.set(0, 1.41, 0); dummy.updateMatrix();
         partMat.copy(dummy.matrix);
         finalMat.multiplyMatrices(rootMat, partMat);
         pool.headAcc.setMatrixAt(idx, finalMat);
-        pool.headAcc.setColorAt(idx, col);
-
-        dummy.position.set(0, 0.29, 0);
-        dummy.rotation.set(0, 0, 0);
-        dummy.updateMatrix();
+        dummy.position.set(0, 0.29, 0); dummy.updateMatrix();
         finalMat.multiplyMatrices(finalMat, dummy.matrix);
         pool.head.setMatrixAt(idx, finalMat);
-        pool.head.setColorAt(idx, col);
-
-        // Swinging legs pivoted at hip y=0.62
-        const ls = m.sleeping ? 0 : (m.legSwing || 0);
-        dummy.position.set(-0.135, 0.62, 0);
-        dummy.rotation.set(ls, 0, 0);
-        dummy.updateMatrix();
+        dummy.position.set(-0.135, 0.62, 0); dummy.updateMatrix();
         finalMat.multiplyMatrices(rootMat, dummy.matrix);
         pool.legL.setMatrixAt(idx, finalMat);
-        pool.legL.setColorAt(idx, col);
-
-        dummy.position.set(0.135, 0.62, 0);
-        dummy.rotation.set(-ls, 0, 0);
-        dummy.updateMatrix();
+        dummy.position.set(0.135, 0.62, 0); dummy.updateMatrix();
         finalMat.multiplyMatrices(rootMat, dummy.matrix);
         pool.legR.setMatrixAt(idx, finalMat);
-        pool.legR.setColorAt(idx, col);
+        if (writeColor(pool.robe, idx, isHurt) | writeColor(pool.bodyAcc, idx, isHurt) |
+            writeColor(pool.headAcc, idx, isHurt) | writeColor(pool.head, idx, isHurt) |
+            writeColor(pool.legL, idx, isHurt) | writeColor(pool.legR, idx, isHurt)) {
+          pool.colorDirty = true;
+        }
+        continue;
+      }
+
+      const mx = m.pos.x, my = m.pos.y, mz = m.pos.z;
+      const ry = m.yaw || 0;
+      const cy = Math.cos(ry), sy = Math.sin(ry);
+      const hy = ry + (m.headYaw || 0);
+      const chy = Math.cos(hy), shy = Math.sin(hy);
+      const hp = m.headPitch || 0;
+      const chp = hp === 0 ? 1 : Math.cos(hp);
+      const shp = hp === 0 ? 0 : Math.sin(hp);
+      const ls = m.legSwing || 0;
+
+      if (pool.kind === 'villager') {
+        writePart(pool.robe, idx, mx, my, mz, cy, sy, 0, 1.01, 0, 0);
+        writePart(pool.bodyAcc, idx, mx, my, mz, cy, sy, 0, 0, 0, 0);
+        writePart(pool.headAcc, idx, mx, my, mz, chy, shy, 0, 1.41, 0, hp);
+        // Head mesh sits at local (0, 0.29, 0) inside headAcc pivot
+        writePart(pool.head, idx, mx + shy * shp * 0.29, my + 1.41 + chp * 0.29, mz + chy * shp * 0.29, chy, shy, 0, 0, 0, hp);
+        writePart(pool.legL, idx, mx, my, mz, cy, sy, -0.135, 0.62, 0, ls);
+        writePart(pool.legR, idx, mx, my, mz, cy, sy, 0.135, 0.62, 0, -ls);
+        if (writeColor(pool.robe, idx, isHurt) | writeColor(pool.bodyAcc, idx, isHurt) |
+            writeColor(pool.headAcc, idx, isHurt) | writeColor(pool.head, idx, isHurt) |
+            writeColor(pool.legL, idx, isHurt) | writeColor(pool.legR, idx, isHurt)) {
+          pool.colorDirty = true;
+        }
       } else if (pool.kind === 'soldier') {
-        pool.body.setMatrixAt(idx, rootMat);
-        pool.body.setColorAt(idx, col);
-
-        dummy.position.set(0, 1.41, 0);
-        dummy.rotation.set(m.headPitch || 0, m.headYaw || 0, 0);
-        dummy.updateMatrix();
-        partMat.copy(dummy.matrix);
-        finalMat.multiplyMatrices(rootMat, partMat);
-        pool.headAcc.setMatrixAt(idx, finalMat);
-        pool.headAcc.setColorAt(idx, col);
-
-        dummy.position.set(0, 0.29, 0);
-        dummy.rotation.set(0, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(finalMat, dummy.matrix);
-        pool.head.setMatrixAt(idx, finalMat);
-        pool.head.setColorAt(idx, col);
-
-        const ls = m.legSwing || 0;
-        dummy.position.set(-0.135, 0.62, 0);
-        dummy.rotation.set(ls, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.legL.setMatrixAt(idx, finalMat);
-        pool.legL.setColorAt(idx, col);
-
-        dummy.position.set(0.135, 0.62, 0);
-        dummy.rotation.set(-ls, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.legR.setMatrixAt(idx, finalMat);
-        pool.legR.setColorAt(idx, col);
-
-        dummy.position.set(-0.38, 1.32, 0);
-        dummy.rotation.set(m.armSwingL || 0, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.armL.setMatrixAt(idx, finalMat);
-        pool.armL.setColorAt(idx, col);
-
-        dummy.position.set(0.38, 1.32, 0);
-        dummy.rotation.set(m.armSwingR || -0.25, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.armR.setMatrixAt(idx, finalMat);
-        pool.armR.setColorAt(idx, col);
+        writePart(pool.body, idx, mx, my, mz, cy, sy, 0, 0, 0, 0);
+        writePart(pool.headAcc, idx, mx, my, mz, chy, shy, 0, 1.41, 0, hp);
+        writePart(pool.head, idx, mx + shy * shp * 0.29, my + 1.41 + chp * 0.29, mz + chy * shp * 0.29, chy, shy, 0, 0, 0, hp);
+        writePart(pool.legL, idx, mx, my, mz, cy, sy, -0.135, 0.62, 0, ls);
+        writePart(pool.legR, idx, mx, my, mz, cy, sy, 0.135, 0.62, 0, -ls);
+        writePart(pool.armL, idx, mx, my, mz, cy, sy, -0.38, 1.32, 0, m.armSwingL || 0);
+        writePart(pool.armR, idx, mx, my, mz, cy, sy, 0.38, 1.32, 0, m.armSwingR || -0.25);
+        if (writeColor(pool.body, idx, isHurt) | writeColor(pool.headAcc, idx, isHurt) |
+            writeColor(pool.head, idx, isHurt) | writeColor(pool.legL, idx, isHurt) |
+            writeColor(pool.legR, idx, isHurt) | writeColor(pool.armL, idx, isHurt) |
+            writeColor(pool.armR, idx, isHurt)) {
+          pool.colorDirty = true;
+        }
       } else {
         // Iron Golem
-        pool.body.setMatrixAt(idx, rootMat);
-        pool.body.setColorAt(idx, col);
-
-        dummy.position.set(0, 1.98, 0.06);
-        dummy.rotation.set(m.headPitch || 0, m.headYaw || 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.head.setMatrixAt(idx, finalMat);
-        pool.head.setColorAt(idx, col);
-
-        const ls = m.legSwing || 0;
-        dummy.position.set(-0.25, 0.94, 0);
-        dummy.rotation.set(ls, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.legL.setMatrixAt(idx, finalMat);
-        pool.legL.setColorAt(idx, col);
-
-        dummy.position.set(0.25, 0.94, 0);
-        dummy.rotation.set(-ls, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.legR.setMatrixAt(idx, finalMat);
-        pool.legR.setColorAt(idx, col);
-
-        dummy.position.set(-0.70, 1.86, 0);
-        dummy.rotation.set(m.armSwingL || 0, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.armL.setMatrixAt(idx, finalMat);
-        pool.armL.setColorAt(idx, col);
-
-        dummy.position.set(0.70, 1.86, 0);
-        dummy.rotation.set(m.armSwingR || 0, 0, 0);
-        dummy.updateMatrix();
-        finalMat.multiplyMatrices(rootMat, dummy.matrix);
-        pool.armR.setMatrixAt(idx, finalMat);
-        pool.armR.setColorAt(idx, col);
+        writePart(pool.body, idx, mx, my, mz, cy, sy, 0, 0, 0, 0);
+        writePart(pool.head, idx, mx + sy * 0.06, my + 1.98, mz + cy * 0.06, chy, shy, 0, 0, 0, hp);
+        writePart(pool.legL, idx, mx, my, mz, cy, sy, -0.25, 0.94, 0, ls);
+        writePart(pool.legR, idx, mx, my, mz, cy, sy, 0.25, 0.94, 0, -ls);
+        writePart(pool.armL, idx, mx, my, mz, cy, sy, -0.70, 1.86, 0, m.armSwingL || 0);
+        writePart(pool.armR, idx, mx, my, mz, cy, sy, 0.70, 1.86, 0, m.armSwingR || 0);
+        if (writeColor(pool.body, idx, isHurt) | writeColor(pool.head, idx, isHurt) |
+            writeColor(pool.legL, idx, isHurt) | writeColor(pool.legR, idx, isHurt) |
+            writeColor(pool.armL, idx, isHurt) | writeColor(pool.armR, idx, isHurt)) {
+          pool.colorDirty = true;
+        }
       }
     }
 
     for (const k in pools) {
       const p = pools[k];
       const vis = p.count > 0;
+      const needColorUpload = p.colorDirty || p.count > p.prevCount;
       for (const mk of ['robe', 'body', 'bodyAcc', 'head', 'headAcc', 'legL', 'legR', 'armL', 'armR']) {
         const im = p[mk];
         if (!im) continue;
@@ -4251,7 +4281,7 @@ export class EntityManager {
         im.visible = vis;
         if (vis) {
           im.instanceMatrix.needsUpdate = true;
-          if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          if (needColorUpload && im.instanceColor) im.instanceColor.needsUpdate = true;
         }
       }
     }

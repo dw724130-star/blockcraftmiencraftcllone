@@ -205,8 +205,8 @@ export class SkySystem {
 
         void main() {
           vec3 dir = normalize(vDir);
-          vec3 sunDir = normalize(uSunDir);
-          vec3 moonDir = normalize(uMoonDir);
+          vec3 sunDir = uSunDir;
+          vec3 moonDir = uMoonDir;
           float h = clamp(dir.y, 0.0, 1.0);
           float cosSun = dot(dir, sunDir);
           float sunDot = max(0.0, cosSun);
@@ -283,11 +283,13 @@ export class SkySystem {
 
           // 5. True Multi-Layer Ray-Marched Volumetric Cumulus + Painterly Cirrus Clouds (Image 3!)
           if (dir.y > 0.006 && uCloudCover > 0.01) {
-            // High-altitude windswept cirrus streaks (catch sunrise/sunset gold first!)
-            vec2 cirrusUV = (dir.xz / (dir.y + 0.24)) * 0.48 + vec2(uTime * 0.0042, -uTime * 0.0018);
-            float cirrus = smoothstep(0.50, 0.84, fbmCloudFast(cirrusUV * vec2(2.1, 0.62)));
-            vec3 cirrusCol = mix(uCloudLitColor, uSunColor * 1.25, 0.35 + 0.60 * uSunsetFactor);
-            skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.012, 0.22, dir.y) * 0.44 * (1.0 - uRainFactor * 0.6) * uCloudCover);
+            // High-altitude windswept cirrus streaks (skip when hidden by rain or right on horizon!)
+            if (dir.y > 0.014 && uRainFactor < 0.92) {
+              vec2 cirrusUV = (dir.xz / (dir.y + 0.24)) * 0.48 + vec2(uTime * 0.0042, -uTime * 0.0018);
+              float cirrus = smoothstep(0.50, 0.84, fbmCloudFast(cirrusUV * vec2(2.1, 0.62)));
+              vec3 cirrusCol = mix(uCloudLitColor, uSunColor * 1.25, 0.35 + 0.60 * uSunsetFactor);
+              skyCol = mix(skyCol, cirrusCol, cirrus * smoothstep(0.012, 0.22, dir.y) * 0.44 * (1.0 - uRainFactor * 0.6) * uCloudCover);
+            }
 
             // Multi-slice 3D Volumetric Cumulus Slab with Beer-Powder Self-Shadowing & HG Silver Lining!
             int steps = int(clamp(uCloudSteps, 1.0, 4.0));
@@ -473,7 +475,8 @@ export class SkySystem {
     this.shaderMode = m;
     const useShadows = m !== 'low';
     const useFar = m === 'high' || m === 'ultra';
-    const nearSize = m === 'ultra' ? (isTouch ? 1536 : 2048) : 1024;
+    const nearSize = m === 'ultra' ? (isTouch ? 1024 : 1536) : 1024;
+    const farSize = isTouch ? 768 : 1024;
     const nearExtent = m === 'medium' ? 38 : 26;
 
     this.sunLight.castShadow = useShadows;
@@ -485,6 +488,13 @@ export class SkySystem {
       if (this.sunLight.shadow.map) {
         this.sunLight.shadow.map.dispose();
         this.sunLight.shadow.map = null;
+      }
+    }
+    if (this.sunLightFar.shadow.mapSize.x !== farSize) {
+      this.sunLightFar.shadow.mapSize.set(farSize, farSize);
+      if (this.sunLightFar.shadow.map) {
+        this.sunLightFar.shadow.map.dispose();
+        this.sunLightFar.shadow.map = null;
       }
     }
     if (this._nearExtent !== nearExtent) {
@@ -499,7 +509,7 @@ export class SkySystem {
     this._shadowParams.useShadows = useShadows;
     this._shadowParams.useFarCascade = useFar;
     this._shadowParams.nearTexelSize = 1 / nearSize;
-    this._shadowParams.farTexelSize = 1 / 1024;
+    this._shadowParams.farTexelSize = 1 / farSize;
     this._shadowParams.shadowSoftness = m === 'ultra' ? 1.55 : (m === 'high' ? 1.3 : 1.05);
     this.skyUniforms.uCloudCover.value = m === 'low' ? 0.55 : 1.0;
     this.skyUniforms.uCloudSteps.value = m === 'ultra' ? (isTouch ? 3.0 : 4.0) : (m === 'high' ? 3.0 : (m === 'medium' ? 2.0 : 1.0));
