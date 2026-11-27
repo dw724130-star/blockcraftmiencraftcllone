@@ -2062,14 +2062,15 @@ class BlockCraftGame {
         }
       }
 
-      // Raycast targeted block & Villager / Wildlife (hit liquids when holding an empty Bucket!)
+      // Raycast targeted block & Villager / Wildlife (skip while a modal is open to save CPU!)
       const eye = this.player.getEyePosition(this._eyeVec);
       const dir = this.player.getLookDirection(this._dirVec);
-      const lookRemote = this.multiplayer ? this.multiplayer.raycastRemotePlayer(eye, dir, 5.0) : null;
-      const lookMob = this.entities.raycastMob(eye, dir, 5.2);
+      const modalOpen = Boolean(this.ui && this.ui.activeModal);
+      const lookRemote = (!modalOpen && this.multiplayer) ? this.multiplayer.raycastRemotePlayer(eye, dir, 5.0) : null;
+      const lookMob = !modalOpen ? this.entities.raycastMob(eye, dir, 5.2) : null;
       const heldForRay = this.inventory.getHeldDef();
       const rayHitLiquids = !!(heldForRay && heldForRay.bucketType === 'empty');
-      this.currentTarget = this.world.raycast(eye, dir, 5.5, rayHitLiquids);
+      this.currentTarget = !modalOpen ? this.world.raycast(eye, dir, 5.5, rayHitLiquids) : null;
 
       const remotePlayerHit = !!(lookRemote && (!this.currentTarget || lookRemote.dist <= this.currentTarget.dist + 0.35));
       const mobHit = !remotePlayerHit && !!(lookMob && (!this.currentTarget || (lookMob._hitDist ?? lookMob.pos.distanceTo(eye)) <= this.currentTarget.dist + 0.35));
@@ -2341,11 +2342,12 @@ class BlockCraftGame {
         }
       }
 
-      // Adaptive shadow map refresh cadence (2 frames on Ultra, 3 on High/Medium — responsive & GPU-friendly!)
+      // Staggered shadow map refresh cadence (never stacks on top of heavy chunk mesh/batch upload frames!)
       if (this.renderer.shadowMap.enabled) {
         this._shadowFrame++;
-        const shadowStride = (this.settings.shaders === 'ultra' && !this.isTouch) ? 2 : 3;
-        if (this.world._shadowNeedsUpdate || (this._shadowFrame % shadowStride) === 0) {
+        const shadowStride = this.isTouch ? 4 : (this.settings.shaders === 'ultra' ? 2 : 3);
+        const wantShadowTick = this.world._shadowNeedsUpdate || (this._shadowFrame % shadowStride) === 0;
+        if (wantShadowTick && (!this.world._heavyWorkThisFrame || this._shadowFrame % (shadowStride * 2) === 0)) {
           this.renderer.shadowMap.needsUpdate = true;
           this.world._shadowNeedsUpdate = false;
         }

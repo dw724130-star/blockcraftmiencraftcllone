@@ -1979,18 +1979,27 @@ export class EntityManager {
     return true;
   }
 
-  // Spawn a real 3D flying Arrow projectile (wooden shaft, iron tip, white fletching)!
+  // Spawn a real 3D flying Arrow projectile (shared geometries & materials -> zero GC spikes on Skeleton volleys!)
   spawnArrow(x, y, z, vx, vy, vz, dmg = 3, shooter = null) {
+    if (!this._arrowAssets) {
+      this._arrowAssets = {
+        shaftGeo: new THREE.BoxGeometry(0.05, 0.05, 0.62),
+        tipGeo: new THREE.BoxGeometry(0.09, 0.09, 0.14),
+        fletchAGeo: new THREE.BoxGeometry(0.14, 0.02, 0.16),
+        fletchBGeo: new THREE.BoxGeometry(0.02, 0.14, 0.16),
+        shaftMat: new THREE.MeshLambertMaterial({ color: 0x8a5b2e }),
+        tipMat: new THREE.MeshLambertMaterial({ color: 0xd0d8e2 }),
+        featherMat: new THREE.MeshBasicMaterial({ color: 0xf7f9fc })
+      };
+    }
+    const aa = this._arrowAssets;
     const arrowGroup = new THREE.Group();
-    const shaftMat = new THREE.MeshLambertMaterial({ color: 0x8a5b2e });
-    const tipMat = new THREE.MeshLambertMaterial({ color: 0xd0d8e2 });
-    const featherMat = new THREE.MeshBasicMaterial({ color: 0xf7f9fc });
-    const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.62), shaftMat);
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), tipMat);
+    const shaft = new THREE.Mesh(aa.shaftGeo, aa.shaftMat);
+    const tip = new THREE.Mesh(aa.tipGeo, aa.tipMat);
     tip.position.set(0, 0, 0.34);
-    const fletchA = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 0.16), featherMat);
+    const fletchA = new THREE.Mesh(aa.fletchAGeo, aa.featherMat);
     fletchA.position.set(0, 0, -0.26);
-    const fletchB = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 0.16), featherMat);
+    const fletchB = new THREE.Mesh(aa.fletchBGeo, aa.featherMat);
     fletchB.position.set(0, 0, -0.26);
     arrowGroup.add(shaft, tip, fletchA, fletchB);
     arrowGroup.position.set(x, y, z);
@@ -2439,6 +2448,7 @@ export class EntityManager {
     const nowSec = performance.now() * 0.001;
     this._mobTickFrame = (this._mobTickFrame || 0) + 1;
     this._pathsThisFrame = 0;
+    this._bedScansThisFrame = 0;
     let anyMobBurning = false;
     const isSleepNight = sky.time < 0.25 || sky.time > 0.78; // Exact same night/morning wake boundary as Player bed!
 
@@ -2485,7 +2495,8 @@ export class EntityManager {
     };
 
     const openDoorAtBlock = (mob, bx, by, bz) => {
-      for (let dy = 0; dy <= 1; dy++) {
+      // Check by-1, by, and by+1 so raised 1-block house doorsteps & downhill doorways ALWAYS open cleanly!
+      for (let dy = -1; dy <= 1; dy++) {
         const y = by + dy;
         const bid = this.world.getBlock(bx, y, bz);
         if (isDoorBlock(bid)) {
@@ -2493,7 +2504,14 @@ export class EntityManager {
           if (!this.world.isDoorOpenAt(bx, baseY, bz)) {
             this.world.toggleDoor(bx, baseY, bz);
             if (!mob._passedDoors) mob._passedDoors = [];
-            mob._passedDoors.push({ x: bx, y: baseY, z: bz, timer: 1.55 });
+            mob._passedDoors.push({ x: bx, y: baseY, z: bz, timer: 1.85 });
+          }
+          // Gently align villager's shoulder toward doorway center so they pass straight through 1-block doors without snagging!
+          const dcx = bx + 0.5 - mob.pos.x;
+          const dcz = bz + 0.5 - mob.pos.z;
+          if (dcx * dcx + dcz * dcz < 1.35 && Math.abs(mob.pos.y - baseY) <= 1.2) {
+            mob.pos.x += dcx * 0.14;
+            mob.pos.z += dcz * 0.14;
           }
           return true;
         }
@@ -2501,18 +2519,24 @@ export class EntityManager {
       return false;
     };
 
-    // Helper: villagers & soldiers automatically open closed wooden doors in their path or at next waypoint!
+    // Helper: villagers & soldiers proactively open closed wooden doors along their path & 1-2 blocks ahead!
     const tryOpenDoorAhead = (mob, dirX, dirZ, wp = null) => {
       const my = Math.floor(mob.pos.y + 0.25);
-      // 1. Check current block & next A* waypoint block directly
+      // 1. Check current tile, current A* waypoint, AND next A* waypoint (opens door BEFORE touching it!)
       openDoorAtBlock(mob, Math.floor(mob.pos.x), my, Math.floor(mob.pos.z));
-      if (wp && Math.hypot(wp.x + 0.5 - mob.pos.x, wp.z + 0.5 - mob.pos.z) < 1.9) {
+      if (wp && Math.hypot(wp.x + 0.5 - mob.pos.x, wp.z + 0.5 - mob.pos.z) < 2.2) {
         if (openDoorAtBlock(mob, wp.x, wp.y, wp.z)) return;
+      }
+      if (mob.path && mob.pathIdx + 1 < mob.path.length) {
+        const nextWp = mob.path[mob.pathIdx + 1];
+        if (Math.hypot(nextWp.x + 0.5 - mob.pos.x, nextWp.z + 0.5 - mob.pos.z) < 2.4) {
+          if (openDoorAtBlock(mob, nextWp.x, nextWp.y, nextWp.z)) return;
+        }
       }
       const mag = Math.hypot(dirX, dirZ);
       if (mag < 0.04) return;
       const nx = dirX / mag, nz = dirZ / mag;
-      for (const probe of [0.55, 1.05, 1.48]) {
+      for (const probe of [0.55, 1.05, 1.55, 2.0]) {
         const bx = Math.floor(mob.pos.x + nx * probe);
         const bz = Math.floor(mob.pos.z + nz * probe);
         if (openDoorAtBlock(mob, bx, my, bz)) return;
@@ -3084,13 +3108,13 @@ export class EntityManager {
 
               // Door-aware A* pathfinding around exterior house walls straight through the front door to the bed!
               m.pathTimer = (m.pathTimer || 0) - dt;
-              if ((!m.path || m.pathIdx >= m.path.length || m.pathTimer <= 0) && this._pathsThisFrame < 5) {
+              if ((!m.path || m.pathIdx >= m.path.length || m.pathTimer <= 0) && this._pathsThisFrame < 3) {
                 this._pathsThisFrame++;
-                m.pathTimer = 2.4 + Math.random() * 1.4;
+                m.pathTimer = 2.8 + Math.random() * 1.6;
                 m.path = this._computeVillagerPath(
                   Math.floor(m.pos.x), Math.floor(m.pos.y + 0.1), Math.floor(m.pos.z),
                   b.x, b.y, b.z,
-                  200
+                  420
                 );
                 m.pathIdx = 0;
               }
@@ -3285,6 +3309,9 @@ export class EntityManager {
         m.fireGroup.visible = false;
       }
 
+      // Check true grounded state BEFORE applying gravity (previously gravity dropped vel.y to -0.37 first, breaking ALL jumping!)
+      const wasOnGround = !inWater && !inLava && this.hasSolidBelow(m.pos.x, m.pos.y - 0.08, m.pos.z, m.halfW);
+
       if (m.def.floatsOnWater && inWater) {
         const surfaceY = Math.floor(m.pos.y + 0.15) + 0.72;
         m.vel.y = (surfaceY - m.pos.y) * 5.0;
@@ -3297,15 +3324,15 @@ export class EntityManager {
       // Frantic repeated leaping/hopping when panicking!
       if (m.fleeTimer > 0 && !inWater) {
         m.panicJumpTimer = (m.panicJumpTimer || 0) - dt;
-        if (m.panicJumpTimer <= 0 && Math.abs(m.vel.y) <= 0.2) {
+        if (m.panicJumpTimer <= 0 && wasOnGround) {
           if (!this.mobCollidesAt(m.pos.x, m.pos.y + 0.9, m.pos.z, m.halfW, m.height)) {
-            m.vel.y = 5.9 + Math.random() * 1.7;
+            m.vel.y = 6.2 + Math.random() * 1.7;
           }
           m.panicJumpTimer = 0.24 + Math.random() * 0.36;
         }
-      } else if (m.def.hopper && speedMag > 0.4 && m.vel.y === 0 && !inWater && Math.random() < dt * 4.5) {
+      } else if (m.def.hopper && speedMag > 0.4 && wasOnGround && !inWater && Math.random() < dt * 4.5) {
         if (!this.mobCollidesAt(m.pos.x, m.pos.y + 0.8, m.pos.z, m.halfW, m.height)) {
-          m.vel.y = 5.6;
+          m.vel.y = 5.8;
         }
       }
 
@@ -3319,15 +3346,21 @@ export class EntityManager {
         m.vel.z = THREE.MathUtils.lerp(m.vel.z, moveZ, Math.min(1, dt * 8));
       }
 
+      // Reliable 1-block ledge jumping for Iron Golems, Villagers, Soldiers & all ground mobs!
+      const jumpVel = m.def.golem ? 8.3 : 7.8;
       let hitWall = false;
+      let jumpedLedge = false;
       const nx = m.pos.x + m.vel.x * dt;
       if (!this.mobCollidesAt(nx, m.pos.y, m.pos.z, m.halfW, m.height)) {
         m.pos.x = nx;
       } else {
         hitWall = true;
-        if (!this.mobCollidesAt(nx, m.pos.y + 1.05, m.pos.z, m.halfW, m.height) && Math.abs(m.vel.y) <= 0.15) {
-          m.vel.y = 7.4;
-        } else {
+        // Probe 1.12 blocks up at the target X (and slightly further ahead) so Golems & Villagers leap smoothly onto ledges & doorsteps!
+        const probeX = nx + Math.sign(m.vel.x || moveX) * 0.14;
+        if (wasOnGround && !this.mobCollidesAt(probeX, m.pos.y + 1.12, m.pos.z, m.halfW, m.height)) {
+          m.vel.y = jumpVel;
+          jumpedLedge = true;
+        } else if (!jumpedLedge) {
           m.vel.x = 0;
         }
       }
@@ -3337,24 +3370,26 @@ export class EntityManager {
         m.pos.z = nz;
       } else {
         hitWall = true;
-        if (!this.mobCollidesAt(m.pos.x, m.pos.y + 1.05, nz, m.halfW, m.height) && Math.abs(m.vel.y) <= 0.15) {
-          m.vel.y = 7.4;
-        } else {
+        const probeZ = nz + Math.sign(m.vel.z || moveZ) * 0.14;
+        if (wasOnGround && !this.mobCollidesAt(m.pos.x, m.pos.y + 1.12, probeZ, m.halfW, m.height)) {
+          m.vel.y = jumpVel;
+          jumpedLedge = true;
+        } else if (!jumpedLedge) {
           m.vel.z = 0;
         }
       }
 
-      // Anti-spin wall handling: panicking animals wildly bounce & jump away; calm animals graze if cornered!
-      if (hitWall && m.knockbackTimer <= 0 && m.fleeTimer > 0) {
+      // Anti-spin wall handling: never randomize direction while jumping a ledge or following an active door/bed A* path!
+      if (hitWall && !jumpedLedge && m.knockbackTimer <= 0 && m.fleeTimer > 0) {
         if (m.turnCd <= 0) {
           m.turnCd = 0.22;
           m.wanderDir += (Math.random() < 0.5 ? 1 : -1) * (1.2 + Math.random() * 1.15);
           m.panicZigTimer = 0.35;
         }
-        if (Math.abs(m.vel.y) <= 0.2 && !inWater) {
-          m.vel.y = 7.4;
+        if (wasOnGround && !inWater) {
+          m.vel.y = jumpVel;
         }
-      } else if (hitWall && m.knockbackTimer <= 0 && Math.hypot(m.vel.x, m.vel.z) < 0.25) {
+      } else if (hitWall && !jumpedLedge && m.knockbackTimer <= 0 && !(m.path && m.pathIdx < m.path.length) && Math.hypot(m.vel.x, m.vel.z) < 0.25) {
         m.stuckTimer += dt;
         if (m.turnCd <= 0) {
           m.turnCd = 0.8 + Math.random() * 0.5;
@@ -3627,7 +3662,10 @@ export class EntityManager {
     const ck = this.world.chunkKey(cx, cz);
     const now = performance.now();
     const cached = this._chunkBedCache.get(ck);
-    if (cached && now - cached.t < 15000) return cached.beds;
+    if (cached && now - cached.t < 60000) return cached.beds;
+    // Frame-budget cap: never scan more than 2 new chunks per frame so nightfall in a Mega City causes ZERO stutters!
+    if ((this._bedScansThisFrame || 0) >= 2) return cached ? cached.beds : [];
+    this._bedScansThisFrame = (this._bedScansThisFrame || 0) + 1;
     const chunk = this.world.chunks.get(ck);
     if (!chunk) return [];
     const data = chunk.data;
@@ -3702,8 +3740,8 @@ export class EntityManager {
     return best;
   }
 
-  // Lightweight Door-Aware Grid A* Pathfinding for Villagers (routes cleanly around walls & straight through doors!)
-  _computeVillagerPath(sx, sy, sz, tx, ty, tz, maxNodes = 180) {
+  // Lightweight Door-Aware Grid A* Pathfinding for Villagers (routes cleanly around large walls & straight through doors!)
+  _computeVillagerPath(sx, sy, sz, tx, ty, tz, maxNodes = 420) {
     const world = this.world;
     const isGoal = (x, y, z) => Math.abs(x - tx) + Math.abs(z - tz) <= 1 && Math.abs(y - ty) <= 1;
     if (isGoal(sx, sy, sz)) return [];
@@ -3712,7 +3750,7 @@ export class EntityManager {
       const b = world.getBlock(x, y, z);
       if (b === BLOCK.WATER || b === BLOCK.LAVA || b === BLOCK.FIRE) return false;
       if (!isBlockSolid(b)) return true;
-      if (isDoorBlock(b)) return true; // Villagers open closed doors!
+      if (isDoorBlock(b)) return true; // Villagers open closed wooden doors!
       if (isBedBlock(b) && Math.abs(x - tx) <= 1 && Math.abs(z - tz) <= 1) return true;
       return false;
     };
@@ -3720,6 +3758,7 @@ export class EntityManager {
     const isWalkable = (x, y, z) => {
       const g = world.getBlock(x, y - 1, z);
       if (!isBlockSolid(g) || isFenceOrGate(g) || g === BLOCK.LAVA || g === BLOCK.WATER) return false;
+      if (isDoorBlock(g)) return false; // Never stand ON TOP of a door!
       return isSpaceFree(x, y, z) && isSpaceFree(x, y + 1, z);
     };
 
@@ -3734,7 +3773,6 @@ export class EntityManager {
     let expanded = 0;
 
     while (open.length > 0 && expanded < maxNodes) {
-      // Pop lowest f-score node
       let bestIdx = 0;
       for (let i = 1; i < open.length; i++) {
         if (open[i].f < open[bestIdx].f) bestIdx = i;
@@ -3762,7 +3800,7 @@ export class EntityManager {
       for (let di = 0; di < 4; di++) {
         const nx = cur.x + dirs[di][0];
         const nz = cur.z + dirs[di][1];
-        if (Math.abs(nx - sx) > 36 || Math.abs(nz - sz) > 36) continue;
+        if (Math.abs(nx - sx) > 40 || Math.abs(nz - sz) > 40) continue;
 
         let ny = -1;
         if (isWalkable(nx, cur.y, nz)) {
@@ -3779,13 +3817,14 @@ export class EntityManager {
         const nKey = packKey(nx, ny, nz);
         if (closed.has(nKey)) continue;
         const bAt = world.getBlock(nx, ny, nz);
-        const stepCost = isDoorBlock(bAt) ? 0.9 : (ny === cur.y ? 1.0 : 1.3);
+        // Strong preference for routing cleanly through doorways (0.75 cost) so villagers ALWAYS seek & use their door!
+        const stepCost = isDoorBlock(bAt) ? 0.75 : (ny === cur.y ? 1.0 : 1.25);
         const ng = cur.g + stepCost;
         const prevG = gScore.get(nKey);
         if (prevG !== undefined && ng >= prevG) continue;
         gScore.set(nKey, ng);
         const nh = Math.abs(tx - nx) + Math.abs(tz - nz) + Math.abs(ty - ny) * 2;
-        open.push({ x: nx, y: ny, z: nz, g: ng, f: ng + nh * 1.15, parent: cur });
+        open.push({ x: nx, y: ny, z: nz, g: ng, f: ng + nh * 1.12, parent: cur });
       }
     }
 

@@ -1018,7 +1018,7 @@ export class World {
            float dist = length(viewVec);
            vec3 viewDir = viewVec / max(dist, 0.001);
            vec3 N = normalize(vWorldNorm);
-           vec3 L = normalize(uSunDir);
+           vec3 L = uSunDir;
 
            // Crisp 1-block (1m) + 0.25m sub-voxel procedural Minecraft detail & rock strata (early-exits beyond 920m!)
            float detailFade = 1.0 - smoothstep(180.0, 920.0, dist);
@@ -3239,42 +3239,36 @@ export class World {
       addCavernLamp(9, 7);
 
       // OPEN WOODEN MINESHAFT ENTRANCE (South side, directly opposite the North surface stairwell!)
-      // Carves cleanly through the South cavern retaining wall (lx=5..9, lz=13..15) so connecting
-      // underground wooden mineshaft tunnels join flush without breaking village generation!
+      // Matches the exact 3-wide x 4-tall mineshaft tunnel profile so tunnels join flush with ZERO obstruction!
       for (let lz = 13; lz <= 15; lz++) {
         for (let lx = 5; lx <= 9; lx++) {
           const isSide = lx === 5 || lx === 9;
           const isFrame = lz === 13 || lz === 15;
-          // Solid oak-plank tunnel floor + deep stone subfloor
           setLocal(lx, baseY - 1, lz, BLOCK.DEEPSLATE);
           setLocal(lx, baseY, lz, BLOCK.OAK_PLANKS);
-          // Clear 3-high interior headroom
-          for (let dy = 1; dy <= 3; dy++) {
+          // Full 4-high interior clearance (baseY+1 .. baseY+4)
+          for (let dy = 1; dy <= 4; dy++) {
             setLocal(lx, baseY + dy, lz, BLOCK.AIR);
           }
-          // Overhead oak plank ceiling & deepslate cap
-          setLocal(lx, baseY + 4, lz, isFrame ? BLOCK.OAK_PLANKS : BLOCK.DEEPSLATE);
           setLocal(lx, baseY + 5, lz, BLOCK.DEEPSLATE);
-          // Iconic Minecraft mineshaft wooden support arches (fence posts + overhead plank crossbeam!)
           if (isFrame) {
             if (isSide) {
               setLocal(lx, baseY + 1, lz, BLOCK.OAK_FENCE);
               setLocal(lx, baseY + 2, lz, BLOCK.OAK_FENCE);
+              setLocal(lx, baseY + 3, lz, BLOCK.OAK_FENCE);
             }
-            setLocal(lx, baseY + 3, lz, BLOCK.OAK_PLANKS);
+            setLocal(lx, baseY + 4, lz, (lx === 7 && lz === 13) ? BLOCK.GLOWSTONE : BLOCK.OAK_PLANKS);
           }
         }
         // Flanking masonry portal framing at lx=4 and lx=10
-        for (let dy = 0; dy <= 4; dy++) {
+        for (let dy = 0; dy <= 5; dy++) {
           setLocal(4, baseY + dy, lz, dy === 0 ? BLOCK.DEEPSLATE : BLOCK.STONE_BRICKS);
           setLocal(10, baseY + dy, lz, dy === 0 ? BLOCK.DEEPSLATE : BLOCK.STONE_BRICKS);
         }
       }
-      // Welcoming mineshaft portal torches + miner supply chest just inside the archway
-      setLocal(6, baseY + 2, 13, BLOCK.TORCH);
-      setLocal(8, baseY + 2, 13, BLOCK.TORCH);
-      setLocal(6, baseY + 2, 15, BLOCK.TORCH);
-      setLocal(8, baseY + 2, 15, BLOCK.TORCH);
+      // Grounded welcoming mineshaft portal torches + miner supply chest just inside the archway
+      setLocal(5, baseY + 1, 14, BLOCK.TORCH);
+      setLocal(9, baseY + 1, 14, BLOCK.TORCH);
       addChest(5, baseY + 1, 12, 'forge');
     } else if (udx === 0 && udz === -1) {
       // NORTH ACCESS CHUNK: Surface Entrance Gatehouse Pavilion + Walkable Descending Spiral Staircase down to the Village!
@@ -5214,6 +5208,13 @@ export class World {
       const pal = b.palette;
       const dFace = b.doorSide === 'S' ? 2 : (b.doorSide === 'N' ? 0 : (b.doorSide === 'E' ? 1 : 3));
       const roofExtra = (b.kind === 'cathedral' || b.kind === 'grand_hall') ? 6 : 5;
+      // Place interior staircase on the wall OPPOSITE the front door so it NEVER blocks the doorway!
+      // Stacked same-direction 4-step flight (OAK_STAIRS) guarantees smooth +0.5 auto-step walking & 3 full blocks headroom on EVERY story!
+      const stairX = b.doorSide === 'E' ? 1 : (b.w - 2);
+      const landX = b.doorSide === 'E' ? 2 : (b.w - 3);
+      const hasStairs = b.stories > 1 && b.w >= 6 && b.d >= 6;
+      const stairStartZ = b.d >= 7 ? 2 : 1; // d>=7: dz=1 is flat approach landing, stairs dz=2..5; d===6: L-turn entry at dz=1..4
+      const stairEndZ = stairStartZ + 3;
 
       // Entry doorstep stair right outside door so villagers walk smoothly from street into building!
       const elx = b.entryGx - cGx0;
@@ -5276,9 +5277,10 @@ export class World {
                   setLocal(lx, y, lz, pal.wall);
                 }
               } else {
-                const isStairWell = b.stories > 1 && dx >= b.w - 3 && dx <= b.w - 2 && dz >= 1 && dz <= 4;
+                // Only open the exact 1x3 stair shaft below the top stair on intermediate floors (keep landX & entry landing 100% SOLID!)
+                const isCeilingCutout = hasStairs && storyIdx < b.stories - 1 && dx === stairX && dz >= stairStartZ && dz < stairEndZ;
                 if (storyDy === 4) {
-                  setLocal(lx, y, lz, isStairWell ? BLOCK.AIR : pal.floor);
+                  setLocal(lx, y, lz, isCeilingCutout ? BLOCK.AIR : pal.floor);
                 } else {
                   setLocal(lx, y, lz, BLOCK.AIR);
                 }
@@ -5306,8 +5308,9 @@ export class World {
           // --- RICH INTERIOR FURNISHINGS & LOTS OF LOOT! ---
           if (!edge) {
             const y1 = b.baseY + 1;
-            if (dx === 1 && dz === 1) setLocal(lx, y1 + 1, lz, BLOCK.TORCH);
-            if (dx === b.w - 2 && dz === b.d - 2) setLocal(lx, y1 + 1, lz, BLOCK.TORCH);
+            const inStairZone = hasStairs && (dx === stairX || dx === landX) && dz >= 1 && dz <= stairEndZ;
+            if (!inStairZone && dx === 1 && dz === 1) setLocal(lx, y1 + 1, lz, BLOCK.TORCH);
+            if (!inStairZone && dx === b.w - 2 && dz === b.d - 2) setLocal(lx, y1 + 1, lz, BLOCK.TORCH);
             // Warm glowstone chandeliers on EVERY floor of tall towers!
             if (dx === (b.w >> 1) && dz === (b.d >> 1)) {
               for (let st = 1; st <= b.stories; st++) {
@@ -5315,51 +5318,64 @@ export class World {
               }
             }
 
-            // Interior Staircase connecting all stories!
-            if (b.stories > 1 && dx === b.w - 2 && dz >= 1 && dz <= 4) {
+            // Continuous, 100%-Walkable Stacked Staircase connecting EVERY story (smooth +0.5 step-up, zero gaps, 3 full blocks headroom!)
+            if (hasStairs && dx === stairX && dz >= stairStartZ && dz <= stairEndZ) {
+              const stepNum = dz - stairStartZ + 1; // 1, 2, 3, 4 rising smoothly from floor st to floor st+1!
+              const stairFacing = (stairStartZ === 1 && stepNum === 1) ? (stairX < landX ? 3 : 1) : 2;
               for (let st = 0; st < b.stories - 1; st++) {
-                const sy = b.baseY + st * floorH + dz;
-                if (sy < b.baseY + (st + 1) * floorH) {
-                  setLocal(lx, sy, lz, BLOCK.OAK_STAIRS);
-                  this.stairStates.set(`${ox + lx},${sy},${oz + lz}`, { facing: 2, half: 'bottom' });
+                const sy = b.baseY + st * floorH + stepNum;
+                setLocal(lx, sy, lz, BLOCK.OAK_STAIRS);
+                this.stairStates.set(`${ox + lx},${sy},${oz + lz}`, { facing: stairFacing, half: 'bottom' });
+                // Guarantee 3 full blocks of clear headroom above every step (never touches next flight at sy + 4!)
+                for (let hy = 1; hy <= 3; hy++) {
+                  if (sy + hy < b.baseY + totalWallH) {
+                    setLocal(lx, sy + hy, lz, BLOCK.AIR);
+                  }
                 }
               }
             }
 
             // Carpet / Wool rug in center of ground floor
-            if (dx >= 2 && dx <= b.w - 3 && dz >= 2 && dz <= b.d - 3 && b.w >= 7 && b.d >= 7) {
+            if (!inStairZone && dx >= 2 && dx <= b.w - 3 && dz >= 2 && dz <= b.d - 3 && b.w >= 7 && b.d >= 7) {
               const rugCol = (b.kind === 'grand_hall' || b.kind === 'cathedral') ? BLOCK.WOOL_RED : (b.kind === 'library' ? BLOCK.WOOL_BLUE : (b.kind === 'temple' ? BLOCK.WOOL_YELLOW : BLOCK.WOOL_GREEN));
               if (b.kind !== 'house' && b.kind !== 'forge') setLocal(lx, b.baseY, lz, rugCol);
             }
 
-            // Beds inside houses, taverns, inns, barracks, guilds & halls
+            // Beds inside houses, taverns, inns, barracks, guilds & halls (strictly outside stair & doorway clearance!)
             const avoidDoor = Math.abs(gx - b.doorGx) + Math.abs(gz - b.doorGz) > 1;
-            if (avoidDoor && dx === 1 && dz === 1) setLocal(lx, y1, lz, BLOCK.BED_HEAD_N);
-            if (avoidDoor && dx === 1 && dz === 2) setLocal(lx, y1, lz, BLOCK.BED);
-            if (b.w >= 8 && avoidDoor && dx === 3 && dz === 1 && (b.kind === 'tavern' || b.kind === 'inn' || b.kind === 'barracks' || b.kind === 'house')) {
+            const bedX = (b.doorSide === 'E') ? (b.w - 2) : 1;
+            if (!inStairZone && avoidDoor && dx === bedX && dz === 1) setLocal(lx, y1, lz, BLOCK.BED_HEAD_N);
+            if (!inStairZone && avoidDoor && dx === bedX && dz === 2) setLocal(lx, y1, lz, BLOCK.BED);
+            if (!inStairZone && b.w >= 9 && avoidDoor && dx === (bedX === 1 ? 3 : b.w - 4) && dz === 1 &&
+                (b.kind === 'tavern' || b.kind === 'inn' || b.kind === 'barracks' || b.kind === 'house')) {
               setLocal(lx, y1, lz, BLOCK.BED_HEAD_N);
             }
-            if (b.w >= 8 && avoidDoor && dx === 3 && dz === 2 && (b.kind === 'tavern' || b.kind === 'inn' || b.kind === 'barracks' || b.kind === 'house')) {
+            if (!inStairZone && b.w >= 9 && avoidDoor && dx === (bedX === 1 ? 3 : b.w - 4) && dz === 2 &&
+                (b.kind === 'tavern' || b.kind === 'inn' || b.kind === 'barracks' || b.kind === 'house')) {
               setLocal(lx, y1, lz, BLOCK.BED);
             }
-            if (b.stories >= 2 && dx === 1 && dz === 1) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED_HEAD_N);
-            if (b.stories >= 2 && dx === 1 && dz === 2) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED);
+            if (!inStairZone && b.stories >= 2 && dx === bedX && dz === 1) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED_HEAD_N);
+            if (!inStairZone && b.stories >= 2 && dx === bedX && dz === 2) setLocal(lx, b.baseY + floorH + 1, lz, BLOCK.BED);
 
-            // Archetype-specific interior props
-            if (b.kind === 'library' && dz === 1 && dx >= 2 && dx <= b.w - 3) {
+            // Archetype-specific interior props (strictly outside stair zone!)
+            if (!inStairZone && b.kind === 'library' && dz === 1 && dx >= 2 && dx <= b.w - 3) {
               setLocal(lx, y1, lz, BLOCK.BOOKSHELF);
               setLocal(lx, y1 + 1, lz, BLOCK.BOOKSHELF);
-            } else if (b.kind === 'forge' && dz === 1 && dx >= 2 && dx <= 4) {
+            } else if (!inStairZone && b.kind === 'forge' && dz === 1 && dx >= 2 && dx <= 4) {
               setLocal(lx, y1, lz, dx === 3 ? BLOCK.IRON_BLOCK : BLOCK.FURNACE);
-            } else if ((b.kind === 'temple' || b.kind === 'cathedral') && dx === (b.w >> 1) && dz === (b.d >> 1)) {
+            } else if (!inStairZone && (b.kind === 'temple' || b.kind === 'cathedral') && dx === (b.w >> 1) && dz === (b.d >> 1)) {
               setLocal(lx, y1, lz, BLOCK.GOLD_BLOCK);
               setLocal(lx, y1 + 1, lz, BLOCK.GLOWSTONE);
-            } else if (dx === b.w - 2 && dz === 1 && avoidDoor) {
+            } else if (!inStairZone && dx === bedX && dz === b.d - 2 && avoidDoor) {
               setLocal(lx, y1, lz, (b.id & 1) ? BLOCK.CRAFTING_TABLE : BLOCK.FURNACE);
             }
 
-            // LOTS OF LOOT CHESTS!
-            if (dx === b.w - 2 && dz === b.d - 2 && avoidDoor) {
+            // LOTS OF LOOT CHESTS! (Strictly placed clear of stairs and doors!)
+            const chestX = (stairX === b.w - 2) ? (b.w - 2) : 1;
+            const chestZ = b.d - 2;
+            const chestInStair = hasStairs && (chestX === stairX || chestX === landX) && chestZ >= 1 && chestZ <= 4;
+            const finalChestX = chestInStair ? (bedX === 1 ? 2 : b.w - 3) : chestX;
+            if (dx === finalChestX && dz === chestZ && avoidDoor && !inStairZone) {
               const tier = b.kind === 'house' ? 1 : (b.kind === 'grand_hall' || b.kind === 'cathedral' || b.kind === 'temple' || b.kind === 'barracks' ? 3 : 2);
               const loot = makeSecretLoot(b.id * 19 + 7, tier);
               if (b.kind === 'forge' || b.kind === 'barracks') {
@@ -5375,7 +5391,7 @@ export class World {
               placeChest(lx, y1, lz, loot);
             }
             // Extra penthouse vault chest on top story of tall skyscrapers!
-            if (b.stories >= 3 && b.kind !== 'house' && dx === 2 && dz === b.d - 2) {
+            if (b.stories >= 3 && b.kind !== 'house' && dx === (bedX === 1 ? 2 : b.w - 3) && dz === b.d - 2 && !inStairZone) {
               const topY = b.baseY + (b.stories - 1) * floorH + 1;
               const upperLoot = makeSecretLoot(b.id * 37 + 91, 3);
               if (b.kind === 'grand_hall' || b.kind === 'cathedral' || b.kind === 'watchtower') {
@@ -6131,9 +6147,10 @@ export class World {
     }
   }
 
-  // Underground Wooden Mineshaft Tunnel Network linking Underground Villages (Prim's MST + South Portal Spurs!)
-  // Leaves strictly from the South Mineshaft Portal opposite each Underground Village's North Stairwell,
-  // curves around all underground structures, bridges across caves on oak fence stilts, and never breaks generation!
+  // Underground Wooden Mineshaft Tunnel Network linking Underground Villages (Global Deterministic Routing + South Portal Spurs!)
+  // Leaves STRICTLY from the South Mineshaft Portal opposite each Underground Village's North Stairwell,
+  // routes wide around ALL Underground Village caverns (including its own!) so tunnels NEVER graze or bypass entrances,
+  // and carves a guaranteed unobstructed 3.2-wide x 4-tall wooden mineshaft corridor!
   _getMineshaftTunnelsForChunk(cx, cz) {
     if (this.worldType === 'flat' || !this.generateStructures) return null;
     const REG = 32;
@@ -6142,10 +6159,11 @@ export class World {
     const rKey = `${rgx},${rgz}`;
     if (this._mineshaftRegionCache.has(rKey)) return this._mineshaftRegionCache.get(rKey);
 
-    const minCx = rgx * REG - 44;
-    const maxCx = (rgx + 1) * REG + 44;
-    const minCz = rgz * REG - 44;
-    const maxCz = (rgz + 1) * REG + 44;
+    // Wide ±60 chunk window guarantees identical edges across adjacent 32-chunk regions (zero dead-end cuts!)
+    const minCx = rgx * REG - 60;
+    const maxCx = (rgx + 1) * REG + 60;
+    const minCz = rgz * REG - 60;
+    const maxCz = (rgz + 1) * REG + 60;
 
     const nodes = [];
     const seen = new Set();
@@ -6159,18 +6177,19 @@ export class World {
       const portalZ = (ucz + 2) * CHUNK_SIZE; // Exact South face of (ucx, ucz + 1) mineshaft entrance!
       const portalY = info.baseY;
       nodes.push({
+        key: k,
         ucx, ucz,
         cxW: ucx * CHUNK_SIZE + 8,
         czW: ucz * CHUNK_SIZE + 8,
         portalX, portalZ, portalY,
         hubX: portalX,
-        hubZ: portalZ + 14,
+        hubZ: portalZ + 18, // 18 blocks straight South -> completely outside the 48x48 cavern!
         hubY: portalY
       });
     };
 
     // Starter Underground Village (-5, 6) + repeating 28x28 Underground Villages
-    if (rgx >= -2 && rgx <= 2 && rgz >= -2 && rgz <= 2) {
+    if (rgx >= -3 && rgx <= 3 && rgz >= -3 && rgz <= 3) {
       addUgVillage(-5, 6);
     }
     for (let gx = Math.floor(minCx / 28) - 1; gx <= Math.floor(maxCx / 28) + 1; gx++) {
@@ -6188,35 +6207,35 @@ export class World {
       return empty;
     }
 
-    // Collect obstacles so mineshaft tunnels deflect cleanly around other Underground Villages & Sprawling Dungeons!
+    // Sort nodes canonically so Kruskal/MST tie-breaking is 100% deterministic from every region!
+    nodes.sort((a, b) => (a.ucx - b.ucx) || (a.ucz - b.ucz));
+
+    // Collect obstacles: EVERY Underground Village gets a wide r=42 radius (full 48x48 cavern + solid rock buffer)
+    // so NO trunk tunnel can EVER graze next to or clip ANY village — entry is STRICTLY via the South Portal!
     const obstacles = [];
     for (let i = 0; i < nodes.length; i++) {
-      obstacles.push({ x: nodes[i].cxW, z: nodes[i].czW, r: 30, nodeIdx: i });
+      obstacles.push({ x: nodes[i].cxW, z: nodes[i].czW, r: 42, isVillage: true });
     }
     // Collect nearby Massive Sprawling Dungeons (Starter + repeating 26x26) — ~55% get a wooden mineshaft branch right to their loot!
     const dungeonLinks = [];
     const addDungeonCandidate = (originCx, originCz, baseY, forceLink) => {
       const dgCx = (originCx + 2.5) * CHUNK_SIZE;
       const dgCz = (originCz + 2.5) * CHUNK_SIZE;
-      const obsIdx = obstacles.length;
-      obstacles.push({ x: dgCx, z: dgCz, r: 46, nodeIdx: -1, dgIdx: dungeonLinks.length });
+      obstacles.push({ x: dgCx, z: dgCz, r: 52, isDungeon: true });
       if (forceLink || coordHash(originCx * 19, originCz * 37, this.seed + 7199) > 0.45) {
-        // South mineshaft portal of the 5x5 (80x80) Sprawling Dungeon at gx=40, gz=80 (upper level = baseY + 11)
         const portalX = originCx * CHUNK_SIZE + 40;
         const portalZ = (originCz + 5) * CHUNK_SIZE;
         const portalY = baseY + 11;
         dungeonLinks.push({
-          obsIdx,
+          dgCx, dgCz,
           portalX, portalY, portalZ,
           hubX: portalX,
           hubY: portalY,
-          hubZ: portalZ + 12
+          hubZ: portalZ + 14
         });
       }
     };
-    // Starter Sprawling Dungeon (cx 2..6, cz -8..-4, baseY=16) is ALWAYS linked by a wooden mineshaft branch!
     addDungeonCandidate(2, -8, 16, true);
-    // Repeating 26x26 Sprawling Dungeons in search window (exact match to _computeSprawlingDungeonForChunk!)
     for (let gx = Math.floor(minCx / 26) - 1; gx <= Math.floor(maxCx / 26) + 1; gx++) {
       for (let gz = Math.floor(minCz / 26) - 1; gz <= Math.floor(maxCz / 26) + 1; gz++) {
         if (gx === 0 && gz === -1) continue;
@@ -6228,31 +6247,27 @@ export class World {
       }
     }
 
-    // Build clean Prim's Minimum Spanning Tree across Underground Villages (max span 980 blocks)
+    // Build deterministic Kruskal Minimum Spanning Tree across Underground Villages (max span 980 blocks)
     const MAX_DIST = 980;
     const nCount = nodes.length;
-    const inTree = new Uint8Array(nCount);
+    const candEdges = [];
+    for (let u = 0; u < nCount; u++) {
+      for (let v = u + 1; v < nCount; v++) {
+        const d = Math.hypot(nodes[u].hubX - nodes[v].hubX, nodes[u].hubZ - nodes[v].hubZ);
+        if (d < MAX_DIST) candEdges.push({ u, v, d });
+      }
+    }
+    candEdges.sort((a, b) => a.d - b.d);
+    const parent = new Int32Array(nCount);
+    for (let i = 0; i < nCount; i++) parent[i] = i;
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
     const edges = [];
-    for (let start = 0; start < nCount; start++) {
-      if (inTree[start]) continue;
-      inTree[start] = 1;
-      while (true) {
-        let bestU = -1, bestV = -1, bestD = MAX_DIST;
-        for (let u = 0; u < nCount; u++) {
-          if (!inTree[u]) continue;
-          for (let v = 0; v < nCount; v++) {
-            if (inTree[v]) continue;
-            const d = Math.hypot(nodes[u].hubX - nodes[v].hubX, nodes[u].hubZ - nodes[v].hubZ);
-            if (d < bestD) {
-              bestD = d;
-              bestU = u;
-              bestV = v;
-            }
-          }
-        }
-        if (bestU < 0) break;
-        inTree[bestV] = 1;
-        edges.push([bestU, bestV]);
+    for (let i = 0; i < candEdges.length; i++) {
+      const e = candEdges[i];
+      const ru = find(e.u), rv = find(e.v);
+      if (ru !== rv) {
+        parent[ru] = rv;
+        edges.push([e.u, e.v]);
       }
     }
 
@@ -6264,8 +6279,14 @@ export class World {
       connected[edges[ei][1]] = 1;
     }
 
-    // Helper: build a smooth mineshaft tunnel polyline with slope-clamped underground profileY
-    const buildTunnelSegment = (x0, y0, z0, x1, y1, z1, isSpur, skipA, skipB) => {
+    // Helper: build a smooth, strictly obstacle-avoiding mineshaft tunnel with gentle slope-clamped profileY
+    const buildTunnelSegment = (x0, y0, z0, x1, y1, z1, isSpur) => {
+      // Canonical endpoint ordering guarantees bit-identical curves regardless of traversal order!
+      if (!isSpur && (x0 > x1 || (x0 === x1 && z0 > z1))) {
+        const tx = x0, ty = y0, tz = z0;
+        x0 = x1; y0 = y1; z0 = z1;
+        x1 = tx; y1 = ty; z1 = tz;
+      }
       const dist = Math.hypot(x1 - x0, z1 - z0);
       if (dist < 2) return null;
       const numSamples = Math.max(8, Math.ceil(dist / 2.0));
@@ -6273,7 +6294,7 @@ export class World {
       const ptsZ = new Float32Array(numSamples + 1);
       const dx = x1 - x0, dz = z1 - z0;
       const nx = -dz / dist, nz = dx / dist;
-      const waveAmp = isSpur ? 0 : Math.min(22, dist * 0.055);
+      const waveAmp = isSpur ? 0 : Math.min(18, dist * 0.045);
       const phase = coordHash(Math.round(x0 + x1), Math.round(z0 + z1), this.seed + 7211) * Math.PI * 2;
 
       for (let i = 0; i <= numSamples; i++) {
@@ -6285,18 +6306,18 @@ export class World {
       }
 
       if (!isSpur) {
-        // Deflect smoothly around any intermediate Underground Village cavern or Sprawling Dungeon!
-        for (let iter = 0; iter < 5; iter++) {
-          for (let i = 2; i < numSamples - 1; i++) {
+        // Strong repulsion around ALL Underground Village caverns (r=42) & Sprawling Dungeons (r=52) — INCLUDING endpoint villages!
+        // Because hubs sit at portalZ + 18 (distance 42 from village center), trunks heading North curve cleanly AROUND the village!
+        for (let iter = 0; iter < 8; iter++) {
+          for (let i = 1; i < numSamples; i++) {
             let px = ptsX[i], pz = ptsZ[i];
             for (let oi = 0; oi < obstacles.length; oi++) {
               const ob = obstacles[oi];
-              if (ob.nodeIdx === skipA || ob.nodeIdx === skipB) continue;
               const oxD = px - ob.x;
               const ozD = pz - ob.z;
               const d = Math.hypot(oxD, ozD);
               if (d < ob.r) {
-                const push = (ob.r - d) * 0.85;
+                const push = (ob.r - d) * 0.95;
                 if (d > 0.01) {
                   px += (oxD / d) * push;
                   pz += (ozD / d) * push;
@@ -6309,14 +6330,32 @@ export class World {
             ptsX[i] = px;
             ptsZ[i] = pz;
           }
+          // Gentle smoothing keeping endpoints locked
           for (let i = 1; i < numSamples; i++) {
-            ptsX[i] = ptsX[i - 1] * 0.25 + ptsX[i] * 0.5 + ptsX[i + 1] * 0.25;
-            ptsZ[i] = ptsZ[i - 1] * 0.25 + ptsZ[i] * 0.5 + ptsZ[i + 1] * 0.25;
+            ptsX[i] = ptsX[i - 1] * 0.22 + ptsX[i] * 0.56 + ptsX[i + 1] * 0.22;
+            ptsZ[i] = ptsZ[i - 1] * 0.22 + ptsZ[i] * 0.56 + ptsZ[i + 1] * 0.22;
           }
+        }
+        // Final hard clamp outside EVERY Underground Village cavern so zero sample can EVER touch a village wall!
+        for (let i = 1; i < numSamples; i++) {
+          let px = ptsX[i], pz = ptsZ[i];
+          for (let oi = 0; oi < obstacles.length; oi++) {
+            const ob = obstacles[oi];
+            const oxD = px - ob.x;
+            const ozD = pz - ob.z;
+            const d = Math.hypot(oxD, ozD);
+            if (d < ob.r - 1.5 && d > 0.01) {
+              const sc = (ob.r - 1.5) / d;
+              px = ob.x + oxD * sc;
+              pz = ob.z + ozD * sc;
+            }
+          }
+          ptsX[i] = px;
+          ptsZ[i] = pz;
         }
       }
 
-      // Compute cumulative length and slope-clamped underground profileY (always safely underground!)
+      // Compute cumulative length and gentle slope-clamped underground profileY (always safely subterranean!)
       const cumLen = new Float32Array(numSamples + 1);
       const profileY = new Float32Array(numSamples + 1);
       let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -6329,9 +6368,8 @@ export class World {
         if (i > 0) cumLen[i] = cumLen[i - 1] + Math.hypot(px - ptsX[i - 1], pz - ptsZ[i - 1]);
         const t = i / numSamples;
         let ty = y0 + (y1 - y0) * t;
-        // Clamp safely beneath ocean beds & low valleys so mineshaft stays completely subterranean!
         const surfH = this.getTerrainHeight(Math.round(px), Math.round(pz));
-        const maxSafeY = Math.max(12, Math.min(44, surfH - 9));
+        const maxSafeY = Math.max(12, Math.min(44, surfH - 10));
         if (ty > maxSafeY) ty = maxSafeY;
         if (ty < 12) ty = 12;
         profileY[i] = ty;
@@ -6339,26 +6377,26 @@ export class World {
       profileY[0] = y0;
       profileY[numSamples] = y1;
 
-      // Bidirectional slope clamping (max 0.34 blocks per 2-block sample -> smooth stairs/ramps, never a sheer wall!)
-      for (let pass = 0; pass < 3; pass++) {
+      // Gentle bidirectional slope clamp (<= 0.22 blocks/m -> always 1-block walkable steps, never a steep drop or wall!)
+      for (let pass = 0; pass < 4; pass++) {
         for (let i = 1; i < numSamples; i++) {
           const stepLen = Math.max(1, cumLen[i] - cumLen[i - 1]);
-          const maxDy = stepLen * 0.28;
+          const maxDy = stepLen * 0.22;
           if (profileY[i] > profileY[i - 1] + maxDy) profileY[i] = profileY[i - 1] + maxDy;
           if (profileY[i] < profileY[i - 1] - maxDy) profileY[i] = profileY[i - 1] - maxDy;
         }
         for (let i = numSamples - 1; i >= 1; i--) {
           const stepLen = Math.max(1, cumLen[i + 1] - cumLen[i]);
-          const maxDy = stepLen * 0.28;
+          const maxDy = stepLen * 0.22;
           if (profileY[i] > profileY[i + 1] + maxDy) profileY[i] = profileY[i + 1] + maxDy;
           if (profileY[i] < profileY[i + 1] - maxDy) profileY[i] = profileY[i + 1] - maxDy;
         }
       }
 
       return {
-        ptsX, ptsZ, cumLen, profileY, numSamples,
-        minX: minX - 5, maxX: maxX + 5,
-        minZ: minZ - 5, maxZ: maxZ + 5
+        ptsX, ptsZ, cumLen, profileY, numSamples, isSpur: !!isSpur,
+        minX: minX - 6, maxX: maxX + 6,
+        minZ: minZ - 6, maxZ: maxZ + 6
       };
     };
 
@@ -6366,7 +6404,7 @@ export class World {
     for (let i = 0; i < nCount; i++) {
       if (!connected[i]) continue;
       const nd = nodes[i];
-      const spur = buildTunnelSegment(nd.portalX, nd.portalY, nd.portalZ, nd.hubX, nd.hubY, nd.hubZ, true, i, i);
+      const spur = buildTunnelSegment(nd.portalX, nd.portalY, nd.portalZ, nd.hubX, nd.hubY, nd.hubZ, true);
       if (spur) segments.push(spur);
       hubs.push({ x: nd.hubX, y: nd.hubY, z: nd.hubZ });
     }
@@ -6375,7 +6413,7 @@ export class World {
     for (let ei = 0; ei < edges.length; ei++) {
       const u = nodes[edges[ei][0]];
       const v = nodes[edges[ei][1]];
-      const seg = buildTunnelSegment(u.hubX, u.hubY, u.hubZ, v.hubX, v.hubY, v.hubZ, false, edges[ei][0], edges[ei][1]);
+      const seg = buildTunnelSegment(u.hubX, u.hubY, u.hubZ, v.hubX, v.hubY, v.hubZ, false);
       if (seg) segments.push(seg);
     }
 
@@ -6389,14 +6427,10 @@ export class World {
       }
       if (bestNode >= 0) {
         const nd = nodes[bestNode];
-        const spurDg = buildTunnelSegment(dl.portalX, dl.portalY, dl.portalZ, dl.hubX, dl.hubY, dl.hubZ, true, -1, -1);
+        const spurDg = buildTunnelSegment(dl.portalX, dl.portalY, dl.portalZ, dl.hubX, dl.hubY, dl.hubZ, true);
         if (spurDg) segments.push(spurDg);
         hubs.push({ x: dl.hubX, y: dl.hubY, z: dl.hubZ, isDungeonHub: true });
-        // Temporarily mark this dungeon's own obstacle as skipped at its endpoint
-        const prevNodeIdx = obstacles[dl.obsIdx].nodeIdx;
-        obstacles[dl.obsIdx].nodeIdx = -999;
-        const branch = buildTunnelSegment(nd.hubX, nd.hubY, nd.hubZ, dl.hubX, dl.hubY, dl.hubZ, false, bestNode, -999);
-        obstacles[dl.obsIdx].nodeIdx = prevNodeIdx;
+        const branch = buildTunnelSegment(nd.hubX, nd.hubY, nd.hubZ, dl.hubX, dl.hubY, dl.hubZ, false);
         if (branch) segments.push(branch);
       }
     }
@@ -6407,14 +6441,14 @@ export class World {
     return res;
   }
 
-  // Stamps authentic Minecraft-style Wooden Mineshaft Tunnels (oak planks floor, fence posts, overhead plank crossbeams,
-  // torches, wooden cave bridges with fence stilts, loot chests & timber junction chambers) connecting Underground Villages!
+  // Stamps guaranteed-unobstructed, super-lit Minecraft-style Wooden Mineshaft Tunnels:
+  // Junction chambers stamp FIRST, then continuous 3.2-wide x 4-tall clear corridors carve cleanly THROUGH any wall/angle!
   stampMineshaftTunnels(cx, cz, ox, oz, heights, setLocal, getLocal) {
     const net = this._getMineshaftTunnelsForChunk(cx, cz);
     if (!net || (net.segments.length === 0 && net.hubs.length === 0)) return;
 
-    const minX = ox - 4, maxX = ox + 19;
-    const minZ = oz - 4, maxZ = oz + 19;
+    const minX = ox - 5, maxX = ox + 20;
+    const minZ = oz - 5, maxZ = oz + 20;
     const nearSegs = [];
     for (let i = 0; i < net.segments.length; i++) {
       const s = net.segments[i];
@@ -6429,7 +6463,49 @@ export class World {
     }
     if (nearSegs.length === 0 && nearHubs.length === 0) return;
 
-    // 1. Stamp Wooden Mineshaft Corridors (3-wide walkable oak-plank path + timber support frames every 4 blocks!)
+    // 1. Stamp Open 7x7 Timber Junction Chambers FIRST so outgoing tunnels at ANY angle carve cleanly right through!
+    for (let hi = 0; hi < nearHubs.length; hi++) {
+      const hub = nearHubs[hi];
+      const hY = hub.y;
+      for (let lz = 0; lz < 16; lz++) {
+        const dz = (oz + lz) - hub.z;
+        if (Math.abs(dz) > 3) continue;
+        for (let lx = 0; lx < 16; lx++) {
+          const dx = (ox + lx) - hub.x;
+          if (Math.abs(dx) > 3) continue;
+          const adx = Math.abs(dx), adz = Math.abs(dz);
+          const isCorner = adx === 3 && adz === 3;
+          setLocal(lx, hY - 1, lz, BLOCK.DEEPSLATE);
+          setLocal(lx, hY, lz, BLOCK.OAK_PLANKS);
+          for (let dy = 1; dy <= 4; dy++) setLocal(lx, hY + dy, lz, BLOCK.AIR);
+          setLocal(lx, hY + 5, lz, BLOCK.DEEPSLATE);
+          if (isCorner) {
+            for (let dy = 1; dy <= 4; dy++) setLocal(lx, hY + dy, lz, BLOCK.OAK_LOG);
+          } else {
+            setLocal(lx, hY + 4, lz, (adx === 0 && adz === 0) ? BLOCK.GLOWSTONE : BLOCK.OAK_PLANKS);
+          }
+          if (dx === -2 && dz === -2) setLocal(lx, hY + 1, lz, BLOCK.CRAFTING_TABLE);
+          if (dx === 2 && dz === -2) {
+            setLocal(lx, hY + 1, lz, BLOCK.CHEST);
+            const wKey = `${ox + lx},${hY + 1},${oz + lz}`;
+            if (!this.chests.has(wKey)) {
+              const loot = new Array(27).fill(null);
+              loot[0] = { id: 'iron_pickaxe', count: 1, durability: 251 };
+              loot[1] = { id: 'torch', count: 24 };
+              loot[2] = { id: 'bread', count: 8 };
+              loot[3] = { id: 'iron_ingot', count: 6 };
+              loot[4] = { id: 'emerald', count: 4 };
+              this.chests.set(wKey, loot);
+            }
+          }
+          if ((dx === -2 && dz === 2) || (dx === 2 && dz === 2)) {
+            setLocal(lx, hY + 1, lz, BLOCK.TORCH);
+          }
+        }
+      }
+    }
+
+    // 2. Stamp Guaranteed-Unobstructed Wooden Mineshaft Corridors (3.2-wide clear center + 4-tall headroom + outer wall timber arches!)
     if (nearSegs.length > 0) {
       for (let lz = 0; lz < 16; lz++) {
         const wz = oz + lz;
@@ -6462,21 +6538,21 @@ export class World {
             }
           }
 
-          if (bestDist > 2.9) continue;
+          if (bestDist > 3.1) continue;
           const surfH = heights[lx + (lz << 4)];
-          const tY = Math.max(8, Math.min(surfH - 6, bestY));
+          const tY = Math.max(8, Math.min(surfH - 7, bestY));
           if (tY <= 7) continue;
 
-          if (bestDist <= 2.15) {
-            // Solid Oak Planks mineshaft deck floor
+          if (bestDist <= 2.35) {
+            // Solid Oak Planks floor across full tunnel width
             setLocal(lx, tY, lz, BLOCK.OAK_PLANKS);
 
-            // If crossing an underground cave, ravine, water or lava: build wooden bridge support stilts down to solid ground!
+            // Wooden bridge stilts down to solid ground when crossing open caves/ravines/lava
             const belowB = getLocal(lx, tY - 1, lz);
             const isBridgeVoid = belowB === BLOCK.AIR || belowB === BLOCK.WATER || belowB === BLOCK.LAVA;
-            const onFrame = (bestAlong % 4.0) < 0.92;
-            const isOuterPost = bestDist >= 1.25 && bestDist <= 2.05;
-            if (isBridgeVoid && isOuterPost && onFrame) {
+            const onFrame = (bestAlong % 4.0) < 0.90;
+            const isOuterWall = bestDist > 1.72;
+            if (isBridgeVoid && isOuterWall && onFrame) {
               for (let sy = tY - 1; sy >= Math.max(4, tY - 18); sy--) {
                 const sb = getLocal(lx, sy, lz);
                 if (sb !== BLOCK.AIR && sb !== BLOCK.WATER && sb !== BLOCK.LAVA) break;
@@ -6484,35 +6560,36 @@ export class World {
               }
             }
 
-            // Carve clean 3-block-tall walkable interior (tY+1 .. tY+3)
-            for (let dy = 1; dy <= 3; dy++) {
+            // Carve FULL 4-high unobstructed interior (tY+1 .. tY+4) — guarantees >= 3 blocks headroom even on slopes!
+            for (let dy = 1; dy <= 4; dy++) {
               setLocal(lx, tY + dy, lz, BLOCK.AIR);
             }
 
-            // Seal wet/lava ceiling leaks above the tunnel with stone so fluids never flood the mineshaft
-            const ceilB = getLocal(lx, tY + 4, lz);
+            // Seal wet/lava/falling-sand ceiling leaks above tY+4
+            const ceilB = getLocal(lx, tY + 5, lz);
             if (ceilB === BLOCK.WATER || ceilB === BLOCK.LAVA || ceilB === BLOCK.SAND || ceilB === BLOCK.GRAVEL) {
-              setLocal(lx, tY + 4, lz, BLOCK.COBBLESTONE);
+              setLocal(lx, tY + 5, lz, BLOCK.COBBLESTONE);
             }
 
-            // Super-Lit Iconic Minecraft Wooden Mineshaft Support Arches every 4 blocks!
+            // STRICT RULE: Inner 3.2-wide lane (bestDist <= 1.65) stays 100% OPEN AIR (tY+1..tY+3) — NEVER blocked!
+            // Overhead oak beams & glowstone lanterns sit high at tY+4; fence posts, torches & chests sit ONLY in outer wall (bestDist > 1.72)!
             if (onFrame) {
-              if (isOuterPost) {
+              if (isOuterWall) {
                 setLocal(lx, tY + 1, lz, BLOCK.OAK_FENCE);
                 setLocal(lx, tY + 2, lz, BLOCK.OAK_FENCE);
+                setLocal(lx, tY + 3, lz, BLOCK.OAK_FENCE);
               }
-              // Embed bright glowing lanterns in the overhead oak beam every 8 blocks so tunnels stay super bright!
               if (bestDist <= 0.65 && (bestAlong % 8.0) < 0.95) {
-                setLocal(lx, tY + 3, lz, BLOCK.GLOWSTONE);
+                setLocal(lx, tY + 4, lz, BLOCK.GLOWSTONE);
               } else {
-                setLocal(lx, tY + 3, lz, BLOCK.OAK_PLANKS);
+                setLocal(lx, tY + 4, lz, BLOCK.OAK_PLANKS);
               }
-            } else if (bestDist >= 1.35 && bestDist <= 2.05 && Math.abs((bestAlong % 4.0) - 2.0) < 0.62) {
-              // Grounded warm mineshaft torches standing solidly on the OAK_PLANKS floor every 4 blocks along both sides!
+            } else if (isOuterWall && Math.abs((bestAlong % 4.0) - 2.0) < 0.62) {
+              // Grounded bright torches strictly in the outer wall edge every 4 blocks!
               setLocal(lx, tY + 1, lz, BLOCK.TORCH);
-            } else if (bestDist >= 1.15 && bestDist <= 1.75 && Math.abs((bestAlong % 40.0) - 20.0) < 0.55 &&
+            } else if (bestDist > 1.85 && Math.abs((bestAlong % 40.0) - 20.0) < 0.60 &&
                        coordHash(wx, wz, this.seed + 7297) > 0.35) {
-              // Frequent minecart-style supply chests tucked along the tunnel side!
+              // Supply chests strictly tucked into the outer wall niche (never in the walkway!)
               setLocal(lx, tY + 1, lz, BLOCK.CHEST);
               const wKey = `${wx},${tY + 1},${wz}`;
               if (!this.chests.has(wKey)) {
@@ -6531,62 +6608,11 @@ export class World {
               }
             }
           } else {
-            // Outer shell (2.15 < dist <= 2.9): plug adjacent water/lava pockets so mineshaft stays dry & safe!
-            for (let dy = 0; dy <= 4; dy++) {
+            // Outer shell (2.35 < dist <= 3.1): seal adjacent water/lava pockets so mineshaft stays dry & safe!
+            for (let dy = 0; dy <= 5; dy++) {
               const b = getLocal(lx, tY + dy, lz);
               if (b === BLOCK.WATER || b === BLOCK.LAVA) {
                 setLocal(lx, tY + dy, lz, BLOCK.COBBLESTONE);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Stamp 5x5 Timber Junction Chambers where each Underground Village's South spur meets the tunnel network!
-    for (let hi = 0; hi < nearHubs.length; hi++) {
-      const hub = nearHubs[hi];
-      const hY = hub.y;
-      for (let lz = 0; lz < 16; lz++) {
-        const dz = (oz + lz) - hub.z;
-        if (Math.abs(dz) > 3) continue;
-        for (let lx = 0; lx < 16; lx++) {
-          const dx = (ox + lx) - hub.x;
-          if (Math.abs(dx) > 3) continue;
-          const adx = Math.abs(dx), adz = Math.abs(dz);
-          const isWall = adx === 3 || adz === 3;
-          const isCorner = adx === 3 && adz === 3;
-          setLocal(lx, hY - 1, lz, BLOCK.DEEPSLATE);
-          setLocal(lx, hY, lz, isWall ? BLOCK.COBBLESTONE : BLOCK.OAK_PLANKS);
-          if (isCorner) {
-            for (let dy = 1; dy <= 4; dy++) setLocal(lx, hY + dy, lz, BLOCK.OAK_LOG);
-          } else if (isWall) {
-            // Leave 3-wide open archways on all 4 sides so tunnels connect seamlessly in every direction!
-            if (adx <= 1 || adz <= 1) {
-              setLocal(lx, hY + 1, lz, BLOCK.AIR);
-              setLocal(lx, hY + 2, lz, BLOCK.AIR);
-              setLocal(lx, hY + 3, lz, BLOCK.OAK_PLANKS);
-              setLocal(lx, hY + 4, lz, BLOCK.DEEPSLATE);
-            } else {
-              for (let dy = 1; dy <= 3; dy++) setLocal(lx, hY + dy, lz, BLOCK.OAK_FENCE);
-              setLocal(lx, hY + 4, lz, BLOCK.OAK_PLANKS);
-            }
-          } else {
-            for (let dy = 1; dy <= 3; dy++) setLocal(lx, hY + dy, lz, BLOCK.AIR);
-            setLocal(lx, hY + 4, lz, (adx === 0 && adz === 0) ? BLOCK.GLOWSTONE : BLOCK.OAK_PLANKS);
-            setLocal(lx, hY + 5, lz, BLOCK.DEEPSLATE);
-            if (dx === -2 && dz === -2) setLocal(lx, hY + 1, lz, BLOCK.CRAFTING_TABLE);
-            if (dx === 2 && dz === -2) {
-              setLocal(lx, hY + 1, lz, BLOCK.CHEST);
-              const wKey = `${ox + lx},${hY + 1},${oz + lz}`;
-              if (!this.chests.has(wKey)) {
-                const loot = new Array(27).fill(null);
-                loot[0] = { id: 'iron_pickaxe', count: 1, durability: 251 };
-                loot[1] = { id: 'torch', count: 24 };
-                loot[2] = { id: 'bread', count: 8 };
-                loot[3] = { id: 'iron_ingot', count: 6 };
-                loot[4] = { id: 'emerald', count: 4 };
-                this.chests.set(wKey, loot);
               }
             }
           }
@@ -10179,8 +10205,9 @@ export class World {
       this._tryQueueChunkForMesh(r.cx, r.cz + 1, pcx, pcz, rMeshSq);
       this._tryQueueChunkForMesh(r.cx, r.cz - 1, pcx, pcz, rMeshSq);
       n++;
-      if (n >= 24 || performance.now() - t0 > 1.5) break;
+      if (n >= 10 || performance.now() - t0 > 1.0) break;
     }
+    return n;
   }
 
   _chunkHasFlow(chunk) {
@@ -10239,7 +10266,7 @@ export class World {
 
   _adoptMeshResults(wp) {
     const list = wp.meshResults;
-    if (list.length === 0) return;
+    if (list.length === 0) return 0;
     const t0 = performance.now();
     let n = 0;
     while (list.length > 0) {
@@ -10260,8 +10287,9 @@ export class World {
       chunk._meshFar = !!r.far;
       this._applyChunkMesh(chunk, r.res);
       n++;
-      if (n >= 8 || performance.now() - t0 > 2.0) break;
+      if (n >= 3 || performance.now() - t0 > 1.1) break;
     }
+    return n;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -10418,16 +10446,17 @@ export class World {
   }
 
   _updateBatches(budgetMs) {
-    if (this._batchDirty.size === 0) return;
+    if (this._batchDirty.size === 0) return false;
     const t0 = performance.now();
-    let rebuilt = 0;
     for (const bk of this._batchDirty) {
       if (!this._regionSettled(bk)) continue;
       this._batchDirty.delete(bk);
       this._rebuildBatch(bk);
-      rebuilt++;
-      if (rebuilt >= 2 || performance.now() - t0 > budgetMs) break;
+      // Strictly 1 region batch per frame -> eliminates 4x4 merge frame spikes completely!
+      if (performance.now() - t0 > 0) return true;
+      break;
     }
+    return false;
   }
 
   _refreshChunkVisibility(pcx, pcz, visLimSq) {
@@ -10519,6 +10548,8 @@ export class World {
     const wp = this._ensureWorldPool();
     const asyncOn = !!(wp && wp.ready);
 
+    let adoptedMeshes = 0;
+    this._heavyWorkThisFrame = false;
     if (asyncOn) {
       if (movedChunk) {
         const lim = (r + 2) * (r + 2);
@@ -10529,7 +10560,8 @@ export class World {
         });
       }
       this._adoptGenResults(wp, pcx, pcz, rMeshSq, keepSq);
-      this._adoptMeshResults(wp);
+      adoptedMeshes = this._adoptMeshResults(wp);
+      if (adoptedMeshes > 0) this._heavyWorkThisFrame = true;
     }
 
     // 1. Stream missing chunk voxel data in pre-sorted spiral order (worker-generated when available)
@@ -10635,7 +10667,8 @@ export class World {
         const isEdit = Boolean(chunk._editPriority);
         const canAsync = asyncOn && !isEdit && !chunk._forceSync && !chunk._stateful && !this._chunkHasFlow(chunk);
         if (canAsync) {
-          if (dispatched < 8 && this._meshInFlight.size < meshCap && wp.meshQueued < meshCap) {
+          // Cap worker mesh dispatches to 3/frame so 9-neighbor .slice() copies never stutter!
+          if (dispatched < 3 && this._meshInFlight.size < meshCap && wp.meshQueued < meshCap) {
             if (this._dispatchMeshJob(wp, chunk)) {
               dispatched++;
               continue;
@@ -10666,19 +10699,28 @@ export class World {
       }
       this.meshQueue = keep;
       this._meshAvgMs = avgMs;
+      if (built > 0) this._heavyWorkThisFrame = true;
     }
 
-    // 3. Only check unload & update nearby shadow casters when crossing a chunk border!
-    if (movedChunk) {
+    // 3. Paced chunk unloading & shadow-caster flags (max 6 geometry disposals/frame -> zero chunk-crossing spikes!)
+    if (movedChunk) this._unloadSweepPending = true;
+    if (this._unloadSweepPending) {
       const unloadSq = keepSq;
       const useShadows = this.shaderMode !== 'low';
       const useFar = this.shaderMode === 'high' || this.shaderMode === 'ultra';
       const opaqueShadowR = useFar ? 4 : 2;
       const cutoutShadowR = 2;
+      let unloadedThisFrame = 0;
+      let moreToUnload = false;
       for (const [key, chunk] of this.chunks.entries()) {
         const dx = chunk.cx - pcx;
         const dz = chunk.cz - pcz;
         if (dx * dx + dz * dz > unloadSq) {
+          if (unloadedThisFrame >= 6) {
+            moreToUnload = true;
+            continue;
+          }
+          unloadedThisFrame++;
           if (chunk._hadWater) {
             chunk._hadWater = false;
             this._waterChunkCount = Math.max(0, this._waterChunkCount - 1);
@@ -10695,7 +10737,7 @@ export class World {
           }
           this._meshInFlight.delete(key);
           this.chunks.delete(key);
-        } else if (useShadows) {
+        } else if (movedChunk && useShadows) {
           const distC = Math.max(Math.abs(dx), Math.abs(dz));
           for (const m of chunk.meshes) {
             if (m.material === this.opaqueMat) {
@@ -10706,7 +10748,8 @@ export class World {
           }
         }
       }
-      this._shadowNeedsUpdate = true;
+      this._unloadSweepPending = moreToUnload;
+      if (movedChunk) this._shadowNeedsUpdate = true;
     }
 
     // 4. Contiguous ready radius (drives the soft dither crossfade into the LOD ring) + chunk visibility/batching
@@ -10736,7 +10779,12 @@ export class World {
       this._refreshChunkVisibility(pcx, pcz, visLimSq);
     }
     if (!lodActive) readyChunks = r;
-    this._updateBatches(Math.max(0.8, budgetMs * 0.3));
+    // Frame-slice 4x4 region batch merges so they NEVER stack on top of chunk mesh builds/uploads on the same frame!
+    if (!this._heavyWorkThisFrame && performance.now() - tStart < budgetMs * 0.75) {
+      if (this._updateBatches(Math.max(0.8, budgetMs * 0.3))) {
+        this._heavyWorkThisFrame = true;
+      }
+    }
 
     const targetReadyBlocks = Math.max(0, (readyChunks - 0.45) * CHUNK_SIZE);
     if (this._smoothReadyBlocks === undefined || this._snapReadyBlend) {
@@ -10871,30 +10919,26 @@ export class World {
     // T0=1m (4x4ch), T1=2m (8x8ch), T2=4m (16x16ch), T3=8m (32x32ch), T4=16m (64x64ch), T5=32m (128x128ch), T6=64m (256x256ch -> 1024ch!)
     const prx = pcx >> 1;
     const prz = pcz >> 1;
+    const detailChanged = Math.abs(detailR - (this._lastLodDetailR ?? -99)) >= 1.25;
 
-    if (prx !== this._lastLodRx || prz !== this._lastLodRz || fullRD !== this._lastLodRD) {
+    if (prx !== this._lastLodRx || prz !== this._lastLodRz || fullRD !== this._lastLodRD || detailChanged) {
       this._lastLodRx = prx;
       this._lastLodRz = prz;
       this._lastLodRD = fullRD;
+      this._lastLodDetailR = detailR;
 
       const TIER_CHUNKS = [4, 8, 16, 32, 64, 128, 256];
-      // Logarithmic split thresholds: ultra-lean ~95-115 frustum draw calls on iPad even at 1024 chunks (16.4 km!)
-      // The full-detail ring now reaches 16 chunks, so the finest 1m real-data tier starts right at the
-      // hand-off and each tier keeps ~2x the previous reach (more detail near, fewer tiles far).
-      // Each coarser tier reaches ~1.8x further (< 2x) so tile counts shrink with distance: ~350 tiles
-      // total at 1024 chunks instead of ~1,100, while 1m real-data tiles still cover the first ~8 LOD chunks.
       const lowPreset = this.shaderMode === 'low';
       const nearBase = Math.max(detailR + (lowPreset ? 6 : 8), lowPreset ? 22 : (isTouchLOD ? 24 : 28));
       const grow = lowPreset ? 1.8 : 1.9;
       const SPLIT_DIST = [0, nearBase];
       for (let t = 2; t <= 6; t++) SPLIT_DIST.push(SPLIT_DIST[t - 1] * grow);
-      // Split on a point a quarter-tile inside the tile's nearest edge: avoids splitting big tiles that only
-      // graze the threshold (that overshoot used to roughly double the fine-tier tile count).
       const SPLIT_BIAS = 0.25;
       const clampedRD = Math.min(1024, fullRD);
       const maxDistLimit = clampedRD + 2;
-      const innerCullDist = Math.max(0, detailR - 2.4);
-      const innerCutoutCheck = detailR + 3.0;
+      // Generous inner overlap guarantees ZERO holes/seams between full-detail chunks and the LOD ring!
+      const innerCullDist = Math.max(0, detailR - 3.2);
+      const innerCutoutCheck = detailR + 3.6;
       const rootTier = clampedRD > 512 ? 6 : (clampedRD > 128 ? 5 : 3);
       const rootSpan = TIER_CHUNKS[rootTier];
 
@@ -11036,12 +11080,12 @@ export class World {
       }
     }
 
-    // 2. Mount completed worker geometries onto scene (paced gently on iPad so WebGL uploads never stutter!)
+    // 2. Mount completed worker geometries onto scene (strictly paced so WebGL buffer uploads NEVER stutter!)
     if (pool.readyResults.length > 0) {
       let mounted = 0;
-      const maxMountPerFrame = isTouchLOD ? 4 : 10;
+      const maxMountPerFrame = this._heavyWorkThisFrame ? 1 : (isTouchLOD ? 2 : 3);
       const tMount = performance.now();
-      while (pool.readyResults.length > 0 && mounted < maxMountPerFrame && (mounted === 0 || performance.now() - tMount < 1.5)) {
+      while (pool.readyResults.length > 0 && mounted < maxMountPerFrame && (mounted === 0 || performance.now() - tMount < 0.9)) {
         const res = pool.readyResults.shift();
         if (!this._lodActiveKeys.has(res.key)) continue;
         if (this.lodRegions.has(res.key)) {
